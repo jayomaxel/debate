@@ -1,0 +1,12 @@
+{
+  "name": "辩论智能体页面",
+  "description": null,
+  "icon": null,
+  "coverImg": null,
+  "coverImgSourceType": null,
+  "needLogin": true,
+  "proxyConfigs": null,
+  "pageArgConfigs": null,
+  "dataSourcePlugins": null,
+  "dataSourceWorkflows": null
+}

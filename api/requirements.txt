@@ -1,0 +1,74 @@
+# Web框架
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# 数据库
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9
+alembic>=1.13.1
+
+# Redis
+redis>=5.0.1
+
+# 认证与安全
+python-jose[cryptography]>=3.3.0
+passlib>=1.7.4
+bcrypt>=3.2.2,<4.0.0
+pydantic[email]>=2.5.3
+
+# AI与LLM
+langchain>=0.1.0
+langchain-text-splitters>=1.1.0
+langgraph>=0.0.20
+openai>=1.10.0
+cohere>=4.47
+tiktoken>=0.5.0
+
+# HTTP客户端
+httpx>=0.26.0
+
+# DashScope SDK（用于 fun-asr-realtime 等）
+dashscope>=1.25.0
+
+# 文档处理
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+
+# 报告生成
+reportlab>=4.0.9
+openpyxl>=3.1.2
+weasyprint>=62.0
+markdown>=3.5.0
+pygments>=2.17.0
+
+# 邮件服务
+aiosmtplib>=3.0.1
+email-validator>=2.1.0
+
+# 工具库
+python-dotenv>=1.0.0
+pydantic-settings>=2.1.0
+
+# 测试
+pytest>=7.4.4
+pytest-asyncio>=0.23.3
+hypothesis>=6.98.1
+faker>=22.6.0
+pytest-cov>=4.1.0
+
+# 代码质量
+flake8>=7.0.0
+mypy>=1.8.0
+black>=24.1.1
+
+# 任务队列（可选）
+celery>=5.3.6
+
+# 监控（可选）
+prometheus-client>=0.19.0
+
+# coze
+cozepy>=0.20.0
+
+weasyprint>=68.1

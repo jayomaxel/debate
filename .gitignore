@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+!web/src/lib/
+web/src/lib/**
+!web/src/lib/debate-transcript.ts
+!web/src/lib/debate-transcript.test.ts
+!web/src/lib/pcm-stream-player.ts
+!web/src/lib/pcm-stream-player.test.ts
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node modules (for frontend)
+node_modules/
+
+# Build outputs
+*.pyc
+*.pyo
+
+.kiro/
+.pytest_cache/
+.vscode/
+.trae/
+uploads/
+ssl/

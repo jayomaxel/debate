@@ -1,0 +1,73 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+dev_docs/
+.trae/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+api/logs/
+
+# Dependencies (will be installed in container)
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+.vitest/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backups
+backups/
+*.bak
+*.backup
+
+# Docker
+docker-compose*.yml
+Dockerfile.*
+.dockerignore
+
+# Uploads (will be mounted as volume)
+api/uploads/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.mypy_cache/
+.cache/

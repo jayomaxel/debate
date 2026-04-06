@@ -1,0 +1,4 @@
+[
+  "test_audio_duration.py::test_estimate_duration_from_text_defaults",
+  "test_audio_duration.py::test_get_audio_duration_seconds_wav"
+]

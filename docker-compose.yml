@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # 后端API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: debate-api:latest
+    container_name: debate-api
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./api/logs:/app/logs
+      - ./api/uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端Web
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: debate-web:latest
+    container_name: debate-web
+    ports:
+      - "8860:80"
+    depends_on:
+      - api
+    volumes:
+      - ./web/.env.production:/app/.env.production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

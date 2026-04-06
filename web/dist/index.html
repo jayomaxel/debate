@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/brand-mark.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>碳硅之辩 - SpeculateAI</title>
+  <script type="module" crossorigin src="/assets/index-BxMW0b_K.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-tNPCEwHD.css">
+
+    <script data-id="dev-inject-monitor">
+      (function() {
+        const remote = "/sdk/dev-monitor.js";
+        const separator = remote.includes('?') ? '&' : '?';
+        const script = document.createElement('script');
+        script.src = remote + separator + 't=' + Date.now();
+        script.dataset.id = 'dev-inject-monitor-script';
+        script.defer = true;
+        // 防止重复注入
+        if (!document.querySelector('[data-id="dev-inject-monitor-script"]')) {
+          document.head.appendChild(script);
+        }
+      })();
+    </script>
+  
+</head>
+
+<body>
+  <div id="root"></div>
+</body>
+
+</html>
