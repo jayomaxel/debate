@@ -31,6 +31,7 @@ venv/
 ENV/
 env/
 .venv
+api/venv/
 
 # IDE
 .vscode/
@@ -51,6 +52,7 @@ env/
 # Logs
 *.log
 logs/
+api/logs/
 
 # OS
 .DS_Store
@@ -58,14 +60,25 @@ Thumbs.db
 
 # Node modules (for frontend)
 node_modules/
+web/node_modules/
 
 # Build outputs
 *.pyc
 *.pyo
+web/dist/
+web/build/
+api/build/
+api/dist/
 
 .kiro/
 .pytest_cache/
+**/.pytest_cache/
+**/__pycache__/
+**/.cache/
+.mypy_cache/
+.ruff_cache/
 .vscode/
 .trae/
 uploads/
+api/uploads/
 ssl/
