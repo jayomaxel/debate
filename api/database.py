@@ -1,74 +1,95 @@
 """
-数据库会话管理
+Database session and optional Redis helpers.
 """
+
+import logging
+from typing import Any, Generator
+
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from typing import Generator
-import redis
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
+
 from config import settings
 
-# PostgreSQL数据库引擎（延迟初始化）
+try:
+    import redis
+except ModuleNotFoundError:  # pragma: no cover - depends on local environment
+    redis = None
+
+
+logger = logging.getLogger(__name__)
+
+# PostgreSQL engine (lazy initialization)
 engine = None
 SessionLocal = None
 
+
 def init_engine():
-    """初始化数据库引擎"""
+    """Initialize the SQLAlchemy engine once."""
     global engine, SessionLocal
     if engine is None:
         engine = create_engine(
             settings.DATABASE_URL,
             pool_pre_ping=True,
             pool_size=10,
-            max_overflow=20
+            max_overflow=20,
         )
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 基础模型类
+
 Base = declarative_base()
 
-# Redis连接（延迟初始化）
+# Redis connection (lazy initialization)
 redis_client = None
+_redis_missing_dependency_logged = False
+
 
 def init_redis():
-    """初始化Redis连接"""
-    global redis_client
-    if redis_client is None:
-        redis_client = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            db=settings.REDIS_DB,
-            password=settings.REDIS_PASSWORD,
-            decode_responses=True
-        )
+    """Initialize Redis if the dependency is available."""
+    global redis_client, _redis_missing_dependency_logged
+
+    if redis_client is not None:
+        return redis_client
+
+    if redis is None:
+        if not _redis_missing_dependency_logged:
+            logger.warning(
+                "Redis Python package is not installed; Redis-backed features are disabled. "
+                "Install backend dependencies from api/requirements.txt to enable them."
+            )
+            _redis_missing_dependency_logged = True
+        return None
+
+    redis_client = redis.Redis(
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        db=settings.REDIS_DB,
+        password=settings.REDIS_PASSWORD,
+        decode_responses=True,
+    )
+    return redis_client
+
 
 def get_db() -> Generator[Session, None, None]:
-    """
-    获取数据库会话
-    用于FastAPI依赖注入
-    """
+    """Yield a database session for FastAPI dependency injection."""
     if SessionLocal is None:
         init_engine()
+
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-def get_redis():
-    """
-    获取Redis客户端
-    用于FastAPI依赖注入
-    """
+
+def get_redis() -> Any:
+    """Return the Redis client when available, otherwise ``None``."""
     if redis_client is None:
-        init_redis()
+        return init_redis()
     return redis_client
 
+
 def init_db():
-    """
-    初始化数据库
-    创建所有表
-    """
+    """Create tables and apply lightweight compatibility fixes."""
     if engine is None:
         init_engine()
     Base.metadata.create_all(bind=engine)
@@ -114,9 +135,27 @@ def _ensure_ability_assessment_columns():
                 "WHERE expression_willingness_score IS NULL"
             )
         )
-        conn.execute(text("UPDATE ability_assessments SET stablecoin_knowledge_score = 50 WHERE stablecoin_knowledge_score IS NULL"))
-        conn.execute(text("UPDATE ability_assessments SET financial_knowledge_score = 50 WHERE financial_knowledge_score IS NULL"))
-        conn.execute(text("UPDATE ability_assessments SET critical_thinking_score = 50 WHERE critical_thinking_score IS NULL"))
+        conn.execute(
+            text(
+                "UPDATE ability_assessments "
+                "SET stablecoin_knowledge_score = 50 "
+                "WHERE stablecoin_knowledge_score IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE ability_assessments "
+                "SET financial_knowledge_score = 50 "
+                "WHERE financial_knowledge_score IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE ability_assessments "
+                "SET critical_thinking_score = 50 "
+                "WHERE critical_thinking_score IS NULL"
+            )
+        )
         conn.execute(text("UPDATE ability_assessments SET is_default = false WHERE is_default IS NULL"))
 
 

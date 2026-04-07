@@ -3,6 +3,7 @@
 """
 import os
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from pathlib import Path
 
@@ -72,6 +73,26 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = os.getenv("SMTP_USER", None)
     SMTP_PASSWORD: Optional[str] = os.getenv("SMTP_PASSWORD", None)
     SMTP_FROM_EMAIL: Optional[str] = os.getenv("SMTP_FROM_EMAIL", None)
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def normalize_debug_flag(cls, value):
+        if isinstance(value, bool):
+            return value
+
+        if value is None:
+            return True
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "t", "yes", "y", "on", "debug", "dev", "development"}:
+                return True
+            if normalized in {"0", "false", "f", "no", "n", "off", "release", "prod", "production"}:
+                return False
+
+        raise ValueError(
+            "DEBUG 必须是可解析的布尔值，例如 true/false、1/0、debug/dev 或 release/production。"
+        )
     
     class Config:
         env_file = ".env"

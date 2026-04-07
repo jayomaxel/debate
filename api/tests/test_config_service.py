@@ -2,12 +2,12 @@
 Test ConfigService - verify model and Coze configuration management
 """
 import pytest
-import asyncio
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.config import ModelConfig, CozeConfig
 from services.config_service import ConfigService
 from database import Base
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
+from config import settings
 import uuid
 
 # Create in-memory SQLite database for testing
@@ -17,8 +17,9 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture
 def db_session():
     """Create a test database session"""
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
+    ConfigService.invalidate_cache()
+    engine = create_test_engine(TEST_DATABASE_URL)
+    create_test_schema(engine)
     
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
@@ -27,13 +28,45 @@ def db_session():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_test_schema(engine)
+        ConfigService.invalidate_cache()
 
 
 @pytest.fixture
 def config_service(db_session):
     """Create a ConfigService instance"""
     return ConfigService(db_session)
+
+
+def assert_default_model_config(config):
+    assert config.model_name == settings.OPENAI_MODEL_NAME
+    assert config.api_endpoint == f"{settings.OPENAI_BASE_URL}/chat/completions"
+    assert config.api_key == (settings.OPENAI_API_KEY or "")
+    assert config.temperature == settings.OPENAI_TEMPERATURE
+    assert config.max_tokens == settings.OPENAI_MAX_TOKENS
+    assert config.parameters == {}
+
+
+def assert_coze_config_matches(
+    config,
+    *,
+    debater_1_bot_id="",
+    debater_2_bot_id="",
+    debater_3_bot_id="",
+    debater_4_bot_id="",
+    judge_bot_id="",
+    mentor_bot_id="",
+    api_token="",
+    parameters=None,
+):
+    assert config.debater_1_bot_id == debater_1_bot_id
+    assert config.debater_2_bot_id == debater_2_bot_id
+    assert config.debater_3_bot_id == debater_3_bot_id
+    assert config.debater_4_bot_id == debater_4_bot_id
+    assert config.judge_bot_id == judge_bot_id
+    assert config.mentor_bot_id == mentor_bot_id
+    assert config.api_token == api_token
+    assert config.parameters == (parameters or {})
 
 
 # ============================================================================
@@ -46,12 +79,7 @@ async def test_get_model_config_returns_default_if_none_exists(config_service):
     config = await config_service.get_model_config()
     
     assert config is not None
-    assert config.model_name == "gpt-3.5-turbo"
-    assert config.api_endpoint == "https://api.openai.com/v1/chat/completions"
-    assert config.api_key == ""
-    assert config.temperature == 0.7
-    assert config.max_tokens == 2000
-    assert config.parameters == {}
+    assert_default_model_config(config)
 
 
 @pytest.mark.asyncio
@@ -181,9 +209,11 @@ async def test_get_coze_config_returns_default_if_none_exists(config_service):
     config = await config_service.get_coze_config()
     
     assert config is not None
-    assert config.agent_id == ""
-    assert config.api_token == ""
-    assert config.parameters == {}
+    assert_coze_config_matches(
+        config,
+        api_token=settings.COZE_API_KEY or "",
+        parameters={"base_url": settings.COZE_BASE_URL},
+    )
 
 
 @pytest.mark.asyncio
@@ -192,7 +222,8 @@ async def test_get_coze_config_returns_existing_config(config_service, db_sessio
     # Create a configuration in the database
     existing_config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="agent_123",
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
         api_token="token_xyz",
         parameters={"timeout": 30, "retry": 3}
     )
@@ -203,29 +234,44 @@ async def test_get_coze_config_returns_existing_config(config_service, db_sessio
     config = await config_service.get_coze_config()
     
     assert config is not None
-    assert config.agent_id == "agent_123"
-    assert config.api_token == "token_xyz"
-    assert config.parameters == {"timeout": 30, "retry": 3}
+    assert_coze_config_matches(
+        config,
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
+        api_token="token_xyz",
+        parameters={"timeout": 30, "retry": 3},
+    )
 
 
 @pytest.mark.asyncio
 async def test_update_coze_config_creates_new_config(config_service, db_session):
     """Test that update_coze_config creates new configuration when none exists"""
     config = await config_service.update_coze_config(
-        agent_id="new_agent_456",
+        debater_1_bot_id="new_agent_456",
+        mentor_bot_id="mentor_456",
         api_token="new_token_abc",
         parameters={"max_retries": 5}
     )
     
     assert config is not None
-    assert config.agent_id == "new_agent_456"
-    assert config.api_token == "new_token_abc"
-    assert config.parameters == {"max_retries": 5}
+    assert_coze_config_matches(
+        config,
+        debater_1_bot_id="new_agent_456",
+        mentor_bot_id="mentor_456",
+        api_token="new_token_abc",
+        parameters={"max_retries": 5},
+    )
     
     # Verify it was saved to database
     retrieved_config = db_session.query(CozeConfig).first()
     assert retrieved_config is not None
-    assert retrieved_config.agent_id == "new_agent_456"
+    assert_coze_config_matches(
+        retrieved_config,
+        debater_1_bot_id="new_agent_456",
+        mentor_bot_id="mentor_456",
+        api_token="new_token_abc",
+        parameters={"max_retries": 5},
+    )
 
 
 @pytest.mark.asyncio
@@ -234,7 +280,8 @@ async def test_update_coze_config_updates_existing_config(config_service, db_ses
     # Create initial configuration
     initial_config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="old_agent",
+        debater_1_bot_id="old_agent",
+        debater_2_bot_id="old_agent_2",
         api_token="old_token",
         parameters={"timeout": 10}
     )
@@ -243,14 +290,17 @@ async def test_update_coze_config_updates_existing_config(config_service, db_ses
     
     # Update the configuration
     updated_config = await config_service.update_coze_config(
-        agent_id="new_agent",
+        debater_1_bot_id="new_agent",
         api_token="new_token"
     )
     
-    assert updated_config.agent_id == "new_agent"
-    assert updated_config.api_token == "new_token"
-    # Unchanged fields should remain the same
-    assert updated_config.parameters == {"timeout": 10}
+    assert_coze_config_matches(
+        updated_config,
+        debater_1_bot_id="new_agent",
+        debater_2_bot_id="old_agent_2",
+        api_token="new_token",
+        parameters={"timeout": 10},
+    )
     
     # Verify only one config exists in database
     all_configs = db_session.query(CozeConfig).all()
@@ -263,7 +313,8 @@ async def test_update_coze_config_partial_update(config_service, db_session):
     # Create initial configuration
     initial_config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="agent_123",
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
         api_token="token_xyz",
         parameters={"timeout": 30, "retry": 3}
     )
@@ -275,11 +326,13 @@ async def test_update_coze_config_partial_update(config_service, db_session):
         parameters={"timeout": 60, "retry": 5, "new_param": "value"}
     )
     
-    # Only parameters should change
-    assert updated_config.parameters == {"timeout": 60, "retry": 5, "new_param": "value"}
-    # Other fields should remain unchanged
-    assert updated_config.agent_id == "agent_123"
-    assert updated_config.api_token == "token_xyz"
+    assert_coze_config_matches(
+        updated_config,
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
+        api_token="token_xyz",
+        parameters={"timeout": 60, "retry": 5, "new_param": "value"},
+    )
 
 
 # ============================================================================
@@ -320,7 +373,8 @@ async def test_update_coze_config_with_none_values(config_service, db_session):
     # Create initial configuration
     initial_config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="agent_123",
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
         api_token="token_xyz",
         parameters={"key": "value"}
     )
@@ -329,15 +383,18 @@ async def test_update_coze_config_with_none_values(config_service, db_session):
     
     # Update with None values (should not change anything)
     updated_config = await config_service.update_coze_config(
-        agent_id=None,
+        debater_1_bot_id=None,
         api_token=None,
         parameters=None
     )
     
-    # All fields should remain unchanged
-    assert updated_config.agent_id == "agent_123"
-    assert updated_config.api_token == "token_xyz"
-    assert updated_config.parameters == {"key": "value"}
+    assert_coze_config_matches(
+        updated_config,
+        debater_1_bot_id="agent_123",
+        judge_bot_id="judge_123",
+        api_token="token_xyz",
+        parameters={"key": "value"},
+    )
 
 
 @pytest.mark.asyncio

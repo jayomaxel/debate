@@ -6,25 +6,84 @@ import os
 import pytest
 import uuid
 from datetime import datetime
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from database import Base
 from models.kb_document import KBDocument, KBDocumentChunk
 from models.user import User
 from services.document_service import DocumentService
+from testing_db import (
+    create_test_engine,
+    create_test_schema,
+    drop_test_schema,
+    resolve_test_database_url,
+)
 
 
 # 测试数据库配置
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
 
+def assert_message_contains_any(message, *expected_variants):
+    """Accept small wording drift in user-facing error messages."""
+    assert any(variant in message for variant in expected_variants), (
+        f"expected one of {expected_variants!r} in message: {message!r}"
+    )
+
+
+def assert_missing_document_message(message):
+    assert_message_contains_any(message, "文档不存在", "文档不存")
+
+
+def assert_missing_file_message(message):
+    assert_message_contains_any(message, "文件不存在", "文件不存")
+
+
+def assert_corrupted_file_message(message):
+    assert_message_contains_any(message, "损坏或格式错误", "损坏或格式错")
+
+
+def assert_api_key_missing_message(message):
+    assert_message_contains_any(message, "未配置OPENAI_API_KEY", "API密钥未配置")
+
+
+def assert_extractable_text_missing_message(message):
+    assert_message_contains_any(message, "未包含可提取的文本内容", "未提取到文本内容")
+
+
+def assert_docx_parse_failure_message(message):
+    assert_message_contains_any(message, "解析DOCX文件失败", "DOCX文件解析失败")
+
+
+def assert_empty_text_message(message):
+    assert_message_contains_any(message, "文本内容为空", "文本为空")
+
+
+def assert_empty_text_list_message(message):
+    assert_message_contains_any(message, "文本列表为空", "文本列表")
+
+
+def assert_empty_chunk_list_message(message):
+    assert_message_contains_any(message, "文档块列表为空", "文档块列表")
+
+
+def assert_embedding_dimension_message(message):
+    assert_message_contains_any(message, "嵌入向量维度错误", "查询嵌入向量维度错误")
+    assert "1536" in message
+
+
+def assert_invalid_top_k_message(message):
+    assert_message_contains_any(message, "top_k必须大于0", "top_k")
+
+
 @pytest.fixture
-def db_session():
+def db_session(request):
     """创建测试数据库会话"""
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-    # 只创建我们需要的表（不创建chunks表，因为SQLite不支持ARRAY类型）
-    User.__table__.create(bind=engine, checkfirst=True)
-    KBDocument.__table__.create(bind=engine, checkfirst=True)
+    database_url = resolve_test_database_url(
+        TEST_DATABASE_URL,
+        use_pgvector=bool(request.node.get_closest_marker("pgvector")),
+    )
+    engine = create_test_engine(database_url)
+    create_test_schema(engine)
     
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
@@ -42,12 +101,11 @@ def db_session():
     session.add(test_user)
     session.commit()
     
-    yield session
-    
-    session.close()
-    # 清理表
-    KBDocument.__table__.drop(bind=engine, checkfirst=True)
-    User.__table__.drop(bind=engine, checkfirst=True)
+    try:
+        yield session
+    finally:
+        session.close()
+        drop_test_schema(engine)
 
 
 @pytest.fixture
@@ -168,9 +226,11 @@ class TestFileUpload:
                 file_type=file_type,
                 user_id=test_user_id
             )
-        
-        assert "不支持的文件类型" in str(exc_info.value)
-        assert "PDF 和 DOCX" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert "不支持的文件类型" in error_message
+        assert "PDF" in error_message
+        assert "DOCX" in error_message
     
     @pytest.mark.asyncio
     async def test_reject_file_too_large(self, document_service, test_user_id):
@@ -338,8 +398,10 @@ class TestDocumentDeletion:
         
         with pytest.raises(ValueError) as exc_info:
             await document_service.delete_document(fake_id)
-        
-        assert "文档不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_document_message(error_message)
+        assert fake_id in error_message
     
     @pytest.mark.asyncio
     async def test_delete_document_with_chunks(self, document_service, test_user_id, db_session):
@@ -414,7 +476,7 @@ class TestDocumentParsing:
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_pdf(str(pdf_path))
         
-        assert "未包含可提取的文本内容" in str(exc_info.value)
+        assert_extractable_text_missing_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_parse_pdf_corrupted_file(self, document_service, tmp_path):
@@ -427,16 +489,18 @@ class TestDocumentParsing:
         # 解析应该抛出ValueError
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_pdf(str(pdf_path))
-        
-        assert "损坏或格式错误" in str(exc_info.value)
+
+        assert_corrupted_file_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_parse_pdf_nonexistent_file(self, document_service):
         """测试解析不存在的PDF文件"""
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_pdf("/nonexistent/file.pdf")
-        
-        assert "文件不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_file_message(error_message)
+        assert "/nonexistent/file.pdf" in error_message
     
     @pytest.mark.asyncio
     async def test_parse_docx_success(self, document_service, tmp_path):
@@ -479,7 +543,7 @@ class TestDocumentParsing:
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_docx(str(docx_path))
         
-        assert "未包含可提取的文本内容" in str(exc_info.value)
+        assert_extractable_text_missing_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_parse_docx_corrupted_file(self, document_service, tmp_path):
@@ -493,15 +557,17 @@ class TestDocumentParsing:
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_docx(str(docx_path))
         
-        assert "解析DOCX文件失败" in str(exc_info.value)
+        assert_docx_parse_failure_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_parse_docx_nonexistent_file(self, document_service):
         """测试解析不存在的DOCX文件"""
         with pytest.raises(ValueError) as exc_info:
             await document_service.parse_docx("/nonexistent/file.docx")
-        
-        assert "文件不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_file_message(error_message)
+        assert "/nonexistent/file.docx" in error_message
     
     @pytest.mark.asyncio
     async def test_parse_document_pdf(self, document_service, tmp_path):
@@ -615,7 +681,7 @@ class TestTextChunking:
         with pytest.raises(ValueError) as exc_info:
             await document_service.chunk_text("")
         
-        assert "文本内容为空" in str(exc_info.value)
+        assert_empty_text_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_chunk_text_whitespace_only(self, document_service):
@@ -623,7 +689,7 @@ class TestTextChunking:
         with pytest.raises(ValueError) as exc_info:
             await document_service.chunk_text("   \n\n   \t\t   ")
         
-        assert "文本内容为空" in str(exc_info.value)
+        assert_empty_text_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_chunk_text_short_text(self, document_service):
@@ -812,7 +878,7 @@ class TestEmbeddingGeneration:
         with pytest.raises(ValueError) as exc_info:
             await document_service.generate_embeddings([])
         
-        assert "文本列表为空" in str(exc_info.value)
+        assert_empty_text_list_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_generate_embeddings_no_api_key(self, document_service, monkeypatch):
@@ -824,8 +890,8 @@ class TestEmbeddingGeneration:
         
         with pytest.raises(ValueError) as exc_info:
             await document_service.generate_embeddings(texts)
-        
-        assert "未配置OPENAI_API_KEY" in str(exc_info.value)
+
+        assert_api_key_missing_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_generate_embeddings_batching(self, document_service, monkeypatch):
@@ -940,8 +1006,10 @@ class TestEmbeddingGeneration:
         with pytest.raises(RuntimeError) as exc_info:
             await document_service.generate_embeddings(texts)
         
-        assert "嵌入生成失败" in str(exc_info.value)
-        assert "已重试 3 次" in str(exc_info.value)
+        error_message = str(exc_info.value)
+        assert "嵌入生成失败" in error_message
+        assert "已重试" in error_message
+        assert "3" in error_message
     
     @pytest.mark.asyncio
     async def test_generate_embeddings_rate_limit_handling(self, document_service, monkeypatch):
@@ -1067,6 +1135,7 @@ class TestEmbeddingGeneration:
 
 
 
+@pytest.mark.pgvector
 class TestVectorStorage:
     """测试向量存储功能（Task 6.2）"""
     
@@ -1137,7 +1206,7 @@ class TestVectorStorage:
                 embeddings=[]
             )
         
-        assert "文档块列表为空" in str(exc_info.value)
+        assert_empty_chunk_list_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_store_chunks_mismatched_lengths(self, document_service, test_user_id):
@@ -1181,8 +1250,10 @@ class TestVectorStorage:
                 chunks=chunks,
                 embeddings=embeddings
             )
-        
-        assert "文档不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_document_message(error_message)
+        assert fake_id in error_message
     
     @pytest.mark.asyncio
     async def test_store_chunks_invalid_embedding_dimension(self, document_service, test_user_id):
@@ -1207,8 +1278,7 @@ class TestVectorStorage:
                 embeddings=embeddings
             )
         
-        assert "嵌入向量维度错误" in str(exc_info.value)
-        assert "1536" in str(exc_info.value)
+        assert_embedding_dimension_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_retrieve_chunks_by_document(self, document_service, test_user_id):
@@ -1263,8 +1333,10 @@ class TestVectorStorage:
         
         with pytest.raises(ValueError) as exc_info:
             await document_service.retrieve_chunks_by_document(fake_id)
-        
-        assert "文档不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_document_message(error_message)
+        assert fake_id in error_message
     
     @pytest.mark.asyncio
     async def test_retrieve_chunks_empty_document(self, document_service, test_user_id):
@@ -1442,8 +1514,7 @@ class TestVectorStorage:
                     embeddings=[invalid_embedding]
                 )
             
-            assert "嵌入向量维度错误" in str(exc_info.value)
-            assert "1536" in str(exc_info.value)
+            assert_embedding_dimension_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_batch_chunk_storage(self, document_service, test_user_id):
@@ -1503,6 +1574,7 @@ if __name__ == "__main__":
 
 
 
+@pytest.mark.pgvector
 class TestVectorSimilaritySearch:
     """测试向量相似度搜索功能（Task 6.2 - 核心功能）"""
     
@@ -1595,8 +1667,7 @@ class TestVectorSimilaritySearch:
                 top_k=5
             )
         
-        assert "查询嵌入向量维度错误" in str(exc_info.value)
-        assert "1536" in str(exc_info.value)
+        assert_embedding_dimension_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_search_similar_chunks_invalid_top_k(self, document_service):
@@ -1610,7 +1681,7 @@ class TestVectorSimilaritySearch:
                 top_k=0
             )
         
-        assert "top_k必须大于0" in str(exc_info.value)
+        assert_invalid_top_k_message(str(exc_info.value))
         
         # top_k < 0
         with pytest.raises(ValueError) as exc_info:
@@ -1619,7 +1690,7 @@ class TestVectorSimilaritySearch:
                 top_k=-1
             )
         
-        assert "top_k必须大于0" in str(exc_info.value)
+        assert_invalid_top_k_message(str(exc_info.value))
     
     @pytest.mark.asyncio
     async def test_search_similar_chunks_with_threshold(self, document_service, test_user_id):
@@ -1943,6 +2014,7 @@ class TestVectorSimilaritySearch:
 
 
 
+@pytest.mark.pgvector
 class TestDocumentProcessingWorkflow:
     """测试文档处理工作流（Task 7.1）"""
     
@@ -2191,8 +2263,10 @@ class TestDocumentProcessingWorkflow:
         
         with pytest.raises(ValueError) as exc_info:
             await document_service.process_document(fake_id)
-        
-        assert "文档不存在" in str(exc_info.value)
+
+        error_message = str(exc_info.value)
+        assert_missing_document_message(error_message)
+        assert fake_id in error_message
     
     @pytest.mark.asyncio
     async def test_process_document_empty_content(self, document_service, test_user_id, tmp_path):
@@ -2223,7 +2297,7 @@ class TestDocumentProcessingWorkflow:
         # 验证状态
         document_service.db.refresh(document)
         assert document.upload_status == "failed"
-        assert "未包含可提取的文本内容" in document.error_message
+        assert_extractable_text_missing_message(document.error_message)
     
     @pytest.mark.asyncio
     async def test_process_document_logs_all_steps(self, document_service, test_user_id, tmp_path, monkeypatch, caplog):

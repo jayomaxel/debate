@@ -331,7 +331,7 @@ const DebateMatchResult: React.FC<DebateMatchResultProps> = ({
                   </div>
                   <ul className="text-slate-400 space-y-1 ml-6">
                     <li>• 逻辑推理与数据分析</li>
-                    <li>• 知识储备与信息检索</li>
+                    <li>• AI核心知识运用与信息检索</li>
                     <li>• 多样化策略与快速响应</li>
                   </ul>
                 </div>

@@ -4,7 +4,6 @@
 """
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 import io
@@ -13,11 +12,12 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from models.kb_document import KBDocument
+from testing_db import create_test_engine
 from utils.security import hash_password, create_token
 
 # 创建测试数据库
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_admin_kb_router.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

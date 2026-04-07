@@ -3,7 +3,7 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped
 from typing import TYPE_CHECKING
@@ -22,8 +22,8 @@ class KBConversation(Base):
     session_id = Column(String(100), nullable=False)
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
-    # sources: List of {document_id, document_name, chunk_content, similarity_score}
-    sources = Column(JSONB, nullable=True)
+    # sources: List of {document_id, document_name, excerpt, similarity_score}
+    sources = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # 关系

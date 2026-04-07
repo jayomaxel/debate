@@ -26,6 +26,12 @@ class RAGService:
     RAG服务类。
     提供基于知识库的问答功能，包括向量搜索、答案生成和对话历史管理。
     """
+    _STREAM_PROGRESS_SAVE_INTERVAL = 200
+    _STREAM_INTERRUPTED_NOTE = "回答未完成，可重新提问继续"
+    _STREAM_INTERRUPTED_MESSAGE = "回答未完成，可重新提问继续。"
+    _STREAM_FAILED_NOTE = "生成遇到错误，可稍后重试"
+    _STREAM_FAILED_MESSAGE = "回答生成失败，请稍后重试。"
+    _STREAM_EMPTY_ANSWER_MESSAGE = "未生成有效回答，请重试。"
     
     def __init__(self, db: Session):
         """
@@ -63,6 +69,105 @@ class RAGService:
             return t.startswith("vector")
         except Exception:
             return True
+
+    def _create_stream_conversation_record(
+        self,
+        question: str,
+        user_id: str,
+        session_id: str,
+        sources: List[Dict[str, Any]]
+    ) -> Optional[uuid.UUID]:
+        """先保存一条占位对话，避免流式过程中断后整条记录丢失。"""
+        try:
+            conversation_id = uuid.uuid4()
+            conversation = KBConversation(
+                id=conversation_id,
+                user_id=uuid.UUID(user_id),
+                session_id=session_id,
+                question=question,
+                answer="",
+                sources=sources or [],
+                created_at=datetime.utcnow()
+            )
+            self.db.add(conversation)
+            self.db.commit()
+            return conversation_id
+        except Exception as e:
+            logger.error(
+                f"创建流式对话占位记录失败: {e}",
+                exc_info=True
+            )
+            self.db.rollback()
+            return None
+
+    def _build_stream_answer_for_storage(
+        self,
+        answer: str,
+        status: str
+    ) -> str:
+        """根据流式状态生成适合持久化的答案文本。"""
+        normalized_answer = (answer or "").strip()
+
+        if status == "progress":
+            return normalized_answer
+
+        if status == "completed":
+            return normalized_answer or self._STREAM_EMPTY_ANSWER_MESSAGE
+
+        if status == "interrupted":
+            if normalized_answer:
+                return (
+                    f"{normalized_answer}\n\n"
+                    f"[{self._STREAM_INTERRUPTED_NOTE}]"
+                )
+            return self._STREAM_INTERRUPTED_MESSAGE
+
+        if status == "failed":
+            if normalized_answer:
+                return (
+                    f"{normalized_answer}\n\n"
+                    f"[{self._STREAM_FAILED_NOTE}]"
+                )
+            return self._STREAM_FAILED_MESSAGE
+
+        return normalized_answer
+
+    def _update_stream_conversation_record(
+        self,
+        conversation_id: Optional[uuid.UUID],
+        answer: str,
+        sources: List[Dict[str, Any]],
+        status: str = "progress"
+    ) -> None:
+        """更新流式对话记录，支持进度、中断、失败和完成状态。"""
+        if conversation_id is None:
+            return
+
+        try:
+            conversation = (
+                self.db.query(KBConversation)
+                .filter(KBConversation.id == conversation_id)
+                .one_or_none()
+            )
+
+            if conversation is None:
+                logger.warning(
+                    f"未找到需要更新的流式对话记录: conversation_id={conversation_id}"
+                )
+                return
+
+            conversation.answer = self._build_stream_answer_for_storage(
+                answer,
+                status=status
+            )
+            conversation.sources = sources or []
+            self.db.commit()
+        except Exception as e:
+            logger.error(
+                f"更新流式对话记录失败: conversation_id={conversation_id}, status={status}, error={e}",
+                exc_info=True
+            )
+            self.db.rollback()
     
     async def _get_openai_client(self) -> OpenAI:
         """
@@ -893,6 +998,11 @@ class RAGService:
             user_id: 用户ID
             session_id: 会话ID
         """
+        conversation_id: Optional[uuid.UUID] = None
+        sources: List[Dict[str, Any]] = []
+        full_answer = ""
+        last_saved_length = 0
+
         try:
             # 验证输入
             if not question or not question.strip():
@@ -914,8 +1024,14 @@ class RAGService:
                 similarity_threshold=self.similarity_threshold
             )
             
-            # 步骤3: 格式化来源引用并发送
+            # 步骤3: 格式化来源引用并提前保存占位对话
             sources = self.format_source_citations(similar_chunks)
+            conversation_id = self._create_stream_conversation_record(
+                question=question,
+                user_id=user_id,
+                session_id=session_id,
+                sources=sources
+            )
             yield json.dumps({"type": "sources", "data": sources}, ensure_ascii=False)
             
             # 步骤4: 准备LLM调用
@@ -981,32 +1097,51 @@ class RAGService:
                 stream=True
             )
             
-            full_answer = ""
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_answer += content
                     yield json.dumps({"type": "answer", "content": content}, ensure_ascii=False)
+                    if (
+                        conversation_id is not None
+                        and len(full_answer) - last_saved_length
+                        >= self._STREAM_PROGRESS_SAVE_INTERVAL
+                    ):
+                        self._update_stream_conversation_record(
+                            conversation_id=conversation_id,
+                            answer=full_answer,
+                            sources=sources,
+                            status="progress"
+                        )
+                        last_saved_length = len(full_answer)
             
-            # 步骤6: 保存对话历史
-            if full_answer:
-                try:
-                    conversation = KBConversation(
-                        id=uuid.uuid4(),
-                        user_id=uuid.UUID(user_id),
-                        session_id=session_id,
-                        question=question,
-                        answer=full_answer,
-                        sources=sources,
-                        created_at=datetime.utcnow()
-                    )
-                    self.db.add(conversation)
-                    self.db.commit()
-                    yield json.dumps({"type": "done", "id": str(conversation.id)}, ensure_ascii=False)
-                except Exception as e:
-                    logger.error(f"保存对话历史失败: {e}")
-                    self.db.rollback()
-            
+            # 步骤6: 完成后更新最终答案
+            self._update_stream_conversation_record(
+                conversation_id=conversation_id,
+                answer=full_answer,
+                sources=sources,
+                status="completed"
+            )
+            done_id = str(conversation_id) if conversation_id else str(uuid.uuid4())
+            yield json.dumps({"type": "done", "id": done_id}, ensure_ascii=False)
+
+        except asyncio.CancelledError:
+            logger.info(
+                f"流式回答被中断: user_id={user_id}, session_id={session_id}"
+            )
+            self._update_stream_conversation_record(
+                conversation_id=conversation_id,
+                answer=full_answer,
+                sources=sources,
+                status="interrupted"
+            )
+            raise
         except Exception as e:
             logger.error(f"流式回答失败: {e}", exc_info=True)
+            self._update_stream_conversation_record(
+                conversation_id=conversation_id,
+                answer=full_answer,
+                sources=sources,
+                status="failed"
+            )
             yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from config import settings
@@ -13,11 +12,12 @@ from models.class_model import Class
 from models.debate import Debate
 from models.user import User
 from services.report_service import ReportGenerator
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import create_token, hash_password
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_student_report_pdf_cache.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -35,9 +35,9 @@ client = TestClient(app)
 
 @pytest.fixture(scope="function")
 def setup_database():
-    Base.metadata.create_all(bind=engine)
+    create_test_schema(engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    drop_test_schema(engine)
 
 
 @pytest.fixture
@@ -145,4 +145,3 @@ def test_export_pdf_uses_default_path_and_writes_report_pdf(tmp_path, teacher_to
     debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
     assert debate.report_pdf is not None and str(debate.report_pdf).strip()
     db.close()
-

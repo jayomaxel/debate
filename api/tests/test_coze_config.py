@@ -2,10 +2,10 @@
 Test CozeConfig model - verify Coze agent configuration storage
 """
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.config import CozeConfig
 from database import Base
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 import uuid
 
 # Create in-memory SQLite database for testing
@@ -15,8 +15,8 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture
 def db_session():
     """Create a test database session"""
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
+    engine = create_test_engine(TEST_DATABASE_URL)
+    create_test_schema(engine)
     
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
@@ -25,7 +25,7 @@ def db_session():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_test_schema(engine)
 
 
 def test_coze_config_creation(db_session):

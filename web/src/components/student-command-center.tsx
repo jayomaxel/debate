@@ -287,7 +287,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               准备好迎接今天的挑战了吗？ 🚀
             </h2>
             <p className="text-lg text-slate-600">
-              今天的辩题：稳定币的未来发展前景
+              今天的辩题：AI伴侣与人类情感羁绊
             </p>
           </div>
 
@@ -388,12 +388,12 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
           />
         </div>
 
-        {/* 底部：备战资料库 */}
+        {/* 底部：课程知识库 */}
         <Card className="bg-white border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BookOpen className="w-5 h-5 text-blue-600" />
-              知识锦囊 💡
+              课程知识库
               <Badge variant="outline" className="ml-auto">
                 {kbDocuments.length} 篇文档
               </Badge>

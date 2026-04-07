@@ -154,7 +154,7 @@ const AchievementBadges: React.FC<AchievementBadgesProps> = ({
     {
       id: 'quick_responder',
       name: '反应如神',
-      description: '反应速度得分达到95分',
+      description: '批判性思维得分达到95分',
       category: 'performance',
       icon: <Zap className="w-6 h-6" />,
       rarity: 'rare',
@@ -162,7 +162,7 @@ const AchievementBadges: React.FC<AchievementBadgesProps> = ({
       progress: 0,
       maxProgress: 95,
       currentProgress: 0,
-      requirements: ['反应速度得分≥95分'],
+      requirements: ['批判性思维得分≥95分'],
       reward: { points: 60, badge: '快速思考者' }
     },
 
@@ -230,7 +230,7 @@ const AchievementBadges: React.FC<AchievementBadgesProps> = ({
     {
       id: 'team_player',
       name: '团队伙伴',
-      description: '团队配合得分达到90分',
+      description: 'AI伦理与科技素养得分达到90分',
       category: 'teamwork',
       icon: <Users className="w-6 h-6" />,
       rarity: 'rare',
@@ -238,7 +238,7 @@ const AchievementBadges: React.FC<AchievementBadgesProps> = ({
       progress: 0,
       maxProgress: 90,
       currentProgress: 0,
-      requirements: ['团队配合得分≥90分'],
+      requirements: ['AI伦理与科技素养得分≥90分'],
       reward: { points: 55, badge: '团队核心' }
     },
     {

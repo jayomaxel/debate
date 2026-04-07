@@ -2,30 +2,30 @@
 测试管理员认证功能
 """
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base
 from services.auth_service import AuthService
 from models.user import User
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import verify_password
 
 
 # 创建测试数据库
 TEST_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_test_engine(TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture
 def db_session():
     """创建测试数据库会话"""
-    Base.metadata.create_all(bind=engine)
+    create_test_schema(engine)
     db = TestingSessionLocal()
     try:
         yield db
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_test_schema(engine)
 
 
 def test_admin_login_with_correct_credentials(db_session):

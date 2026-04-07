@@ -198,7 +198,7 @@ const PreparationAssistant: React.FC<PreparationAssistantProps> = ({ onClose }) 
               </div>
             </div>
             <p className="text-slate-600 text-xs line-clamp-2">
-              {source.chunk_content}
+              {source.excerpt}
             </p>
           </div>
         ))}

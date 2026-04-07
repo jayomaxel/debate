@@ -4,7 +4,6 @@
 """
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 
@@ -12,11 +11,12 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from models.class_model import Class
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import hash_password, create_token
 
 # 创建测试数据库
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_admin_router.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -33,12 +33,20 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+def assert_success_response(response, *, expected_status=200):
+    body = response.json()
+    assert response.status_code == expected_status
+    assert body["code"] == expected_status
+    assert "data" in body
+    return body["data"]
+
+
 @pytest.fixture(scope="function")
 def setup_database():
     """设置测试数据库"""
-    Base.metadata.create_all(bind=engine)
+    create_test_schema(engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    drop_test_schema(engine)
 
 
 @pytest.fixture
@@ -128,6 +136,7 @@ def test_class(setup_database, teacher_user):
     )
     db.add(test_class)
     db.commit()
+    class_id = str(test_class.id)
     db.refresh(test_class)
     db.close()
     return test_class
@@ -142,8 +151,7 @@ def test_get_all_classes_as_admin(admin_token, test_class):
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
-    assert response.status_code == 200
-    classes = response.json()
+    classes = assert_success_response(response)
     assert isinstance(classes, list)
     assert len(classes) >= 1
     
@@ -184,7 +192,8 @@ def test_get_all_classes_without_token_fails(test_class):
     """测试未认证用户无法访问管理员端点"""
     response = client.get("/api/admin/classes")
     
-    assert response.status_code == 403
+    assert response.status_code == 401
+    assert "detail" in response.json()
 
 
 # ==================== 测试创建班级 ====================
@@ -200,8 +209,7 @@ def test_create_class_as_admin(admin_token, teacher_user):
         }
     )
     
-    assert response.status_code == 200
-    class_data = response.json()
+    class_data = assert_success_response(response)
     assert class_data["name"] == "New Admin Class"
     assert class_data["teacher_id"] == str(teacher_user.id)
     assert "code" in class_data
@@ -249,8 +257,7 @@ def test_update_class_name_as_admin(admin_token, test_class):
         json={"name": "Updated Class Name"}
     )
     
-    assert response.status_code == 200
-    class_data = response.json()
+    class_data = assert_success_response(response)
     assert class_data["name"] == "Updated Class Name"
     assert class_data["id"] == str(test_class.id)
 
@@ -279,8 +286,7 @@ def test_update_class_teacher_as_admin(admin_token, test_class, teacher_user):
         json={"teacher_id": new_teacher_id}
     )
     
-    assert response.status_code == 200
-    class_data = response.json()
+    class_data = assert_success_response(response)
     assert class_data["teacher_id"] == new_teacher_id
 
 
@@ -312,23 +318,25 @@ def test_update_class_as_teacher_fails(teacher_token, test_class):
 
 def test_delete_class_as_admin(admin_token, test_class):
     """测试管理员可以删除班级"""
+    class_id = str(test_class.id)
     response = client.delete(
-        f"/api/admin/classes/{test_class.id}",
+        f"/api/admin/classes/{class_id}",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
+    body = response.json()
     assert response.status_code == 200
-    assert response.json()["code"] == 200
-    assert "成功" in response.json()["message"]
+    assert body["code"] == 200
+    assert "成功" in body["message"]
     
     # 验证班级已被删除
     get_response = client.get(
         "/api/admin/classes",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
-    classes = get_response.json()
+    classes = assert_success_response(get_response)
     class_ids = [c["id"] for c in classes]
-    assert str(test_class.id) not in class_ids
+    assert class_id not in class_ids
 
 
 def test_delete_class_removes_student_enrollments(admin_token, teacher_user):
@@ -344,6 +352,7 @@ def test_delete_class_removes_student_enrollments(admin_token, teacher_user):
     )
     db.add(test_class)
     db.commit()
+    class_id = str(test_class.id)
     
     # 创建学生并注册到班级
     student = User(
@@ -362,7 +371,7 @@ def test_delete_class_removes_student_enrollments(admin_token, teacher_user):
     
     # 删除班级
     response = client.delete(
-        f"/api/admin/classes/{test_class.id}",
+        f"/api/admin/classes/{class_id}",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
@@ -421,8 +430,7 @@ def test_class_response_contains_all_required_fields(admin_token, test_class, te
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
-    assert response.status_code == 200
-    classes = response.json()
+    classes = assert_success_response(response)
     
     # 找到测试班级
     test_class_data = None

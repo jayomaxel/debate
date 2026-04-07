@@ -148,10 +148,10 @@ class DebateService:
                     "user_id": uid,
                     "姓名": s.get("name") or "",
                     "表达意愿": s.get("expression_willingness", 50),
-                    "逻辑思维": s.get("logical_thinking", 50),
-                    "稳定币知识": s.get("stablecoin_knowledge", 50),
-                    "金融知识": s.get("financial_knowledge", 50),
-                    "批判思维": s.get("critical_thinking", 50),
+                    "逻辑建构力": s.get("logical_thinking", 50),
+                    "AI伦理与科技素养": s.get("stablecoin_knowledge", 50),
+                    "AI通识知识水平": s.get("financial_knowledge", 50),
+                    "批判性思维": s.get("critical_thinking", 50),
                     "系统推荐角色": role_name.get(s.get("recommended_role"), "") if s.get("recommended_role") else "",
                 }
             )
@@ -239,10 +239,10 @@ class DebateService:
             deterministic = DebateService._fallback_assign_roles(
                 {s["user_id"]: {
                     "expression_willingness": s.get("表达意愿", 50),
-                    "logical_thinking": s.get("逻辑思维", 50),
-                    "stablecoin_knowledge": s.get("稳定币知识", 50),
-                    "financial_knowledge": s.get("金融知识", 50),
-                    "critical_thinking": s.get("批判思维", 50),
+                    "logical_thinking": s.get("逻辑建构力", 50),
+                    "stablecoin_knowledge": s.get("AI伦理与科技素养", 50),
+                    "financial_knowledge": s.get("AI通识知识水平", 50),
+                    "critical_thinking": s.get("批判性思维", 50),
                 } for s in students_cn}
             )
             if deterministic != llm_result:

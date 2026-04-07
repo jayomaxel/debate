@@ -7,6 +7,8 @@ RAG服务测试
 """
 import pytest
 import uuid
+import json
+import asyncio
 from datetime import datetime
 from typing import List
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
@@ -1569,6 +1571,180 @@ class TestConversationStorage:
         assert source2["document_name"] == "文档2.pdf"
         assert source2["excerpt"] == "内容2"  # 短内容不应该被截断
         assert source2["similarity_score"] == 0.85
+
+
+class TestAskQuestionStreamPersistence:
+    """流式问答持久化测试。"""
+
+    @pytest.fixture
+    def rag_service_with_openai(self, db_session: Session):
+        service = RAGService(db_session)
+        service.openai_client = MagicMock()
+        service.embedding_model = "test-embedding-model"
+        return service
+
+    def _make_stream_chunk(self, content: str) -> MagicMock:
+        chunk = MagicMock()
+        choice = MagicMock()
+        choice.delta.content = content
+        chunk.choices = [choice]
+        return chunk
+
+    @pytest.mark.asyncio
+    async def test_ask_question_stream_persists_completed_answer(
+        self,
+        rag_service_with_openai: RAGService,
+        db_session: Session
+    ):
+        question = "什么是辩论？"
+        user_id = str(uuid.uuid4())
+        session_id = "stream_session_completed"
+
+        mock_embedding_response = MagicMock()
+        mock_embedding_response.data = [MagicMock()]
+        mock_embedding_response.data[0].embedding = [0.5] * 1536
+        rag_service_with_openai.openai_client.embeddings.create.return_value = (
+            mock_embedding_response
+        )
+
+        mock_config = MagicMock()
+        mock_config.model_name = "qwen3.5-flash"
+        mock_config.api_endpoint = "https://example.com/v1/chat/completions"
+        mock_config.api_key = "test-key"
+        mock_config.temperature = 0.7
+        mock_config.max_tokens = 2000
+
+        mock_chunks = [
+            {
+                "chunk_id": str(uuid.uuid4()),
+                "document_id": str(uuid.uuid4()),
+                "document_name": "辩论基础.pdf",
+                "content": "辩论是一种通过论证表达观点的交流方式。",
+                "chunk_index": 0,
+                "token_count": 20,
+                "similarity_score": 0.91,
+            }
+        ]
+
+        llm_client = MagicMock()
+        llm_client.chat.completions.create.return_value = [
+            self._make_stream_chunk("segment-one"),
+            self._make_stream_chunk("segment-two"),
+        ]
+
+        with patch("services.rag_service.ConfigService") as MockConfigService:
+            mock_config_service = MockConfigService.return_value
+            mock_config_service.get_model_config = AsyncMock(
+                return_value=mock_config
+            )
+
+            with patch.object(
+                rag_service_with_openai,
+                "search_similar_chunks",
+                return_value=mock_chunks
+            ):
+                with patch(
+                    "services.rag_service.OpenAI",
+                    return_value=llm_client
+                ):
+                    events = []
+                    async for raw_event in rag_service_with_openai.ask_question_stream(
+                        question=question,
+                        user_id=user_id,
+                        session_id=session_id
+                    ):
+                        events.append(json.loads(raw_event))
+
+        assert [event["type"] for event in events] == [
+            "sources",
+            "answer",
+            "answer",
+            "done",
+        ]
+
+        from models.kb_conversation import KBConversation
+
+        saved_conversation = db_session.query(KBConversation).filter(
+            KBConversation.user_id == uuid.UUID(user_id),
+            KBConversation.session_id == session_id
+        ).first()
+
+        assert saved_conversation is not None
+        assert saved_conversation.question == question
+        assert saved_conversation.answer == "segment-onesegment-two"
+        assert saved_conversation.sources == events[0]["data"]
+        assert events[-1]["id"] == str(saved_conversation.id)
+
+    @pytest.mark.asyncio
+    async def test_ask_question_stream_persists_partial_answer_when_cancelled(
+        self,
+        rag_service_with_openai: RAGService,
+        db_session: Session
+    ):
+        question = "如何构建论点？"
+        user_id = str(uuid.uuid4())
+        session_id = "stream_session_cancelled"
+
+        mock_embedding_response = MagicMock()
+        mock_embedding_response.data = [MagicMock()]
+        mock_embedding_response.data[0].embedding = [0.5] * 1536
+        rag_service_with_openai.openai_client.embeddings.create.return_value = (
+            mock_embedding_response
+        )
+
+        mock_config = MagicMock()
+        mock_config.model_name = "qwen3.5-flash"
+        mock_config.api_endpoint = "https://example.com/v1/chat/completions"
+        mock_config.api_key = "test-key"
+        mock_config.temperature = 0.7
+        mock_config.max_tokens = 2000
+
+        llm_client = MagicMock()
+
+        def interrupted_stream():
+            yield self._make_stream_chunk("partial-answer")
+            raise asyncio.CancelledError()
+
+        llm_client.chat.completions.create.return_value = interrupted_stream()
+
+        with patch("services.rag_service.ConfigService") as MockConfigService:
+            mock_config_service = MockConfigService.return_value
+            mock_config_service.get_model_config = AsyncMock(
+                return_value=mock_config
+            )
+
+            with patch.object(
+                rag_service_with_openai,
+                "search_similar_chunks",
+                return_value=[]
+            ):
+                with patch(
+                    "services.rag_service.OpenAI",
+                    return_value=llm_client
+                ):
+                    events = []
+                    with pytest.raises(asyncio.CancelledError):
+                        async for raw_event in rag_service_with_openai.ask_question_stream(
+                            question=question,
+                            user_id=user_id,
+                            session_id=session_id
+                        ):
+                            events.append(json.loads(raw_event))
+
+        assert [event["type"] for event in events] == ["sources", "answer"]
+
+        from models.kb_conversation import KBConversation
+
+        saved_conversation = db_session.query(KBConversation).filter(
+            KBConversation.user_id == uuid.UUID(user_id),
+            KBConversation.session_id == session_id
+        ).first()
+
+        assert saved_conversation is not None
+        assert saved_conversation.question == question
+        assert "partial-answer" in saved_conversation.answer
+        assert "回答未完成" in saved_conversation.answer
+        assert saved_conversation.sources == []
 
 
 # 集成测试标记 - 需要PostgreSQL + pgvector

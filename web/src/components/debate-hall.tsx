@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { parseDebateDescription } from '@/lib/debate-description';
 import StudentService from '@/services/student.service';
 import { useToast } from '@/hooks/use-toast';
 import type { Debate } from '@/services/student.service';
@@ -207,60 +208,78 @@ const DebateHall: React.FC<DebateHallProps> = ({ onJoinDebate }) => {
             </div>
           ) : (
             <div className="space-y-4">
-              {debates.map((debate) => (
-                <Card key={debate.id} className="border-2 hover:border-blue-300 transition-colors">
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h3 className="text-lg font-semibold">{debate.topic}</h3>
-                          {getStatusBadge(debate.status)}
-                        </div>
-                        
-                        <div className="grid grid-cols-2 gap-4 mt-3 text-sm text-gray-600">
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-4 h-4" />
-                            <span>时长: {formatDuration(debate.duration)}</span>
-                          </div>
-                          {debate.created_at && (
-                            <div className="flex items-center gap-2">
-                              <Calendar className="w-4 h-4" />
-                              <span>创建时间: {new Date(debate.created_at).toLocaleDateString('zh-CN')}</span>
-                            </div>
-                          )}
-                          {debate.description && (
-                            <div className="col-span-2 text-gray-500">
-                              {debate.description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+              {debates.map((debate) => {
+                const descriptionMeta = parseDebateDescription(debate.description);
+                const summaryText = descriptionMeta.roundsInfo || descriptionMeta.raw;
 
-                      <Button
-                        onClick={() => handleJoinDebate(debate.invitation_code)}
-                        disabled={
-                          debate.status === 'completed' ||
-                          debate.status === 'in_progress' ||
-                          joiningDebateId === debate.invitation_code
-                        }
-                        className="ml-4"
-                      >
-                        {joiningDebateId === debate.invitation_code ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            加入中...
-                          </>
-                        ) : (
-                          <>
-                            <ArrowRight className="w-4 h-4 mr-2" />
-                            加入
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                return (
+                  <Card key={debate.id} className="border-2 hover:border-blue-300 transition-colors">
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-lg font-semibold">{debate.topic}</h3>
+                            {getStatusBadge(debate.status)}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4 mt-3 text-sm text-gray-600">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>时长: {formatDuration(debate.duration)}</span>
+                            </div>
+                            {debate.created_at && (
+                              <div className="flex items-center gap-2">
+                                <Calendar className="w-4 h-4" />
+                                <span>创建时间: {new Date(debate.created_at).toLocaleDateString('zh-CN')}</span>
+                              </div>
+                            )}
+                            {summaryText && (
+                              <div className="col-span-2 text-gray-500">
+                                {summaryText}
+                              </div>
+                            )}
+                            {descriptionMeta.knowledgePoints.length > 0 && (
+                              <div className="col-span-2 flex flex-wrap gap-2">
+                                {descriptionMeta.knowledgePoints.map((point, index) => (
+                                  <Badge
+                                    key={`${debate.id}-${point}-${index}`}
+                                    variant="outline"
+                                    className="bg-blue-50 text-blue-700 border-blue-200"
+                                  >
+                                    {point}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <Button
+                          onClick={() => handleJoinDebate(debate.invitation_code)}
+                          disabled={
+                            debate.status === 'completed' ||
+                            debate.status === 'in_progress' ||
+                            joiningDebateId === debate.invitation_code
+                          }
+                          className="ml-4"
+                        >
+                          {joiningDebateId === debate.invitation_code ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              加入中...
+                            </>
+                          ) : (
+                            <>
+                              <ArrowRight className="w-4 h-4 mr-2" />
+                              加入
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </CardContent>

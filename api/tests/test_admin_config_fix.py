@@ -4,7 +4,7 @@
 """
 import pytest
 import sys
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, '.')
@@ -12,21 +12,24 @@ sys.path.insert(0, '.')
 from database import Base
 from models.config import ModelConfig, CozeConfig
 from services.config_service import ConfigService
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 
 
 @pytest.fixture
 def db_session():
     """创建测试数据库会话"""
     # 使用内存数据库进行测试
-    engine = create_engine('sqlite:///:memory:')
-    Base.metadata.create_all(engine)
+    engine = create_test_engine("sqlite:///:memory:")
+    create_test_schema(engine)
     
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
     
-    yield session
-    
-    session.close()
+    try:
+        yield session
+    finally:
+        session.close()
+        drop_test_schema(engine)
 
 
 @pytest.mark.asyncio

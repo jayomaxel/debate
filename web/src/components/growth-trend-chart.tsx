@@ -78,11 +78,11 @@ const GrowthTrendChart: React.FC<GrowthTrendChartProps> = ({
   const filteredData = filterDataByTimeframe(data, timeframeFilter);
 
   const abilities = [
-    { key: 'logicScore', name: '逻辑思维', icon: <Brain className="w-4 h-4" />, color: 'blue' },
-    { key: 'argumentScore', name: '论据质量', icon: <Target className="w-4 h-4" />, color: 'purple' },
-    { key: 'responseScore', name: '反应速度', icon: <Zap className="w-4 h-4" />, color: 'amber' },
-    { key: 'persuasionScore', name: '情绪感染力', icon: <Heart className="w-4 h-4" />, color: 'red' },
-    { key: 'teamworkScore', name: '团队配合', icon: <Users className="w-4 h-4" />, color: 'green' }
+    { key: 'logicScore', name: '逻辑建构力', icon: <Brain className="w-4 h-4" />, color: 'blue' },
+    { key: 'argumentScore', name: 'AI核心知识运用', icon: <Target className="w-4 h-4" />, color: 'purple' },
+    { key: 'responseScore', name: '批判性思维', icon: <Zap className="w-4 h-4" />, color: 'amber' },
+    { key: 'persuasionScore', name: '语言表达力', icon: <Heart className="w-4 h-4" />, color: 'red' },
+    { key: 'teamworkScore', name: 'AI伦理与科技素养', icon: <Users className="w-4 h-4" />, color: 'green' }
   ];
 
   const getColorForAbility = (color: string) => {

@@ -65,22 +65,22 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
     if (stance === 'positive') {
       return {
         title: '正方立场',
-        subtitle: '支持稳定币发展',
+        subtitle: '支持建立情感羁绊',
         color: 'from-emerald-500 to-blue-600',
         bgColor: 'bg-gradient-to-br from-emerald-50 to-blue-50',
         borderColor: 'border-emerald-200',
         icon: <TrendingUp className="w-8 h-8 text-emerald-600" />,
-        keywords: ['金融创新', '技术进步', '市场机遇', '数字未来']
+        keywords: ['情感计算', '人机交互', '技术进步', '陪伴价值']
       };
     } else {
       return {
         title: '反方立场',
-        subtitle: '反对稳定币发展',
+        subtitle: '反对建立情感羁绊',
         color: 'from-red-500 to-orange-600',
         bgColor: 'bg-gradient-to-br from-red-50 to-orange-50',
         borderColor: 'border-red-200',
         icon: <TrendingDown className="w-8 h-8 text-red-600" />,
-        keywords: ['金融风险', '监管挑战', '市场波动', '系统安全']
+        keywords: ['AI伦理', '情感替代风险', '隐私安全', '社会影响']
       };
     }
   };

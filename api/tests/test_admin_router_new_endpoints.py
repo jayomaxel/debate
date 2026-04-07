@@ -4,7 +4,6 @@
 """
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 
@@ -12,11 +11,12 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from models.config import ModelConfig, CozeConfig
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import hash_password, create_token
 
 # 创建测试数据库
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_admin_new_endpoints.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -36,9 +36,9 @@ client = TestClient(app)
 @pytest.fixture(scope="function")
 def setup_database():
     """设置测试数据库"""
-    Base.metadata.create_all(bind=engine)
+    create_test_schema(engine)
     yield
-    Base.metadata.drop_all(bind=engine)
+    drop_test_schema(engine)
 
 
 @pytest.fixture

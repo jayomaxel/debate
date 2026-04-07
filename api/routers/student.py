@@ -119,8 +119,8 @@ async def submit_assessment(
     - **personality_type**: 性格类型（MBTI，可选）
     - **expression_willingness**: 语言表达（0-100）
     - **logical_thinking**: 逻辑思维（0-100）
-    - **stablecoin_knowledge**: 稳定币知识（0-100）
-    - **financial_knowledge**: 金融知识（0-100）
+    - **stablecoin_knowledge**: AI伦理与科技素养（0-100）
+    - **financial_knowledge**: AI通识知识水平（0-100）
     - **critical_thinking**: 批判思维（0-100）
     """
     try:

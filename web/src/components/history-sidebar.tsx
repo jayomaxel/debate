@@ -65,7 +65,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
     {
       id: '1',
       date: new Date('2024-01-15'),
-      topic: '稳定币：是金融的未来还是泡沫？',
+      topic: '人类应不应该与高度拟人化的AI伴侣建立真实的感情羁绊？',
       stance: 'positive',
       result: 'win',
       duration: '28:35',
@@ -81,7 +81,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
         persuasionScore: 73,
         teamworkScore: 88
       },
-      achievements: ['首次胜利', '优秀逻辑思维', '快速响应']
+      achievements: ['首次胜利', '逻辑建构力突出', '快速响应']
     },
     {
       id: '2',

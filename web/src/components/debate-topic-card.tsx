@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { parseDebateDescription } from '@/lib/debate-description';
 import type { Debate } from '@/services/student.service';
 import {
   TrendingUp,
@@ -21,6 +22,7 @@ interface DebateTopic {
   title: string;
   subtitle: string;
   description: string;
+  knowledgePoints: string[];
   duration: string;
   participants: number;
   difficulty: 'beginner' | 'intermediate' | 'advanced';
@@ -41,17 +43,23 @@ interface DebateTopicCardProps {
 
 const DebateTopicCard: React.FC<DebateTopicCardProps> = ({ debate }) => {
   const [showBackground, setShowBackground] = useState(false);
+  const descriptionMeta = parseDebateDescription(debate?.description);
 
   const debateTopic: DebateTopic = debate
     ? {
         title: debate.topic,
         subtitle: '',
-        description: debate.description || '请围绕该辩题准备论据与反驳点。',
+        description: descriptionMeta.roundsInfo || descriptionMeta.raw || '请围绕该辩题准备论据与反驳点。',
+        knowledgePoints: descriptionMeta.knowledgePoints,
         duration: `${debate.duration}分钟`,
         participants: debate.participant_count ?? 4,
         difficulty: 'intermediate',
         background: {
-          overview: debate.description || '建议在辩论前熟悉背景资料，准备支持观点的论据和例子。',
+          overview: descriptionMeta.knowledgePointsText
+            ? `建议围绕以下支撑知识点准备论据与反驳：${descriptionMeta.knowledgePointsText}`
+            : descriptionMeta.raw && !descriptionMeta.hasStructuredMeta
+              ? descriptionMeta.raw
+              : '建议在辩论前熟悉背景资料，准备支持观点的论据和例子。',
           keyPoints: [
             '明确正反方核心立场与论点边界',
             '准备数据、案例、类比等证据链',
@@ -62,34 +70,35 @@ const DebateTopicCard: React.FC<DebateTopicCardProps> = ({ debate }) => {
         }
       }
     : {
-        title: '稳定币：是金融的未来还是泡沫？',
-        subtitle: 'Stablecoin: Financial Future or Bubble?',
-        description: '探讨稳定币在数字金融体系中的作用、风险与发展前景',
+        title: '人类应不应该与高度拟人化的AI伴侣建立真实的感情羁绊？',
+        subtitle: 'Should humans form genuine emotional bonds with highly anthropomorphic AI companions?',
+        description: '探讨AI伴侣在情感陪伴、心理支持、伦理风险与社会关系中的角色边界',
+        knowledgePoints: ['情感计算', '自然语言处理(NLP)', '人机交互心理学', 'AI伦理'],
         duration: '30分钟',
         participants: 4,
         difficulty: 'intermediate',
         background: {
-          overview: '稳定币作为加密货币市场的重要组成部分，近年来发展迅速。本文将探讨稳定币的技术原理、市场现状、监管挑战以及未来发展趋势。',
+          overview: '高度拟人化AI伴侣正在从聊天工具走向长期陪伴对象。围绕情感依附、替代关系、隐私风险与人机边界的讨论，正在成为AI社会应用中的核心议题。',
           keyPoints: [
-            '稳定币通过锚定法币、黄金或其他资产来维持价格稳定',
-            '主要分为法币抵押、加密资产抵押、算法稳定币三类',
-            '在DeFi生态中扮演重要角色，提供流动性支撑',
-            '面临监管审查和技术挑战',
-            '可能成为传统金融与数字金融的桥梁'
+            '情感计算与拟人化设计会显著提升用户依恋感和信任感',
+            'AI伴侣可能提供陪伴、倾听与情绪支持，但也可能带来情感替代风险',
+            '长期互动会涉及隐私数据、心理依赖和价值观塑造等伦理问题',
+            '需要从AI伦理、人机关系与社会影响三个层面进行综合评估',
+            '讨论焦点不只是“能不能做”，还包括“应不应该鼓励形成真实羁绊”'
           ],
           resources: [
             {
-              title: '稳定币技术白皮书',
+              title: '情感计算与AI伴侣研究综述',
               type: 'document',
               url: '#'
             },
             {
-              title: '央行数字货币研究报告',
+              title: '人机关系与数字陪伴伦理分析',
               type: 'article',
               url: '#'
             },
             {
-              title: '稳定币监管政策解读',
+              title: 'AI伴侣产品中的隐私与心理风险',
               type: 'video',
               url: '#'
             }
@@ -174,6 +183,26 @@ const DebateTopicCard: React.FC<DebateTopicCardProps> = ({ debate }) => {
             {getDifficultyLabel(debateTopic.difficulty)}
           </Badge>
         </div>
+
+        {debateTopic.knowledgePoints.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <BookOpen className="w-4 h-4 text-blue-600" />
+              <span>支撑知识点</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {debateTopic.knowledgePoints.map((point, index) => (
+                <Badge
+                  key={`${point}-${index}`}
+                  variant="outline"
+                  className="bg-blue-50 text-blue-700 border-blue-200"
+                >
+                  {point}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
 
         <Separator />
 

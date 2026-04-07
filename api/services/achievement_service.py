@@ -44,31 +44,31 @@ ACHIEVEMENT_TYPES = {
     },
     "logic_master": {
         "title": "逻辑大师",
-        "description": "逻辑性评分达到90分",
+        "description": "逻辑建构力评分达到90分",
         "icon": "🧠",
         "category": "ability"
     },
     "argument_master": {
-        "title": "论据专家",
-        "description": "论据质量评分达到90分",
+        "title": "知识达人",
+        "description": "AI核心知识运用评分达到90分",
         "icon": "📚",
         "category": "ability"
     },
     "response_master": {
-        "title": "反应之王",
-        "description": "反应速度评分达到90分",
+        "title": "思辨先锋",
+        "description": "批判性思维评分达到90分",
         "icon": "⚡",
         "category": "ability"
     },
     "persuasion_master": {
-        "title": "说服大师",
-        "description": "说服力评分达到90分",
+        "title": "表达大师",
+        "description": "语言表达力评分达到90分",
         "icon": "💬",
         "category": "ability"
     },
     "teamwork_master": {
-        "title": "团队之星",
-        "description": "团队配合评分达到90分",
+        "title": "伦理之光",
+        "description": "AI伦理与科技素养评分达到90分",
         "icon": "🤝",
         "category": "ability"
     },

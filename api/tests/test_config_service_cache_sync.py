@@ -1,10 +1,11 @@
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from config import settings
 from models.config import ModelConfig, TtsConfig
 from services.config_service import ConfigService
+from testing_db import create_test_engine
 
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -12,7 +13,7 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 
 @pytest.fixture
 def db_session():
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_test_engine(TEST_DATABASE_URL)
     ModelConfig.__table__.create(bind=engine)
     TtsConfig.__table__.create(bind=engine)
     testing_session_local = sessionmaker(

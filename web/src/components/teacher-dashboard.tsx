@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from '@/hooks/use-toast';
+import { buildDebateDescription, parseDebateDescription } from '@/lib/debate-description';
 import UserProfile from './user-profile';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
@@ -46,6 +47,7 @@ interface DebateConfig {
   duration: string;
   rounds: string;
   class_id: string;
+  knowledgePoints: string;
 }
 
 interface TeacherDashboardProps {
@@ -71,10 +73,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
   const [debateDetailsById, setDebateDetailsById] = useState<Record<string, TeacherDebate>>({});
 
   const [debateConfig, setDebateConfig] = useState<DebateConfig>({
-    topic: '稳定币的未来监管与发展',
+    topic: '人类应不应该与高度拟人化的AI伴侣建立真实的感情羁绊？',
     duration: '30',
     rounds: '3',
-    class_id: ''
+    class_id: '',
+    knowledgePoints: ''
   });
 
   // 加载数据
@@ -174,20 +177,15 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         const debateDetails = await TeacherService.getDebate(debate.id);
         console.log('Editing debate (fetched):', debateDetails);
 
-        // Extract rounds from description "X轮辩论"
-        let rounds = '3';
-        if (debateDetails.description) {
-          const match = debateDetails.description.match(/(\d+)轮/);
-          if (match) {
-            rounds = match[1];
-          }
-        }
+        const descriptionMeta = parseDebateDescription(debateDetails.description);
+        const rounds = descriptionMeta.rounds || '3';
 
         setDebateConfig({
           topic: debateDetails.topic,
           duration: debateDetails.duration.toString(),
           rounds: rounds,
-          class_id: debateDetails.class_id || selectedClass
+          class_id: debateDetails.class_id || selectedClass,
+          knowledgePoints: descriptionMeta.knowledgePointsText
         });
 
         if (debateDetails.class_id) {
@@ -200,18 +198,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         console.error("Failed to fetch debate details:", err);
         setError("获取辩论详情失败，请刷新重试");
         // Fallback to existing data
-        let rounds = '3';
-        if (debate.description) {
-          const match = debate.description.match(/(\d+)轮/);
-          if (match) {
-            rounds = match[1];
-          }
-        }
+        const descriptionMeta = parseDebateDescription(debate.description);
+        const rounds = descriptionMeta.rounds || '3';
         setDebateConfig({
           topic: debate.topic,
           duration: debate.duration.toString(),
           rounds: rounds,
-          class_id: debate.class_id || selectedClass
+          class_id: debate.class_id || selectedClass,
+          knowledgePoints: descriptionMeta.knowledgePointsText
         });
         if (debate.class_id) setSelectedClass(debate.class_id);
         setSelectedStudentIds(debate.student_ids || []);
@@ -223,7 +217,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         topic: '',
         duration: '30',
         rounds: '3',
-        class_id: selectedClass
+        class_id: selectedClass,
+        knowledgePoints: ''
       });
       setSelectedStudentIds([]);
       setEditingDebateId(null);
@@ -283,7 +278,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         class_id: debateConfig.class_id,
         topic: debateConfig.topic,
         duration: parseInt(debateConfig.duration),
-        description: `${debateConfig.rounds}轮辩论`,
+        description: buildDebateDescription(debateConfig.rounds, debateConfig.knowledgePoints),
         student_ids: selectedStudentIds
       };
 
@@ -325,7 +320,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         topic: '',
         duration: '30',
         rounds: '3',
-        class_id: selectedClass
+        class_id: selectedClass,
+        knowledgePoints: ''
       });
       setSelectedStudentIds([]);
       setEditingDebateId(null);
@@ -535,6 +531,22 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                         className="min-h-[80px] border-slate-300 focus:border-blue-500 focus:ring-blue-500"
                         placeholder="输入辩论主题..."
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="knowledgePoints" className="text-slate-700 font-medium">
+                        支撑知识点
+                      </Label>
+                      <Textarea
+                        id="knowledgePoints"
+                        value={debateConfig.knowledgePoints}
+                        onChange={(e) => setDebateConfig({ ...debateConfig, knowledgePoints: e.target.value })}
+                        className="min-h-[72px] border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                        placeholder="如：情感计算、自然语言处理(NLP)、人机交互心理学、AI伦理"
+                      />
+                      <p className="text-xs text-slate-500">
+                        使用顿号、逗号或换行分隔，发布后会在议题详情页以标签形式展示。
+                      </p>
                     </div>
 
                     {/* 赛制设置 */}

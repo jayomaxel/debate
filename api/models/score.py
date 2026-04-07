@@ -21,11 +21,11 @@ class Score(Base):
     speech_id = Column(UUID(as_uuid=True), ForeignKey('speeches.id'), nullable=True)
     
     # 五维能力评分
-    logic_score = Column(Float, nullable=False)  # 逻辑性
-    argument_score = Column(Float, nullable=False)  # 论据质量
-    response_score = Column(Float, nullable=False)  # 反应速度
-    persuasion_score = Column(Float, nullable=False)  # 说服力
-    teamwork_score = Column(Float, nullable=False)  # 团队配合
+    logic_score = Column(Float, nullable=False)  # 逻辑建构力
+    argument_score = Column(Float, nullable=False)  # AI核心知识运用
+    response_score = Column(Float, nullable=False)  # 批判性思维
+    persuasion_score = Column(Float, nullable=False)  # 语言表达力
+    teamwork_score = Column(Float, nullable=False)  # AI伦理与科技素养
     
     overall_score = Column(Float, nullable=False)  # 总分
     feedback = Column(Text, nullable=True)  # 反馈

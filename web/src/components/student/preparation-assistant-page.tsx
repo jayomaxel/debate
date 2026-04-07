@@ -43,6 +43,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingSessionIdRef = useRef<string | null>(null);
 
   // Load sessions on mount
   useEffect(() => {
@@ -52,6 +53,9 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
   // Load history when session changes
   useEffect(() => {
     if (currentSessionId) {
+      if (pendingSessionIdRef.current === currentSessionId) {
+        return;
+      }
       loadConversationHistory(currentSessionId);
     } else {
       setConversations([]);
@@ -72,11 +76,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
     try {
       const data = await StudentService.getKBSessions();
       setSessions(data);
-      if (data.length > 0 && !currentSessionId) {
-        // Select first session by default if none selected
-        // Or keep it null to show welcome screen
-        // setCurrentSessionId(data[0].session_id);
-      }
+      setCurrentSessionId(prev => prev || data[0]?.session_id || null);
     } catch (err: any) {
       console.error('Failed to load sessions:', err);
     }
@@ -102,6 +102,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
   };
 
   const handleNewChat = () => {
+    pendingSessionIdRef.current = null;
     setCurrentSessionId(null);
     setConversations([]);
     setQuestion('');
@@ -121,8 +122,11 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
 
     // If no session, create one ID (will be saved in backend on first message)
     let sessionId = currentSessionId;
+    let createdNewSession = false;
     if (!sessionId) {
+      createdNewSession = true;
       sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      pendingSessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
     }
 
@@ -189,6 +193,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
                 answerAcc += content;
                 setStreamingAnswer(answerAcc);
               } else if (event.type === 'done') {
+                pendingSessionIdRef.current = null;
                 setConversations(prev => {
                   const newArr = [...prev];
                   const lastIdx = newArr.length - 1;
@@ -234,6 +239,10 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
 
     } catch (err: any) {
       console.error('Failed to ask question:', err);
+      if (createdNewSession) {
+        pendingSessionIdRef.current = null;
+        setCurrentSessionId(null);
+      }
       toast({
         variant: 'destructive',
         title: '提问失败',
@@ -292,8 +301,8 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
                   {(source.similarity_score * 100).toFixed(0)}%
                 </span>
               </div>
-              <p className="text-slate-500 line-clamp-1" title={source.chunk_content}>
-                {source.chunk_content}
+              <p className="text-slate-500 line-clamp-1" title={source.excerpt}>
+                {source.excerpt}
               </p>
             </div>
           ))}
@@ -405,9 +414,9 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
                   {[
-                    "什么是稳定币？",
+                    "什么是情感计算？",
                     "如何反驳'技术中立论'？",
-                    "请列举关于监管政策的论据",
+                    "请列举关于AI伦理风险的论据",
                     "辩论中的核心论点怎么构建？"
                   ].map((q, i) => (
                     <button
@@ -422,6 +431,15 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
                     </button>
                   ))}
                 </div>
+              </div>
+            ) : loadingHistory ? (
+              <div className="flex items-center justify-center py-20 text-slate-500">
+                <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                正在加载会话记录...
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="text-center py-20 text-slate-500">
+                当前会话还没有消息，试着从下方继续提问。
               </div>
             ) : (
               conversations.map((conv, idx) => (

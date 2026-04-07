@@ -264,23 +264,23 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({ debateId, onBa
             <div className="grid grid-cols-5 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">{participant.final_score.logic_score.toFixed(1)}</div>
-                <div className="text-sm text-gray-600">逻辑性</div>
+                <div className="text-sm text-gray-600">逻辑建构力</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">{participant.final_score.argument_score.toFixed(1)}</div>
-                <div className="text-sm text-gray-600">论据质量</div>
+                <div className="text-sm text-gray-600">AI核心知识运用</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">{participant.final_score.response_score.toFixed(1)}</div>
-                <div className="text-sm text-gray-600">反应速度</div>
+                <div className="text-sm text-gray-600">批判性思维</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">{participant.final_score.persuasion_score.toFixed(1)}</div>
-                <div className="text-sm text-gray-600">说服力</div>
+                <div className="text-sm text-gray-600">语言表达力</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">{participant.final_score.teamwork_score.toFixed(1)}</div>
-                <div className="text-sm text-gray-600">团队配合</div>
+                <div className="text-sm text-gray-600">AI伦理与科技素养</div>
               </div>
             </div>
           </div>
@@ -332,19 +332,19 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({ debateId, onBa
                         <span className="ml-1 font-semibold">{speech.score.logic_score.toFixed(1)}</span>
                       </div>
                       <div>
-                        <span className="text-gray-600">论据:</span>
+                        <span className="text-gray-600">知识:</span>
                         <span className="ml-1 font-semibold">{speech.score.argument_score.toFixed(1)}</span>
                       </div>
                       <div>
-                        <span className="text-gray-600">反应:</span>
+                        <span className="text-gray-600">思维:</span>
                         <span className="ml-1 font-semibold">{speech.score.response_score.toFixed(1)}</span>
                       </div>
                       <div>
-                        <span className="text-gray-600">说服:</span>
+                        <span className="text-gray-600">表达:</span>
                         <span className="ml-1 font-semibold">{speech.score.persuasion_score.toFixed(1)}</span>
                       </div>
                       <div>
-                        <span className="text-gray-600">配合:</span>
+                        <span className="text-gray-600">伦理:</span>
                         <span className="ml-1 font-semibold">{speech.score.teamwork_score.toFixed(1)}</span>
                       </div>
                     </div>

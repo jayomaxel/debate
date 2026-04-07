@@ -128,11 +128,11 @@ const ComparisonMode: React.FC<ComparisonModeProps> = ({
     };
 
     const metrics = [
-      { key: 'logic', name: '逻辑思维', icon: <Brain className="w-4 h-4" /> },
-      { key: 'argument', name: '论据质量', icon: <Target className="w-4 h-4" /> },
-      { key: 'response', name: '反应速度', icon: <Zap className="w-4 h-4" /> },
-      { key: 'persuasion', name: '情绪感染力', icon: <Heart className="w-4 h-4" /> },
-      { key: 'teamwork', name: '团队配合', icon: <UserGroup className="w-4 h-4" /> }
+      { key: 'logic', name: '逻辑建构力', icon: <Brain className="w-4 h-4" /> },
+      { key: 'argument', name: 'AI核心知识运用', icon: <Target className="w-4 h-4" /> },
+      { key: 'response', name: '批判性思维', icon: <Zap className="w-4 h-4" /> },
+      { key: 'persuasion', name: '语言表达力', icon: <Heart className="w-4 h-4" /> },
+      { key: 'teamwork', name: 'AI伦理与科技素养', icon: <UserGroup className="w-4 h-4" /> }
     ];
 
     return (

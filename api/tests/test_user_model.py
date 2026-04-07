@@ -3,10 +3,10 @@ Test User model - verify administrator role support
 """
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.user import User
 from database import Base
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 import uuid
 
 # Create in-memory SQLite database for testing
@@ -16,11 +16,11 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture
 def db_session():
     """Create a test database session"""
-    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_test_engine(TEST_DATABASE_URL)
 
     # For SQLite, we need to handle the enum differently
     # SQLite doesn't have native enum support, so SQLAlchemy will use VARCHAR
-    Base.metadata.create_all(bind=engine)
+    create_test_schema(engine)
 
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
@@ -29,7 +29,7 @@ def db_session():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=engine)
+        drop_test_schema(engine)
 
 
 def test_user_model_accepts_administrator_role(db_session):

@@ -67,8 +67,8 @@ class AssessmentService:
             personality_type: 性格类型（MBTI）
             expression_willingness: 表达意愿（0-100）
             logical_thinking: 逻辑思维（0-100）
-            stablecoin_knowledge: 稳定币知识（0-100）
-            financial_knowledge: 金融知识（0-100）
+            stablecoin_knowledge: AI伦理与科技素养（0-100）
+            financial_knowledge: AI通识知识水平（0-100）
             critical_thinking: 批判思维（0-100）
             
         Returns:
@@ -85,8 +85,8 @@ class AssessmentService:
 
         validate_score(expression_willingness, "语言表达")
         validate_score(logical_thinking, "逻辑思维")
-        validate_score(stablecoin_knowledge, "稳定币知识")
-        validate_score(financial_knowledge, "金融知识")
+        validate_score(stablecoin_knowledge, "AI伦理与科技素养")
+        validate_score(financial_knowledge, "AI通识知识水平")
         validate_score(critical_thinking, "批判思维")
 
         expression_willingness_10 = max(1, min(10, int(math.ceil(expression_willingness / 10)) if expression_willingness > 0 else 1))

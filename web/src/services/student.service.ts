@@ -292,7 +292,7 @@ export interface DebateReport {
 export interface KBSource {
   document_id: string;
   document_name: string;
-  chunk_content: string;
+  excerpt: string;
   similarity_score: number;
 }
 
