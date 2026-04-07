@@ -43,8 +43,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['62c52b1f.r22.cpolar.top'],
     proxy: {
       '/api': {
+        target: 'http://localhost:7860',
+        changeOrigin: true,
+      },
+      '/uploads': {
         target: 'http://localhost:7860',
         changeOrigin: true,
       },

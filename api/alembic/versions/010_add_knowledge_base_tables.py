@@ -39,7 +39,12 @@ def upgrade() -> None:
         sa.Column("file_path", sa.String(512), nullable=False),
         sa.Column("file_type", sa.String(100), nullable=False),
         sa.Column("file_size", sa.Integer(), nullable=False),
-        sa.Column("upload_status", sa.Enum('pending', 'processing', 'completed', 'failed', name='upload_status_enum'), nullable=False, server_default='pending'),
+        sa.Column(
+            "upload_status",
+            postgresql.ENUM('pending', 'processing', 'completed', 'failed', name='upload_status_enum', create_type=False),
+            nullable=False,
+            server_default='pending'
+        ),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("uploaded_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),

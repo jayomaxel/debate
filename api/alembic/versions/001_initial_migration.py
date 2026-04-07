@@ -82,7 +82,11 @@ def upgrade() -> None:
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
         sa.Column('account', sa.String(50), nullable=False, unique=True, index=True),
         sa.Column('password_hash', sa.String(255), nullable=False),
-        sa.Column('user_type', sa.Enum('teacher', 'student', name='user_type_enum'), nullable=False),
+        sa.Column(
+            'user_type',
+            postgresql.ENUM('teacher', 'student', name='user_type_enum', create_type=False),
+            nullable=False
+        ),
         sa.Column('name', sa.String(100), nullable=False),
         sa.Column('email', sa.String(100), nullable=False, unique=True, index=True),
         sa.Column('phone', sa.String(20), nullable=True),
@@ -116,7 +120,11 @@ def upgrade() -> None:
         sa.Column('invitation_code', sa.String(6), nullable=False, unique=True, index=True),
         sa.Column('class_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('teacher_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('status', sa.Enum('draft', 'published', 'in_progress', 'completed', name='debate_status_enum'), server_default='draft'),
+        sa.Column(
+            'status',
+            postgresql.ENUM('draft', 'published', 'in_progress', 'completed', name='debate_status_enum', create_type=False),
+            server_default='draft'
+        ),
         sa.Column('start_time', sa.DateTime(), nullable=True),
         sa.Column('end_time', sa.DateTime(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('now()')),
@@ -130,8 +138,16 @@ def upgrade() -> None:
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
         sa.Column('debate_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('role', sa.Enum('debater_1', 'debater_2', 'debater_3', 'debater_4', name='debater_role_enum'), nullable=False),
-        sa.Column('stance', sa.Enum('positive', 'negative', name='stance_enum'), nullable=False),
+        sa.Column(
+            'role',
+            postgresql.ENUM('debater_1', 'debater_2', 'debater_3', 'debater_4', name='debater_role_enum', create_type=False),
+            nullable=False
+        ),
+        sa.Column(
+            'stance',
+            postgresql.ENUM('positive', 'negative', name='stance_enum', create_type=False),
+            nullable=False
+        ),
         sa.Column('joined_at', sa.DateTime(), nullable=False, server_default=sa.text('now()')),
         sa.ForeignKeyConstraint(['debate_id'], ['debates.id']),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'])
@@ -143,9 +159,17 @@ def upgrade() -> None:
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
         sa.Column('debate_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('speaker_id', postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column('speaker_type', sa.Enum('human', 'ai', name='speaker_type_enum'), nullable=False),
+        sa.Column(
+            'speaker_type',
+            postgresql.ENUM('human', 'ai', name='speaker_type_enum', create_type=False),
+            nullable=False
+        ),
         sa.Column('speaker_role', sa.String(20), nullable=False),
-        sa.Column('phase', sa.Enum('opening', 'questioning', 'free_debate', 'closing', name='debate_phase_enum'), nullable=False),
+        sa.Column(
+            'phase',
+            postgresql.ENUM('opening', 'questioning', 'free_debate', 'closing', name='debate_phase_enum', create_type=False),
+            nullable=False
+        ),
         sa.Column('content', sa.Text(), nullable=False),
         sa.Column('audio_url', sa.String(500), nullable=True),
         sa.Column('duration', sa.Integer(), nullable=False),
@@ -181,7 +205,11 @@ def upgrade() -> None:
         sa.Column('file_path', sa.String(500), nullable=False),
         sa.Column('file_type', sa.String(50), nullable=False),
         sa.Column('content', sa.Text(), nullable=True),
-        sa.Column('embedding_status', sa.Enum('pending', 'processing', 'completed', 'failed', name='embedding_status_enum'), server_default='pending'),
+        sa.Column(
+            'embedding_status',
+            postgresql.ENUM('pending', 'processing', 'completed', 'failed', name='embedding_status_enum', create_type=False),
+            server_default='pending'
+        ),
         sa.Column('uploaded_at', sa.DateTime(), nullable=False, server_default=sa.text('now()')),
         sa.ForeignKeyConstraint(['debate_id'], ['debates.id'])
     )
@@ -207,7 +235,11 @@ def upgrade() -> None:
         sa.Column('personality_type', sa.String(10), nullable=True),
         sa.Column('expression_willingness', sa.Integer(), nullable=False),
         sa.Column('logical_thinking', sa.Integer(), nullable=False),
-        sa.Column('recommended_role', sa.Enum('debater_1', 'debater_2', 'debater_3', 'debater_4', name='recommended_role_enum'), nullable=True),
+        sa.Column(
+            'recommended_role',
+            postgresql.ENUM('debater_1', 'debater_2', 'debater_3', 'debater_4', name='recommended_role_enum', create_type=False),
+            nullable=True
+        ),
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('now()')),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'])
     )
