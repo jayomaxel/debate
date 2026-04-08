@@ -77,13 +77,17 @@ services:
       dockerfile: Dockerfile.web
     image: debate-web:local
     container_name: aidebate-web
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-api:7860}
     depends_on:
       api:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8860:80"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
       interval: 30s
       timeout: 3s
       retries: 5

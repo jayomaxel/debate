@@ -26,6 +26,7 @@ api/logs/
 
 # Dependencies (will be installed in container)
 node_modules/
+web/node_modules/
 __pycache__/
 *.pyc
 *.pyo
@@ -37,6 +38,7 @@ env/
 # Build outputs
 dist/
 build/
+web/dist/
 *.egg-info/
 
 # Test

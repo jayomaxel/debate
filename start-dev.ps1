@@ -44,6 +44,7 @@ $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $apiDir = Join-Path $rootDir 'api'
 $webDir = Join-Path $rootDir 'web'
 $apiPython = Join-Path $apiDir 'venv\Scripts\python.exe'
+$webPort = 8860
 
 if (-not (Test-Path -LiteralPath $apiDir)) {
   throw "Missing api directory: $apiDir"
@@ -71,8 +72,8 @@ Write-Host 'Starting API on http://localhost:7860 (DEBUG=true)...' -ForegroundCo
 "@
 
 $frontendCommand = @"
-Write-Host 'Starting Web on http://localhost:5173 ...' -ForegroundColor Cyan
-& '$pnpmPath' dev --host 0.0.0.0
+Write-Host "Starting Web on http://localhost:$webPort ..." -ForegroundColor Cyan
+& '$pnpmPath' dev --host 0.0.0.0 --port $webPort
 "@
 
 Start-DevWindow -Title 'AIDebate API' -WorkingDir $apiDir -CommandText $backendCommand
@@ -81,6 +82,6 @@ Start-DevWindow -Title 'AIDebate Web' -WorkingDir $webDir -CommandText $frontend
 Write-Host ''
 Write-Host 'Development services are starting in two new PowerShell windows.' -ForegroundColor Green
 Write-Host 'API:  http://localhost:7860' -ForegroundColor Green
-Write-Host 'Web:  http://localhost:5173' -ForegroundColor Green
+Write-Host "Web:  http://localhost:$webPort" -ForegroundColor Green
 Write-Host ''
 Write-Host "The API window forces DEBUG=true so the backend won't crash on a global DEBUG=release environment variable." -ForegroundColor Yellow
