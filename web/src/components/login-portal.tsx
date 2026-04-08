@@ -39,9 +39,12 @@ interface LoginFormData {
   classId?: string;  // 新增：班级ID
   teacherId?: string;
   password?: string;
+  confirmPassword?: string;
 }
 
 type UserRole = 'student' | 'teacher' | 'administrator';
+
+const DEFAULT_REGISTER_ROLE: UserRole = 'student';
 
 interface LoginPortalProps {
   onLogin: (role: UserRole) => void | Promise<void>;
@@ -70,8 +73,13 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
     classCode: '',
     classId: '',
     teacherId: '',
-    password: ''
+    password: '',
+    confirmPassword: '',
   });
+
+  const roleOptions: UserRole[] = isLogin
+    ? ['student', 'teacher', 'administrator']
+    : ['student', 'teacher'];
 
   // 加载班级列表
   useEffect(() => {
@@ -82,6 +90,12 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
     setClasses([]);
     setLoadingClasses(false);
+  }, [isLogin, activeRole]);
+
+  useEffect(() => {
+    if (!isLogin && activeRole === 'administrator') {
+      setActiveRole(DEFAULT_REGISTER_ROLE);
+    }
   }, [isLogin, activeRole]);
 
   const loadClasses = async () => {
@@ -99,6 +113,29 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
   const handleInputChange = (field: keyof LoginFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleModeChange = (nextIsLogin: boolean) => {
+    setIsLogin(nextIsLogin);
+    setFormData(prev => ({ ...prev, confirmPassword: '' }));
+
+    if (!nextIsLogin && activeRole === 'administrator') {
+      setActiveRole(DEFAULT_REGISTER_ROLE);
+    }
+  };
+
+  const handleRegisterSuccess = (description: string) => {
+    toast({
+      variant: 'success',
+      title: '注册成功',
+      description,
+    });
+    setIsLogin(true);
+    setFormData(prev => ({
+      ...prev,
+      password: '',
+      confirmPassword: '',
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -149,8 +186,29 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
         }
 
         // 注册逻辑
+        const password = formData.password || '';
+        const confirmPassword = formData.confirmPassword || '';
+
+        if (!password || !confirmPassword) {
+          toast({
+            variant: 'destructive',
+            title: '注册失败',
+            description: '请填写密码并确认密码',
+          });
+          return;
+        }
+
+        if (password !== confirmPassword) {
+          toast({
+            variant: 'destructive',
+            title: '注册失败',
+            description: '两次输入的密码不一致',
+          });
+          return;
+        }
+
         if (activeRole === 'student') {
-          if (!formData.account || !formData.password || !formData.name) {
+          if (!formData.account || !formData.name) {
             toast({
               variant: 'destructive',
               title: '注册失败',
@@ -161,24 +219,16 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
           await AuthService.registerStudent({
             account: formData.account,
-            password: formData.password,
+            password,
             name: formData.name,
             class_id: formData.classId || undefined,  // 使用班级ID
             email: formData.email || undefined,
             student_id: formData.classCode || undefined,
           });
 
-          // 注册成功，显示提示并切换到登录模式
-          toast({
-            variant: 'success',
-            title: '注册成功',
-            description: '请使用您的账号密码登录',
-          });
-          setIsLogin(true);
-          // 清空密码字段
-          setFormData(prev => ({ ...prev, password: '' }));
+          handleRegisterSuccess('请使用您的账号密码登录');
         } else {
-          if (!formData.email || !formData.password || !formData.name || !formData.teacherId) {
+          if (!formData.email || !formData.name || !formData.teacherId) {
             toast({
               variant: 'destructive',
               title: '注册失败',
@@ -191,19 +241,11 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
             account: formData.teacherId, // 教工号作为account
             email: formData.email,
             phone: '', // 暂时使用教工号作为phone，后续可以添加单独的phone字段
-            password: formData.password,
+            password,
             name: formData.name,
           });
 
-          // 注册成功，显示提示并切换到登录模式
-          toast({
-            variant: 'success',
-            title: '注册成功',
-            description: '请使用您的教工号和密码登录',
-          });
-          setIsLogin(true);
-          // 清空密码字段
-          setFormData(prev => ({ ...prev, password: '' }));
+          handleRegisterSuccess('请使用您的教工号和密码登录');
         }
       }
     } catch (err: any) {
@@ -266,10 +308,10 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
             <Card className="bg-white border-slate-200 shadow-xl">
               <CardHeader className="text-center pb-4">
                 <CardTitle className="text-2xl font-bold text-slate-900 mb-2">
-                  欢迎登录
+                  {isLogin ? '欢迎登录' : '欢迎注册'}
                 </CardTitle>
                 <CardDescription className="text-slate-600">
-                  选择您的身份，开启智能辩论之旅
+                  {isLogin ? '选择您的身份，开启智能辩论之旅' : '选择您的身份，创建账号后开始使用平台'}
                 </CardDescription>
               </CardHeader>
 
@@ -278,9 +320,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                 <div className="flex items-center justify-center gap-4 text-sm">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsLogin(true);
-                    }}
+                    onClick={() => handleModeChange(true)}
                     className={`px-4 py-2 rounded-md transition-colors ${
                       isLogin
                         ? 'bg-blue-600 text-white'
@@ -291,9 +331,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsLogin(false);
-                    }}
+                    onClick={() => handleModeChange(false)}
                     className={`px-4 py-2 rounded-md transition-colors ${
                       !isLogin
                         ? 'bg-blue-600 text-white'
@@ -306,7 +344,11 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                 {/* 角色切换 */}
                 <Tabs value={activeRole} onValueChange={(value) => setActiveRole(value as UserRole)}>
-                  <TabsList className="grid w-full grid-cols-3 h-12 bg-slate-100">
+                  <TabsList
+                    className={`grid w-full h-12 bg-slate-100 ${
+                      isLogin ? 'grid-cols-3' : 'grid-cols-2'
+                    }`}
+                  >
                     <TabsTrigger
                       value="student"
                       className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
@@ -321,13 +363,15 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                       <User className="w-4 h-4" />
                       我是老师
                     </TabsTrigger>
-                    <TabsTrigger
-                      value="administrator"
-                      className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
-                    >
-                      <ShieldCheck className="w-4 h-4" />
-                      管理员
-                    </TabsTrigger>
+                    {roleOptions.includes('administrator') && (
+                      <TabsTrigger
+                        value="administrator"
+                        className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                        管理员
+                      </TabsTrigger>
+                    )}
                   </TabsList>
 
                   <TabsContent value="student" className="space-y-4 mt-6">
@@ -376,6 +420,26 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                       {!isLogin && (
                         <>
+                          <div className="space-y-2">
+                            <Label htmlFor="student-confirm-password" className="text-slate-700 font-medium flex items-center gap-2">
+                              <Key className="w-4 h-4" />
+                              确认密码
+                              <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
+                                必填
+                              </Badge>
+                            </Label>
+                            <Input
+                              id="student-confirm-password"
+                              type="password"
+                              placeholder="请再次输入密码"
+                              value={formData.confirmPassword}
+                              onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              required
+                              disabled={loading}
+                            />
+                          </div>
+
                           {/* 姓名 - 仅注册时显示 */}
                           <div className="space-y-2">
                             <Label htmlFor="student-name" className="text-slate-700 font-medium flex items-center gap-2">
@@ -486,7 +550,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                         ) : (
                           <>
                             <GraduationCap className="w-4 h-4 mr-2" />
-                            {isLogin ? '登录' : '注册并进入辩论课堂'}
+                            {isLogin ? '登录' : '注册账号'}
                           </>
                         )}
                       </Button>
@@ -539,6 +603,26 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                       {!isLogin && (
                         <>
+                          <div className="space-y-2">
+                            <Label htmlFor="teacher-confirm-password" className="text-slate-700 font-medium flex items-center gap-2">
+                              <Key className="w-4 h-4" />
+                              确认密码
+                              <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
+                                必填
+                              </Badge>
+                            </Label>
+                            <Input
+                              id="teacher-confirm-password"
+                              type="password"
+                              placeholder="请再次输入密码"
+                              value={formData.confirmPassword}
+                              onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              required
+                              disabled={loading}
+                            />
+                          </div>
+
                           {/* 姓名 - 仅注册时显示 */}
                           <div className="space-y-2">
                             <Label htmlFor="teacher-name" className="text-slate-700 font-medium flex items-center gap-2">
@@ -598,76 +682,78 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                         ) : (
                           <>
                             <BookOpen className="w-4 h-4 mr-2" />
-                            {isLogin ? '登录' : '注册并进入教师控制台'}
+                            {isLogin ? '登录' : '注册账号'}
                           </>
                         )}
                       </Button>
                     </form>
                   </TabsContent>
 
-                  <TabsContent value="administrator" className="space-y-4 mt-6">
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                      {/* 账号 */}
-                      <div className="space-y-2">
-                        <Label htmlFor="admin-account" className="text-slate-700 font-medium flex items-center gap-2">
-                          <ShieldCheck className="w-4 h-4" />
-                          管理员账号
-                          <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
-                            必填
-                          </Badge>
-                        </Label>
-                        <Input
-                          id="admin-account"
-                          type="text"
-                          placeholder="请输入管理员账号"
-                          value={formData.account}
-                          onChange={(e) => handleInputChange('account', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-                          required
-                          disabled={loading}
-                        />
-                      </div>
+                  {roleOptions.includes('administrator') && (
+                    <TabsContent value="administrator" className="space-y-4 mt-6">
+                      <form onSubmit={handleSubmit} className="space-y-4">
+                        {/* 账号 */}
+                        <div className="space-y-2">
+                          <Label htmlFor="admin-account" className="text-slate-700 font-medium flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4" />
+                            管理员账号
+                            <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
+                              必填
+                            </Badge>
+                          </Label>
+                          <Input
+                            id="admin-account"
+                            type="text"
+                            placeholder="请输入管理员账号"
+                            value={formData.account}
+                            onChange={(e) => handleInputChange('account', e.target.value)}
+                            className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                            required
+                            disabled={loading}
+                          />
+                        </div>
 
-                      {/* 密码 */}
-                      <div className="space-y-2">
-                        <Label htmlFor="admin-password" className="text-slate-700 font-medium flex items-center gap-2">
-                          <Key className="w-4 h-4" />
-                          密码
-                          <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
-                            必填
-                          </Badge>
-                        </Label>
-                        <Input
-                          id="admin-password"
-                          type="password"
-                          placeholder="请输入密码"
-                          value={formData.password}
-                          onChange={(e) => handleInputChange('password', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-                          required
-                          disabled={loading}
-                        />
-                      </div>
+                        {/* 密码 */}
+                        <div className="space-y-2">
+                          <Label htmlFor="admin-password" className="text-slate-700 font-medium flex items-center gap-2">
+                            <Key className="w-4 h-4" />
+                            密码
+                            <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
+                              必填
+                            </Badge>
+                          </Label>
+                          <Input
+                            id="admin-password"
+                            type="password"
+                            placeholder="请输入密码"
+                            value={formData.password}
+                            onChange={(e) => handleInputChange('password', e.target.value)}
+                            className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                            required
+                            disabled={loading}
+                          />
+                        </div>
 
-                      <Button
-                        type="submit"
-                        className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white py-3"
-                        disabled={loading}
-                      >
-                        {loading ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            登录中...
-                          </>
-                        ) : (
-                          <>
-                            <ShieldCheck className="w-4 h-4 mr-2" />
-                            登录管理控制台
-                          </>
-                        )}
-                      </Button>
-                    </form>
-                  </TabsContent>
+                        <Button
+                          type="submit"
+                          className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white py-3"
+                          disabled={loading}
+                        >
+                          {loading ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              登录中...
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="w-4 h-4 mr-2" />
+                              登录管理控制台
+                            </>
+                          )}
+                        </Button>
+                      </form>
+                    </TabsContent>
+                  )}
                 </Tabs>
               </CardContent>
             </Card>

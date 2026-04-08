@@ -38,7 +38,8 @@ class KBDocument(Base):
     chunks: Mapped[List["KBDocumentChunk"]] = relationship(
         "KBDocumentChunk",
         back_populates="document",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     
     def __repr__(self):

@@ -3,10 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import SkillsRadar, { defaultSkills } from './skills-radar';
+import SkillsAssessmentEditor from './skills-assessment-editor';
+import SkillsRadar, {
+  createEditableDefaultSkills,
+  mergeAssessmentIntoSkills,
+  type SkillKey,
+} from './skills-radar';
 import WaitingStatusBar from './waiting-status-bar';
 import DebateTopicCard from './debate-topic-card';
 import StudentService from '@/services/student.service';
+import { hasCompleteAbilityValues } from '@/lib/ability-profile';
 import type { AssessmentResult, Debate } from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
 import {
@@ -31,7 +37,7 @@ interface StudentOnboardingProps {
 
 const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, onDebateStart, onBackToLogin, onMatchFound }) => {
   const { user } = useAuth();
-  const [skills, setSkills] = useState(defaultSkills);
+  const [skills, setSkills] = useState(createEditableDefaultSkills);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [assessmentComplete, setAssessmentComplete] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -55,21 +61,8 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
         if (result) {
           setAssessmentResult(result);
           setAssessmentComplete(!result.is_default);
-          
-          // 将评估结果映射到技能雷达图
-          // 注意：这里需要根据实际的评估数据结构调整
           setSkills(
-            defaultSkills.map((skill) => {
-              const valueMap: Record<string, number | undefined> = {
-                'AI核心知识运用': result.financial_knowledge,
-                'AI伦理与科技素养': result.stablecoin_knowledge,
-                '批判性思维': result.critical_thinking,
-                '逻辑建构力': result.logical_thinking,
-                '语言表达力': result.expression_willingness,
-              };
-              const mappedValue = valueMap[skill.name];
-              return { ...skill, value: typeof mappedValue === 'number' ? mappedValue : skill.value };
-            })
+            mergeAssessmentIntoSkills(createEditableDefaultSkills(), result)
           );
         }
 
@@ -131,41 +124,49 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
     loadAssessment();
   }, [initialDebate]);
 
-  const handleSkillChange = (skillName: string, value: number) => {
+  const handleSkillChange = (skillKey: SkillKey, value: number) => {
     setSkills(prev =>
       prev.map(skill =>
-        skill.name === skillName ? { ...skill, value } : skill
+        skill.key === skillKey ? { ...skill, value } : skill
       )
     );
   };
 
+  const skillValues = skills.map((skill) => skill.value);
+  const isAssessmentReady = hasCompleteAbilityValues(skillValues);
+
+  const getSkillValue = (skillKey: SkillKey) => {
+    const skill = skills.find((item) => item.key === skillKey);
+
+    if (typeof skill?.value !== 'number') {
+      throw new Error('请先完成 5 个维度的能力自评');
+    }
+
+    return Math.max(0, Math.min(100, Math.round(skill.value)));
+  };
+
   const handleSaveAssessment = async () => {
     try {
+      if (!isAssessmentReady) {
+        setError('请先完成 5 个维度的能力自评');
+        return;
+      }
+
       setIsSaving(true);
       setError(null);
 
       const result = await StudentService.submitAssessment({
-        logical_thinking: Math.max(0, Math.min(100, Math.round(skills.find(s => s.name === '逻辑建构力')?.value ?? 50))),
-        expression_willingness: Math.max(0, Math.min(100, Math.round(skills.find(s => s.name === '语言表达力')?.value ?? 50))),
-        stablecoin_knowledge: Math.max(0, Math.min(100, Math.round(skills.find(s => s.name === 'AI伦理与科技素养')?.value ?? 50))),
-        financial_knowledge: Math.max(0, Math.min(100, Math.round(skills.find(s => s.name === 'AI核心知识运用')?.value ?? 50))),
-        critical_thinking: Math.max(0, Math.min(100, Math.round(skills.find(s => s.name === '批判性思维')?.value ?? 50))),
+        logical_thinking: getSkillValue('logical_thinking'),
+        expression_willingness: getSkillValue('expression_willingness'),
+        stablecoin_knowledge: getSkillValue('stablecoin_knowledge'),
+        financial_knowledge: getSkillValue('financial_knowledge'),
+        critical_thinking: getSkillValue('critical_thinking'),
         personality_type: 'balanced',
       });
 
       setAssessmentResult(result);
       setSkills(
-        defaultSkills.map((skill) => {
-          const valueMap: Record<string, number | undefined> = {
-            'AI核心知识运用': result.financial_knowledge,
-            'AI伦理与科技素养': result.stablecoin_knowledge,
-            '批判性思维': result.critical_thinking,
-            '逻辑建构力': result.logical_thinking,
-            '语言表达力': result.expression_willingness,
-          };
-          const mappedValue = valueMap[skill.name];
-          return { ...skill, value: typeof mappedValue === 'number' ? mappedValue : skill.value };
-        })
+        mergeAssessmentIntoSkills(createEditableDefaultSkills(), result)
       );
 
       setAssessmentComplete(true);
@@ -179,7 +180,11 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
   };
 
   const calculateOverallScore = () => {
-    const total = skills.reduce((sum, skill) => sum + skill.value, 0);
+    if (!isAssessmentReady) {
+      return null;
+    }
+
+    const total = skills.reduce((sum, skill) => sum + (skill.value ?? 0), 0);
     return Math.round(total / skills.length);
   };
 
@@ -301,11 +306,14 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
                       评估您的各项能力，系统将根据评估结果为您匹配合适的辩论对手
                     </div>
 
-                    <SkillsRadar
-                      skills={skills}
-                      onSkillChange={handleSkillChange}
-                      readonly={assessmentComplete}
-                    />
+                    {assessmentComplete ? (
+                      <SkillsRadar skills={skills} />
+                    ) : (
+                      <SkillsAssessmentEditor
+                        skills={skills}
+                        onSkillChange={handleSkillChange}
+                      />
+                    )}
 
                     {/* 综合评分和推荐角色 */}
                     <div className="mt-6 space-y-4">
@@ -313,11 +321,17 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
                         <div className="flex items-center justify-between">
                           <div>
                             <h3 className="font-medium text-blue-900">综合能力评分</h3>
-                            <p className="text-sm text-blue-700">基于所有维度的综合评估</p>
+                            <p className="text-sm text-blue-700">
+                              {isAssessmentReady ? '基于所有维度的综合评估' : '完成 5 项自评后生成'}
+                            </p>
                           </div>
                           <div className="text-right">
-                            <div className="text-2xl font-bold text-blue-600">{overallScore}</div>
-                            <div className="text-xs text-blue-600">综合评分</div>
+                            <div className="text-2xl font-bold text-blue-600">
+                              {overallScore ?? '--'}
+                            </div>
+                            <div className="text-xs text-blue-600">
+                              {isAssessmentReady ? '综合评分' : '待完成'}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -357,7 +371,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
                       <div className="mt-6 flex gap-3">
                         <Button
                           onClick={handleSaveAssessment}
-                          disabled={isSaving}
+                          disabled={isSaving || !isAssessmentReady}
                           className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
                         >
                           {isSaving ? (
@@ -373,6 +387,11 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({ initialDebate, on
                           )}
                         </Button>
                       </div>
+                    )}
+                    {!assessmentComplete && !isAssessmentReady && (
+                      <p className="mt-3 text-sm text-slate-500">
+                        请先完成 5 个维度的填写，系统不会自动补入默认分值。
+                      </p>
                     )}
                   </CardContent>
                 </Card>

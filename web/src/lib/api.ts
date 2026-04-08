@@ -57,6 +57,23 @@ class ApiClient {
     this.failedQueue = [];
   }
 
+  private isPublicAuthRequest(url?: string): boolean {
+    if (!url) {
+      return false;
+    }
+
+    const normalizedUrl = url.toLowerCase();
+    const publicAuthPaths = [
+      '/api/auth/login',
+      '/api/auth/refresh',
+      '/api/auth/register/teacher',
+      '/api/auth/register/student',
+      '/api/auth/classes/public',
+    ];
+
+    return publicAuthPaths.some((path) => normalizedUrl.includes(path));
+  }
+
   private setupInterceptors() {
     // 请求拦截器 - 添加Authorization header
     this.instance.interceptors.request.use(
@@ -64,7 +81,7 @@ class ApiClient {
         // 从TokenManager获取access_token
         const token = TokenManager.getAccessToken();
         
-        if (token && config.headers) {
+        if (token && config.headers && !this.isPublicAuthRequest(config.url)) {
           config.headers.Authorization = `Bearer ${token}`;
         }
 
@@ -111,7 +128,15 @@ class ApiClient {
         };
 
         // 处理401未授权错误 - 尝试刷新token
-        if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+        const shouldRetryWithRefresh = Boolean(
+          error.response?.status === 401 &&
+          originalRequest &&
+          !originalRequest._retry &&
+          !this.isPublicAuthRequest(originalRequest.url) &&
+          TokenManager.getRefreshToken()
+        );
+
+        if (shouldRetryWithRefresh) {
           if (this.isRefreshing) {
             // 如果正在刷新token，将请求加入队列
             return new Promise((resolve, reject) => {

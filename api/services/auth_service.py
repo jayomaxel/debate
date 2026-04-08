@@ -3,6 +3,7 @@
 """
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from models.user import User
 from utils.security import hash_password, verify_password, create_access_token, create_refresh_token
@@ -195,10 +196,17 @@ class AuthService:
             return AuthService._authenticate_admin(db, account, password)
         
         # 查找用户
+        login_identifier = account.strip()
         user = db.query(User).filter(
-            User.account == account,
+            User.account == login_identifier,
             User.user_type == user_type
         ).first()
+
+        if not user and "@" in login_identifier:
+            user = db.query(User).filter(
+                func.lower(User.email) == login_identifier.lower(),
+                User.user_type == user_type
+            ).first()
         
         if not user:
             raise ValueError("账号不存在或用户类型错误")
@@ -239,7 +247,7 @@ class AuthService:
     def refresh_token(
         db: Session,
         refresh_token: str
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """
         刷新访问令牌
         
@@ -275,10 +283,15 @@ class AuthService:
             "user_type": user.user_type
         }
         new_access_token = create_access_token(token_data)
-        
+        new_refresh_token = create_refresh_token({"user_id": str(user.id)})
+
+        from config import settings
+
         return {
             "access_token": new_access_token,
-            "token_type": "bearer"
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer",
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         }
     
     @staticmethod

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, text
+from sqlalchemy import delete, select, func, text
 import logging
 import PyPDF2
 from docx import Document as DocxDocument
@@ -288,33 +288,25 @@ class DocumentService:
             ValueError: 文档不存。
         """
         try:
-            # 查询文档
-            document = self.db.execute(
-                select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
+            document_uuid = uuid.UUID(document_id)
+
+            # Only load scalar metadata needed for file cleanup so delete
+            # never triggers ORM loading of pgvector-backed chunk rows.
+            file_path = self.db.execute(
+                select(KBDocument.file_path).where(KBDocument.id == document_uuid)
             ).scalar_one_or_none()
             
-            if not document:
+            if not file_path:
                 raise ValueError(f"文档不存。 {document_id}")
-            
-            file_path = document.file_path
-            
-            # 删除数据库记录（级联删除chunks。
-            # 使用 expire_on_commit=False 避免在测试环境中访问不存在的chunks。
-            try:
-                self.db.delete(document)
-                self.db.commit()
-            except Exception as db_error:
-                # 如果是因为chunks表不存在（测试环境），尝试直接删除文档记。
-                if "no such table: kb_document_chunks" in str(db_error):
-                    self.db.rollback()
-                    # 直接删除文档记录，不触发级联
-                    self.db.execute(
-                        select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
-                    ).scalar_one_or_none()
-                    self.db.query(KBDocument).filter(KBDocument.id == uuid.UUID(document_id)).delete()
-                    self.db.commit()
-                else:
-                    raise
+
+            delete_result = self.db.execute(
+                delete(KBDocument).where(KBDocument.id == document_uuid)
+            )
+            if delete_result.rowcount == 0:
+                self.db.rollback()
+                raise ValueError(f"文档不存。 {document_id}")
+
+            self.db.commit()
             
             # 删除文件
             if os.path.exists(file_path):

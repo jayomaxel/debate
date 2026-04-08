@@ -390,6 +390,30 @@ class TestDocumentDeletion:
             select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
         ).scalar_one_or_none()
         assert deleted_doc is None
+
+    @pytest.mark.asyncio
+    async def test_delete_document_does_not_use_orm_instance_delete(
+        self,
+        document_service,
+        test_user_id,
+        monkeypatch,
+    ):
+        """测试删除文档时不会走ORM实体删除，避免触发chunks向量列加载"""
+        document = await document_service.upload_document(
+            file_data=b"Content to delete without ORM entity load",
+            filename="direct_delete.pdf",
+            file_type="application/pdf",
+            user_id=test_user_id,
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("Session.delete should not be used for KB document deletion")
+
+        monkeypatch.setattr(document_service.db, "delete", fail_if_called)
+
+        result = await document_service.delete_document(str(document.id))
+
+        assert result is True
     
     @pytest.mark.asyncio
     async def test_delete_nonexistent_document(self, document_service):

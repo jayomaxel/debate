@@ -17,6 +17,8 @@ web/src/lib/**
 !web/src/lib/debate-transcript.test.ts
 !web/src/lib/pcm-stream-player.ts
 !web/src/lib/pcm-stream-player.test.ts
+!web/src/lib/debate-description.ts
+!web/src/lib/debate-description.test.ts
 lib64/
 parts/
 sdist/

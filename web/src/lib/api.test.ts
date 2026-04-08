@@ -35,6 +35,7 @@ vi.mock('axios', async () => {
 vi.mock('./token-manager', () => ({
   default: {
     getAccessToken: vi.fn(),
+    getRefreshToken: vi.fn(),
     refreshToken: vi.fn(),
     clearAll: vi.fn(),
   },
@@ -234,6 +235,20 @@ describe('HTTP Client - Property-Based Tests', () => {
         { numRuns: 100 }
       );
     });
+
+    it('does not add Authorization for public auth routes', () => {
+      vi.mocked(TokenManager.getAccessToken).mockReturnValue('stale-access-token');
+
+      const config: InternalAxiosRequestConfig = {
+        url: '/api/auth/login',
+        method: 'post',
+        headers: new AxiosHeaders(),
+      } as InternalAxiosRequestConfig;
+
+      const interceptedConfig = mockAxiosInstance._requestInterceptor(config);
+
+      expect(interceptedConfig.headers.Authorization).toBeUndefined();
+    });
   });
 
   describe('Response Data Extraction', () => {
@@ -346,6 +361,33 @@ describe('HTTP Client - Property-Based Tests', () => {
         }),
         { numRuns: 100 }
       );
+    });
+  });
+
+  describe('Authentication Retry Handling', () => {
+    it('does not try to refresh tokens for login 401 responses', async () => {
+      vi.mocked(TokenManager.getRefreshToken).mockReturnValue('refresh-token');
+
+      const error = buildAxiosError(
+        401,
+        { detail: 'Unauthorized' },
+        {
+          config: {
+            url: '/api/auth/login',
+            method: 'post',
+            headers: new AxiosHeaders(),
+          } as InternalAxiosRequestConfig,
+        }
+      );
+
+      await expect(mockAxiosInstance._responseErrorInterceptor(error)).rejects.toMatchObject({
+        code: 401,
+        message: 'Unauthorized',
+        detail: 'Unauthorized',
+      });
+
+      expect(TokenManager.refreshToken).not.toHaveBeenCalled();
+      expect(TokenManager.clearAll).not.toHaveBeenCalled();
     });
   });
 });

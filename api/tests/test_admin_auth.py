@@ -190,6 +190,29 @@ def test_teacher_login_still_works(db_session):
     assert result["user"]["account"] == "teacher001"
 
 
+def test_teacher_login_accepts_email_identifier(db_session):
+    """Teachers can sign in with email as well as account."""
+    AuthService.register_teacher(
+        db=db_session,
+        account="teacher002",
+        email="teacher002@test.com",
+        phone="13800138001",
+        password="Teacher123!",
+        name="邮箱登录教师"
+    )
+
+    result = AuthService.login(
+        db=db_session,
+        account="teacher002@test.com",
+        password="Teacher123!",
+        user_type="teacher"
+    )
+
+    assert result is not None
+    assert result["user"]["user_type"] == "teacher"
+    assert result["user"]["account"] == "teacher002"
+
+
 def test_student_login_still_works(db_session):
     """测试学生登录功能仍然正常工作（向后兼容性）"""
     # 注册学生
@@ -212,6 +235,35 @@ def test_student_login_still_works(db_session):
     assert result is not None
     assert result["user"]["user_type"] == "student"
     assert result["user"]["account"] == "student001"
+
+
+def test_refresh_token_returns_complete_token_bundle(db_session):
+    """Refresh should return the fields the frontend stores."""
+    AuthService.register_teacher(
+        db=db_session,
+        account="teacher_refresh",
+        email="teacher_refresh@test.com",
+        phone="13800138002",
+        password="Teacher123!",
+        name="刷新测试教师"
+    )
+
+    login_result = AuthService.login(
+        db=db_session,
+        account="teacher_refresh",
+        password="Teacher123!",
+        user_type="teacher"
+    )
+
+    refresh_result = AuthService.refresh_token(
+        db=db_session,
+        refresh_token=login_result["refresh_token"]
+    )
+
+    assert "access_token" in refresh_result
+    assert "refresh_token" in refresh_result
+    assert refresh_result["token_type"] == "bearer"
+    assert refresh_result["expires_in"] > 0
 
 
 def test_change_admin_password_with_valid_credentials(db_session):
