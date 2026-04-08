@@ -255,6 +255,125 @@ class DebateService:
                 logger.info("OpenAI分配结果与兜底一致，虽按顺序但仍接受该结果")
 
         return llm_result
+
+    @staticmethod
+    def _get_teacher_class(db: Session, teacher_id: str, class_id: str) -> Class:
+        try:
+            class_uuid = uuid.UUID(class_id)
+        except ValueError as exc:
+            raise ValueError("无效的班级ID格式") from exc
+
+        cls = db.query(Class).filter(
+            Class.id == class_uuid,
+            Class.teacher_id == uuid.UUID(teacher_id)
+        ).first()
+
+        if not cls:
+            raise ValueError("班级不存在或无权限")
+
+        return cls
+
+    @staticmethod
+    def _validate_selected_student_ids(
+        db: Session,
+        class_id: str,
+        student_ids: Optional[List[str]],
+    ) -> List[str]:
+        if not student_ids:
+            return []
+
+        normalized_ids: List[str] = []
+        seen_ids = set()
+        for student_id in student_ids:
+            normalized_id = str(student_id).strip()
+            if not normalized_id or normalized_id in seen_ids:
+                continue
+            try:
+                uuid.UUID(normalized_id)
+            except ValueError as exc:
+                raise ValueError("无效的学生ID格式") from exc
+            seen_ids.add(normalized_id)
+            normalized_ids.append(normalized_id)
+            if len(normalized_ids) >= 4:
+                break
+
+        class_uuid = uuid.UUID(class_id)
+        matched_students = (
+            db.query(User)
+            .filter(
+                User.id.in_([uuid.UUID(student_id) for student_id in normalized_ids]),
+                User.user_type == "student",
+                User.class_id == class_uuid,
+            )
+            .all()
+        )
+
+        if len(matched_students) != len(normalized_ids):
+            raise ValueError("所选学生必须属于当前班级")
+
+        return normalized_ids
+
+    @staticmethod
+    async def _assign_students_to_debate(
+        db: Session,
+        debate: Debate,
+        selected_student_ids: List[str],
+        *,
+        replace_existing: bool,
+    ) -> None:
+        if replace_existing:
+            db.query(DebateParticipation).filter(
+                DebateParticipation.debate_id == debate.id
+            ).delete()
+
+        if not selected_student_ids:
+            return
+
+        users = (
+            db.query(User)
+            .filter(User.id.in_([uuid.UUID(student_id) for student_id in selected_student_ids]))
+            .all()
+        )
+        user_name_by_id = {str(user.id): (user.name or "") for user in users}
+        student_assessments: Dict[str, Dict[str, Any]] = {}
+        students_payload: List[Dict[str, Any]] = []
+
+        for student_id in selected_student_ids:
+            assessment = AssessmentService.get_assessment(db=db, user_id=student_id) or {}
+            student_assessments[student_id] = assessment
+            students_payload.append(
+                {
+                    "user_id": student_id,
+                    "name": user_name_by_id.get(student_id, ""),
+                    "expression_willingness": assessment.get("expression_willingness", 50),
+                    "logical_thinking": assessment.get("logical_thinking", 50),
+                    "stablecoin_knowledge": assessment.get("stablecoin_knowledge", 50),
+                    "financial_knowledge": assessment.get("financial_knowledge", 50),
+                    "critical_thinking": assessment.get("critical_thinking", 50),
+                    "recommended_role": assessment.get("recommended_role"),
+                }
+            )
+
+        try:
+            role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
+        except Exception as e:
+            logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
+            role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
+
+        for student_id in selected_student_ids:
+            role = role_by_user_id.get(student_id)
+            if role not in DebateService.ROLE_ORDER:
+                raise ValueError("智能分组失败")
+            db.add(
+                DebateParticipation(
+                    id=uuid.uuid4(),
+                    debate_id=debate.id,
+                    user_id=uuid.UUID(student_id),
+                    role=role,
+                    stance="positive",
+                    role_reason=DebateService.ROLE_REASON.get(role),
+                )
+            )
     
     @staticmethod
     async def create_debate(
@@ -284,14 +403,12 @@ class DebateService:
         Raises:
             ValueError: 如果班级不存在或邀请码生成失败
         """
-        # 验证班级是否存在且属于该教师
-        cls = db.query(Class).filter(
-            Class.id == uuid.UUID(class_id),
-            Class.teacher_id == uuid.UUID(teacher_id)
-        ).first()
-        
-        if not cls:
-            raise ValueError("班级不存在或无权限")
+        DebateService._get_teacher_class(db=db, teacher_id=teacher_id, class_id=class_id)
+        selected_student_ids = DebateService._validate_selected_student_ids(
+            db=db,
+            class_id=class_id,
+            student_ids=student_ids,
+        )
         
         # 生成唯一的邀请码（最多尝试10次）
         max_attempts = 10
@@ -324,52 +441,13 @@ class DebateService:
             db.commit()
             db.refresh(debate)
             
-            # 如果提供了学生ID列表，创建参与记录
-            if student_ids:
-                selected_student_ids = student_ids[:4]
-                users = (
-                    db.query(User)
-                    .filter(User.id.in_([uuid.UUID(sid) for sid in selected_student_ids]))
-                    .all()
+            if selected_student_ids:
+                await DebateService._assign_students_to_debate(
+                    db=db,
+                    debate=debate,
+                    selected_student_ids=selected_student_ids,
+                    replace_existing=False,
                 )
-                user_name_by_id = {str(u.id): (u.name or "") for u in users}
-                student_assessments: Dict[str, Dict[str, Any]] = {}
-                students_payload: List[Dict[str, Any]] = []
-                for sid in selected_student_ids:
-                    assessment = AssessmentService.get_assessment(db=db, user_id=sid) or {}
-                    student_assessments[sid] = assessment
-                    students_payload.append(
-                        {
-                            "user_id": sid,
-                            "name": user_name_by_id.get(sid, ""),
-                            "expression_willingness": assessment.get("expression_willingness", 50),
-                            "logical_thinking": assessment.get("logical_thinking", 50),
-                            "stablecoin_knowledge": assessment.get("stablecoin_knowledge", 50),
-                            "financial_knowledge": assessment.get("financial_knowledge", 50),
-                            "critical_thinking": assessment.get("critical_thinking", 50),
-                            "recommended_role": assessment.get("recommended_role"),
-                        }
-                    )
-
-                try:
-                    role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
-                except Exception as e:
-                    logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
-                    role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
-
-                for sid in selected_student_ids:
-                    role = role_by_user_id.get(sid)
-                    if role not in DebateService.ROLE_ORDER:
-                        raise ValueError("智能分组失败")
-                    participation = DebateParticipation(
-                        id=uuid.uuid4(),
-                        debate_id=debate.id,
-                        user_id=uuid.UUID(sid),
-                        role=role,
-                        stance="positive",
-                        role_reason=DebateService.ROLE_REASON.get(role),
-                    )
-                    db.add(participation)
                 db.commit()
             
         except IntegrityError:
@@ -413,6 +491,7 @@ class DebateService:
         db: Session,
         teacher_id: str,
         debate_id: str,
+        class_id: Optional[str] = None,
         topic: Optional[str] = None,
         duration: Optional[int] = None,
         description: Optional[str] = None,
@@ -452,6 +531,19 @@ class DebateService:
                  raise ValueError("无法修改进行中或已完成辩论的主题")
              if duration is not None and duration != debate.duration:
                  raise ValueError("无法修改进行中或已完成辩论的时长")
+
+        normalized_class_id = str(debate.class_id)
+        class_changed = False
+        if class_id is not None and class_id != normalized_class_id:
+            if debate.status in ["in_progress", "completed"]:
+                raise ValueError("无法修改进行中或已完成辩论的班级")
+            DebateService._get_teacher_class(db=db, teacher_id=teacher_id, class_id=class_id)
+            debate.class_id = uuid.UUID(class_id)
+            normalized_class_id = class_id
+            class_changed = True
+
+        if class_changed and student_ids is None:
+            raise ValueError("修改班级时请重新选择辩手")
         
         # 更新基本字段
         if topic is not None:
@@ -465,53 +557,17 @@ class DebateService:
         if student_ids is not None:
             if debate.status in ["in_progress", "completed"]:
                 raise ValueError("无法修改进行中或已完成辩论的辩手")
-
-            selected_student_ids = student_ids[:4]
-            users = (
-                db.query(User)
-                .filter(User.id.in_([uuid.UUID(sid) for sid in selected_student_ids]))
-                .all()
+            selected_student_ids = DebateService._validate_selected_student_ids(
+                db=db,
+                class_id=normalized_class_id,
+                student_ids=student_ids,
             )
-            user_name_by_id = {str(u.id): (u.name or "") for u in users}
-            student_assessments: Dict[str, Dict[str, Any]] = {}
-            students_payload: List[Dict[str, Any]] = []
-            for sid in selected_student_ids:
-                assessment = AssessmentService.get_assessment(db=db, user_id=sid) or {}
-                student_assessments[sid] = assessment
-                students_payload.append(
-                    {
-                        "user_id": sid,
-                        "name": user_name_by_id.get(sid, ""),
-                        "expression_willingness": assessment.get("expression_willingness", 50),
-                        "logical_thinking": assessment.get("logical_thinking", 50),
-                        "stablecoin_knowledge": assessment.get("stablecoin_knowledge", 50),
-                        "financial_knowledge": assessment.get("financial_knowledge", 50),
-                        "critical_thinking": assessment.get("critical_thinking", 50),
-                        "recommended_role": assessment.get("recommended_role"),
-                    }
-                )
-
-            try:
-                role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
-            except Exception as e:
-                logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
-                role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
-
-            db.query(DebateParticipation).filter(DebateParticipation.debate_id == debate.id).delete()
-
-            for sid in selected_student_ids:
-                role = role_by_user_id.get(sid)
-                if role not in DebateService.ROLE_ORDER:
-                    raise ValueError("智能分组失败")
-                participation = DebateParticipation(
-                    id=uuid.uuid4(),
-                    debate_id=debate.id,
-                    user_id=uuid.UUID(sid),
-                    role=role,
-                    stance="positive",
-                    role_reason=DebateService.ROLE_REASON.get(role),
-                )
-                db.add(participation)
+            await DebateService._assign_students_to_debate(
+                db=db,
+                debate=debate,
+                selected_student_ids=selected_student_ids,
+                replace_existing=True,
+            )
         
         try:
             db.commit()

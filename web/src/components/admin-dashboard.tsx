@@ -42,7 +42,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
     { id: 'vector' as TabType, label: '向量配置', icon: Layers },
     // { id: 'email' as TabType, label: '邮件配置', icon: Mail },
     { id: 'coze' as TabType, label: 'Coze配置', icon: Bot },
-    { id: 'users' as TabType, label: '用户管理', icon: Users },
+    { id: 'users' as TabType, label: '成员管理', icon: Users },
   ];
 
   return (
@@ -111,7 +111,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                 {/* {activeTab === 'email' && '配置系统邮件服务'} */}
                 {activeTab === 'knowledge' && '管理知识库文档与向量化'}
                 {activeTab === 'coze' && '配置Coze代理设置'}
-                {activeTab === 'users' && '查看和管理系统用户'}
+                {activeTab === 'users' && '按教师与学生分类管理系统成员'}
               </p>
             </div>
 

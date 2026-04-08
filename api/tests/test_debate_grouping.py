@@ -93,3 +93,162 @@ async def test_teacher_create_debate_grouping_fallback(monkeypatch):
         assert response.status_code == 200
         detail = response.json()["data"]
         assert len(detail.get("grouping", [])) == 4
+
+
+@pytest.mark.asyncio
+async def test_teacher_create_debate_rejects_cross_class_students(monkeypatch):
+    async def fake_openai_assign_roles(db, students):
+        raise Exception("openai disabled in test")
+
+    monkeypatch.setattr(DebateService, "_openai_assign_roles", fake_openai_assign_roles)
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_cross_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "跨班校验教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000002",
+            },
+        )
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post("/api/teacher/classes", json={"name": f"跨班A{suffix}"}, headers=headers)
+        class_a_id = response.json()["data"]["id"]
+        response = await client.post("/api/teacher/classes", json={"name": f"跨班B{suffix}"}, headers=headers)
+        class_b_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/students",
+            json={
+                "account": f"cross_student_{suffix}",
+                "password": "Test123456",
+                "name": "跨班学生",
+                "class_id": class_a_id,
+                "email": f"cross_student_{suffix}@test.com",
+            },
+            headers=headers,
+        )
+        student_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_b_id,
+                "topic": "跨班学生校验",
+                "duration": 30,
+                "description": "测试跨班选择是否被拦截",
+                "student_ids": [student_id],
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert "当前班级" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_teacher_update_debate_can_switch_class_with_matching_students(monkeypatch):
+    async def fake_openai_assign_roles(db, students):
+        raise Exception("openai disabled in test")
+
+    monkeypatch.setattr(DebateService, "_openai_assign_roles", fake_openai_assign_roles)
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_switch_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "切班教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000003",
+            },
+        )
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post("/api/teacher/classes", json={"name": f"切班A{suffix}"}, headers=headers)
+        class_a_id = response.json()["data"]["id"]
+        response = await client.post("/api/teacher/classes", json={"name": f"切班B{suffix}"}, headers=headers)
+        class_b_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/students",
+            json={
+                "account": f"switch_student_a_{suffix}",
+                "password": "Test123456",
+                "name": "A班学生",
+                "class_id": class_a_id,
+                "email": f"switch_student_a_{suffix}@test.com",
+            },
+            headers=headers,
+        )
+        student_a_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/students",
+            json={
+                "account": f"switch_student_b_{suffix}",
+                "password": "Test123456",
+                "name": "B班学生",
+                "class_id": class_b_id,
+                "email": f"switch_student_b_{suffix}@test.com",
+            },
+            headers=headers,
+        )
+        student_b_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_a_id,
+                "topic": "切换班级前",
+                "duration": 30,
+                "description": "初始辩论",
+                "student_ids": [student_a_id],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        debate_id = response.json()["data"]["id"]
+
+        response = await client.put(
+            f"/api/teacher/debates/{debate_id}",
+            json={
+                "class_id": class_b_id,
+                "topic": "切换班级后",
+                "duration": 30,
+                "description": "更新到B班",
+                "student_ids": [student_b_id],
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["class_id"] == class_b_id
+        assert data["student_ids"] == [student_b_id]

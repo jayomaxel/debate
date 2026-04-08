@@ -157,6 +157,12 @@ export interface User {
   student_id?: string;
   class_id?: string;
   class_name?: string; // 班级名称
+  managed_class_ids?: string[];
+  managed_classes?: Array<{
+    id: string;
+    name: string;
+    code: string;
+  }>;
   created_at: string;
 }
 
@@ -167,6 +173,7 @@ export interface UserUpdate {
   phone?: string | null;
   student_id?: string | null;
   class_id?: string | null;
+  managed_class_ids?: string[];
 }
 
 export interface PasswordChangeParams {

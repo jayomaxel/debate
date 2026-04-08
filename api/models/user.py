@@ -30,6 +30,11 @@ class User(Base):
     
     # 关系
     class_: Mapped["Class"] = relationship("Class", back_populates="students", foreign_keys=[class_id])
+    teaching_classes: Mapped[List["Class"]] = relationship(
+        "Class",
+        back_populates="teacher",
+        foreign_keys="Class.teacher_id",
+    )
     debate_participations: Mapped[List["DebateParticipation"]] = relationship(
         "DebateParticipation", 
         back_populates="user"

@@ -88,6 +88,25 @@ def teacher_user(setup_database):
 
 
 @pytest.fixture
+def second_teacher_user(setup_database):
+    """创建第二个教师用户"""
+    db = TestingSessionLocal()
+    teacher = User(
+        id=uuid.uuid4(),
+        account="teacher002",
+        name="Second Teacher",
+        password_hash=hash_password("password123"),
+        user_type="teacher",
+        email="teacher002@test.com"
+    )
+    db.add(teacher)
+    db.commit()
+    db.refresh(teacher)
+    db.close()
+    return teacher
+
+
+@pytest.fixture
 def student_user(setup_database):
     """创建学生用户"""
     db = TestingSessionLocal()
@@ -137,6 +156,23 @@ def test_class(setup_database, teacher_user):
     db.add(test_class)
     db.commit()
     class_id = str(test_class.id)
+    db.refresh(test_class)
+    db.close()
+    return test_class
+
+
+@pytest.fixture
+def second_test_class(setup_database, second_teacher_user):
+    """创建第二个测试班级"""
+    db = TestingSessionLocal()
+    test_class = Class(
+        id=uuid.uuid4(),
+        name="Second Test Class",
+        code="TEST02",
+        teacher_id=second_teacher_user.id
+    )
+    db.add(test_class)
+    db.commit()
     db.refresh(test_class)
     db.close()
     return test_class
@@ -483,6 +519,29 @@ def test_update_teacher_user_as_admin(admin_token, teacher_user):
     assert updated_user is not None
     assert updated_user.account == "teacher002"
     assert updated_user.phone == "13800138000"
+    db.close()
+
+
+def test_update_teacher_managed_classes_as_admin(admin_token, teacher_user, test_class, second_test_class):
+    """测试管理员可以为教师补充分配负责班级"""
+    response = client.put(
+        f"/api/admin/users/{teacher_user.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "managed_class_ids": [str(second_test_class.id)]
+        }
+    )
+
+    user_data = assert_success_response(response)
+    managed_class_ids = user_data["managed_class_ids"]
+    assert str(test_class.id) in managed_class_ids
+    assert str(second_test_class.id) in managed_class_ids
+    assert any(cls["id"] == str(second_test_class.id) for cls in user_data["managed_classes"])
+
+    db = TestingSessionLocal()
+    updated_class = db.query(Class).filter(Class.id == second_test_class.id).first()
+    assert updated_class is not None
+    assert updated_class.teacher_id == teacher_user.id
     db.close()
 
 

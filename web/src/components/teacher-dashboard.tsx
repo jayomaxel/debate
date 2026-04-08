@@ -63,6 +63,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
   const [classes, setClasses] = useState<Class[]>([]);
   const [debates, setDebates] = useState<TeacherDebate[]>([]);
   const [selectedClass, setSelectedClass] = useState<string>('');
+  const [studentsLoading, setStudentsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -79,6 +80,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
     class_id: '',
     knowledgePoints: ''
   });
+
+  const handleDebateClassChange = (value: string) => {
+    setDebateConfig((prev) => ({ ...prev, class_id: value }));
+    setSelectedClass(value);
+    setSelectedStudentIds([]);
+    setStudents([]);
+    setError(null);
+  };
 
   // 加载数据
   useEffect(() => {
@@ -108,10 +117,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         if (classesData.length > 0) {
           setSelectedClass(classesData[0].id);
           setDebateConfig(prev => ({ ...prev, class_id: classesData[0].id }));
-
-          // 加载该班级的学生
-          const studentsData = await TeacherService.getStudents(classesData[0].id);
-          setStudents(studentsData);
+          setStudents([]);
+        } else {
+          setStudents([]);
         }
       } catch (err: any) {
         console.error('Failed to load teacher data:', err);
@@ -129,14 +137,26 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
     if (selectedClass) {
       const loadStudents = async () => {
         try {
+          setStudentsLoading(true);
           const studentsData = await TeacherService.getStudents(selectedClass);
           setStudents(studentsData);
+          setSelectedStudentIds((prev) =>
+            prev.filter((studentId) => studentsData.some((student) => student.id === studentId))
+          );
         } catch (err: any) {
           console.error('Failed to load students:', err);
           setError(err.message || '加载学生列表失败');
+          setStudents([]);
+          setSelectedStudentIds([]);
+        } finally {
+          setStudentsLoading(false);
         }
       };
-      loadStudents();
+
+      void loadStudents();
+    } else {
+      setStudents([]);
+      setSelectedStudentIds([]);
     }
   }, [selectedClass]);
 
@@ -510,10 +530,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                       <Label className="text-slate-700 font-medium">选择班级</Label>
                       <Select
                         value={debateConfig.class_id}
-                        onValueChange={(value) => {
-                          setDebateConfig({ ...debateConfig, class_id: value });
-                          setSelectedClass(value);
-                        }}
+                        onValueChange={handleDebateClassChange}
                       >
                         <SelectTrigger className="border-slate-300 focus:border-blue-500 focus:ring-blue-500">
                           <SelectValue placeholder="请选择班级" />
@@ -608,7 +625,12 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                         <Users className="w-4 h-4 text-slate-500" />
                       </div>
 
-                      {students.length === 0 ? (
+                      {studentsLoading ? (
+                        <div className="flex items-center justify-center gap-2 py-8 bg-slate-50 rounded-lg border border-slate-200 border-dashed text-slate-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>正在加载当前班级学生...</span>
+                        </div>
+                      ) : students.length === 0 ? (
                         <div className="text-center py-8 bg-slate-50 rounded-lg border border-slate-200 border-dashed">
                           <p className="text-slate-500">当前班级暂无学生</p>
                         </div>

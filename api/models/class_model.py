@@ -23,7 +23,11 @@ class Class(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # 关系
-    teacher: Mapped["User"] = relationship("User", foreign_keys=[teacher_id])
+    teacher: Mapped["User"] = relationship(
+        "User",
+        foreign_keys=[teacher_id],
+        back_populates="teaching_classes",
+    )
     students: Mapped[List["User"]] = relationship(
         "User", 
         back_populates="class_",

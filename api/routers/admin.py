@@ -3,8 +3,8 @@
 提供系统级管理功能，包括班级管理、配置管理、用户管理等
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
-from pydantic import BaseModel
+from sqlalchemy.orm import Session, joinedload, selectinload
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import uuid
 
@@ -841,6 +841,8 @@ class UserListResponse(BaseModel):
     student_id: Optional[str] = None
     class_id: Optional[str] = None
     class_name: Optional[str] = None
+    managed_class_ids: List[str] = Field(default_factory=list)
+    managed_classes: List[dict] = Field(default_factory=list)
     created_at: str
     
     class Config:
@@ -855,9 +857,23 @@ class UserUpdateRequest(BaseModel):
     phone: Optional[str] = None
     student_id: Optional[str] = None
     class_id: Optional[str] = None
+    managed_class_ids: Optional[List[str]] = None
 
 
 def _build_user_response(user: User) -> UserListResponse:
+    managed_classes = []
+    if user.user_type == "teacher":
+        managed_classes = [
+            {
+                "id": str(cls.id),
+                "name": cls.name,
+                "code": cls.code,
+            }
+            for cls in sorted(
+                user.teaching_classes,
+                key=lambda cls: (cls.name or "", str(cls.id)),
+            )
+        ]
     return UserListResponse(
         id=str(user.id),
         account=user.account,
@@ -868,6 +884,8 @@ def _build_user_response(user: User) -> UserListResponse:
         student_id=user.student_id,
         class_id=str(user.class_id) if user.class_id else None,
         class_name=user.class_.name if user.class_ else None,
+        managed_class_ids=[cls["id"] for cls in managed_classes],
+        managed_classes=managed_classes,
         created_at=user.created_at.isoformat()
     )
 
@@ -896,7 +914,10 @@ async def get_users(
     """
     try:
         # Build query
-        query = db.query(User).options(joinedload(User.class_))
+        query = db.query(User).options(
+            joinedload(User.class_),
+            selectinload(User.teaching_classes),
+        )
         
         # Apply role filter if provided
         if role:
@@ -951,7 +972,15 @@ async def get_user_by_id(
     """
     try:
         # Query user by ID
-        user = db.query(User).options(joinedload(User.class_)).filter(User.id == uuid.UUID(user_id)).first()
+        user = (
+            db.query(User)
+            .options(
+                joinedload(User.class_),
+                selectinload(User.teaching_classes),
+            )
+            .filter(User.id == uuid.UUID(user_id))
+            .first()
+        )
         
         if not user:
             raise HTTPException(
@@ -1001,7 +1030,10 @@ async def update_user(
         user_uuid = uuid.UUID(user_id)
         user = (
             db.query(User)
-            .options(joinedload(User.class_))
+            .options(
+                joinedload(User.class_),
+                selectinload(User.teaching_classes),
+            )
             .filter(User.id == user_uuid)
             .first()
         )
@@ -1018,8 +1050,10 @@ async def update_user(
                 detail="管理员账号请通过管理员专用入口维护"
             )
 
-        if request.account is not None:
-            account = request.account.strip()
+        provided_fields = getattr(request, "model_fields_set", getattr(request, "__fields_set__", set()))
+
+        if "account" in provided_fields:
+            account = (request.account or "").strip()
             if not account:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -1037,8 +1071,8 @@ async def update_user(
                 )
             user.account = account
 
-        if request.name is not None:
-            name = request.name.strip()
+        if "name" in provided_fields:
+            name = (request.name or "").strip()
             if not name:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -1046,8 +1080,8 @@ async def update_user(
                 )
             user.name = name
 
-        if request.email is not None:
-            email = request.email.strip()
+        if "email" in provided_fields:
+            email = (request.email or "").strip()
             if not email:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -1065,17 +1099,17 @@ async def update_user(
                 )
             user.email = email
 
-        if request.phone is not None:
-            phone = request.phone.strip()
+        if "phone" in provided_fields:
+            phone = (request.phone or "").strip()
             user.phone = phone or None
 
         if user.user_type == "student":
-            if request.student_id is not None:
-                student_id = request.student_id.strip()
+            if "student_id" in provided_fields:
+                student_id = (request.student_id or "").strip()
                 user.student_id = student_id or None
 
-            if request.class_id is not None:
-                class_id = request.class_id.strip()
+            if "class_id" in provided_fields:
+                class_id = (request.class_id or "").strip()
                 if not class_id:
                     user.class_id = None
                 else:
@@ -1094,12 +1128,44 @@ async def update_user(
                             detail="班级不存在"
                         )
                     user.class_id = class_record.id
+        elif user.user_type == "teacher" and "managed_class_ids" in provided_fields:
+            requested_class_ids = list(dict.fromkeys(request.managed_class_ids or []))
+            class_uuids = []
+            for class_id in requested_class_ids:
+                try:
+                    class_uuids.append(uuid.UUID(class_id))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="无效的班级ID格式"
+                    ) from exc
+
+            if class_uuids:
+                class_records = db.query(Class).filter(Class.id.in_(class_uuids)).all()
+                class_record_map = {cls.id: cls for cls in class_records}
+
+                missing_ids = {
+                    str(class_uuid)
+                    for class_uuid in class_uuids
+                    if class_uuid not in class_record_map
+                }
+                if missing_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"班级不存在: {', '.join(sorted(missing_ids))}"
+                    )
+
+                for class_uuid in class_uuids:
+                    class_record_map[class_uuid].teacher_id = user.id
 
         db.commit()
         db.refresh(user)
         user = (
             db.query(User)
-            .options(joinedload(User.class_))
+            .options(
+                joinedload(User.class_),
+                selectinload(User.teaching_classes),
+            )
             .filter(User.id == user_uuid)
             .first()
         )

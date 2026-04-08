@@ -220,6 +220,7 @@ async def update_debate(
             db=db,
             teacher_id=str(current_user.id),
             debate_id=debate_id,
+            class_id=request.class_id,
             topic=request.topic,
             duration=request.duration,
             description=request.description,
