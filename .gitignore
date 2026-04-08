@@ -82,3 +82,5 @@ api/dist/
 uploads/
 api/uploads/
 ssl/
+runtime-logs/
+cpolar-stable-windows-amd64-setup/

@@ -456,5 +456,78 @@ def test_class_response_contains_all_required_fields(admin_token, test_class, te
     assert test_class_data["student_count"] >= 1  # 至少有我们添加的学生
 
 
+# ==================== 测试用户管理 ====================
+
+def test_update_teacher_user_as_admin(admin_token, teacher_user):
+    """测试管理员可以更新教师账号信息"""
+    response = client.put(
+        f"/api/admin/users/{teacher_user.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "account": "teacher002",
+            "name": "Updated Teacher",
+            "email": "updated-teacher@test.com",
+            "phone": "13800138000"
+        }
+    )
+
+    user_data = assert_success_response(response)
+    assert user_data["id"] == str(teacher_user.id)
+    assert user_data["account"] == "teacher002"
+    assert user_data["name"] == "Updated Teacher"
+    assert user_data["email"] == "updated-teacher@test.com"
+    assert user_data["phone"] == "13800138000"
+
+    db = TestingSessionLocal()
+    updated_user = db.query(User).filter(User.id == teacher_user.id).first()
+    assert updated_user is not None
+    assert updated_user.account == "teacher002"
+    assert updated_user.phone == "13800138000"
+    db.close()
+
+
+def test_update_student_user_class_as_admin(admin_token, student_user, test_class):
+    """测试管理员可以更新学生的学号和班级"""
+    response = client.put(
+        f"/api/admin/users/{student_user.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "name": "Updated Student",
+            "student_id": "S2026001",
+            "class_id": str(test_class.id)
+        }
+    )
+
+    user_data = assert_success_response(response)
+    assert user_data["id"] == str(student_user.id)
+    assert user_data["name"] == "Updated Student"
+    assert user_data["student_id"] == "S2026001"
+    assert user_data["class_id"] == str(test_class.id)
+    assert user_data["class_name"] == test_class.name
+
+
+def test_update_user_with_duplicate_email_fails(admin_token, teacher_user, student_user):
+    """测试更新用户时邮箱冲突会失败"""
+    response = client.put(
+        f"/api/admin/users/{teacher_user.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"email": student_user.email}
+    )
+
+    assert response.status_code == 400
+    assert "邮箱已存在" in response.json()["detail"]
+
+
+def test_update_user_as_teacher_fails(teacher_token, student_user):
+    """测试教师无法通过管理员端点编辑用户"""
+    response = client.put(
+        f"/api/admin/users/{student_user.id}",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={"name": "Unauthorized Update"}
+    )
+
+    assert response.status_code == 403
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

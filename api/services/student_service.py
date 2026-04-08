@@ -10,6 +10,7 @@ from models.class_model import Class
 from models.debate import DebateParticipation, Debate
 from models.score import Score
 from utils.security import hash_password
+from utils.user_email import build_placeholder_email, to_public_email
 import uuid
 import csv
 import io
@@ -73,6 +74,7 @@ class StudentService:
             student_id=student_id,
             class_id=uuid.UUID(class_id)
         )
+        student.email = email or build_placeholder_email(account)
         
         try:
             db.add(student)
@@ -86,7 +88,7 @@ class StudentService:
             "id": str(student.id),
             "account": student.account,
             "name": student.name,
-            "email": student.email,
+            "email": to_public_email(student.email),
             "student_id": student.student_id,
             "class_id": str(student.class_id)
         }

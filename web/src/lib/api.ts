@@ -169,15 +169,22 @@ class ApiClient {
       // 服务器返回错误状态码
       const { status, data } = error.response;
       let message = data?.message || '';
+      const detail = data?.detail;
 
       // 处理422验证错误
-      if (status === 422 && data?.detail) {
-        if (Array.isArray(data.detail)) {
-          message = data.detail.map((d: any) => d.msg || '输入错误').join('; ');
-        } else if (typeof data.detail === 'string') {
-          message = data.detail;
+      if (detail) {
+        if (Array.isArray(detail)) {
+          if (status === 422 || !message) {
+            message = detail.map((d: any) => d.msg || '输入错误').join('; ');
+          }
+        } else if (typeof detail === 'string') {
+          if (status === 422 || !message) {
+            message = detail;
+          }
         } else {
-          message = JSON.stringify(data.detail);
+          if (status === 422 || !message) {
+            message = JSON.stringify(detail);
+          }
         }
       } else if (!message) {
         message = this.getErrorMessage(status);
@@ -186,7 +193,9 @@ class ApiClient {
       return {
         code: status,
         message: typeof message === 'string' ? message : JSON.stringify(message),
-        detail: typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail),
+        detail: detail
+          ? (typeof detail === 'string' ? detail : JSON.stringify(detail))
+          : undefined,
       };
     } else if (error.request) {
       // 请求已发出但没有收到响应

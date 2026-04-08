@@ -71,6 +71,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
     class_id: '',
     class_name: ''
   });
+  const [lockedClassId, setLockedClassId] = useState(user.class_id || '');
 
   // 班级列表（用于学生更换班级）
   const [classes, setClasses] = useState<Array<{
@@ -97,6 +98,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
   const [skills, setSkills] = useState(defaultSkills);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [isSavingAssessment, setIsSavingAssessment] = useState(false);
+  const hasLockedClass = user.user_type === 'student' && Boolean(lockedClassId);
 
   // 加载完整的个人信息
   useEffect(() => {
@@ -106,7 +108,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
   useEffect(() => {
     loadProfile();
     // 加载所有班级供选择（学生和教师都可以选择/修改班级）
-    if (user.user_type === 'student' || user.user_type === 'teacher') {
+    if (user.user_type === 'student') {
       loadClasses();
     }
     
@@ -119,14 +121,18 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
   const loadProfile = async () => {
     try {
       const profile = await AuthService.getProfile();
+      const currentClassId = profile.class_id || '';
       setProfileForm({
         name: profile.name || '',
         email: profile.email || '',
         phone: profile.phone || '',
         student_id: profile.student_id || '',
-        class_id: profile.class_id || '',
+        class_id: currentClassId,
         class_name: '' // 将从班级列表中获取
       });
+      if (user.user_type === 'student') {
+        setLockedClassId(currentClassId);
+      }
     } catch (err) {
       console.error('Failed to load profile:', err);
     }
@@ -242,6 +248,9 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
         student_id: user.user_type === 'student' ? profileForm.student_id : undefined,
         class_id: profileForm.class_id || undefined
       });
+      if (user.user_type === 'student' && profileForm.class_id) {
+        setLockedClassId(profileForm.class_id);
+      }
 
       toast({
         variant: 'success',
@@ -601,8 +610,12 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
                     value={profileForm.email}
                     onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
                     disabled={loading}
-                    required
+                    required={user.user_type !== 'student'}
+                    placeholder={user.user_type === 'student' ? '可选，留空则不展示邮箱' : '请输入邮箱'}
                   />
+                  {user.user_type === 'student' && (
+                    <p className="text-xs text-slate-500">学生邮箱为可选项，留空时个人资料中不会显示邮箱。</p>
+                  )}
                 </div>
 
                 {/* 手机号 */}
@@ -640,17 +653,17 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
                 )}
 
                 {/* 班级选择（学生和教师） */}
-                {(user.user_type === 'student' || user.user_type === 'teacher') && (
+                {user.user_type === 'student' && (
                   <div className="space-y-2">
                     <Label htmlFor="class_select" className="text-slate-700 font-medium flex items-center gap-2">
                       <Users className="w-4 h-4" />
-                      {user.user_type === 'student' ? '所属班级' : '管理班级'}
+                      所属班级
                     </Label>
                     {classes.length > 0 ? (
                       <Select
                         value={profileForm.class_id || undefined}
                         onValueChange={(value) => setProfileForm({ ...profileForm, class_id: value })}
-                        disabled={loading}
+                        disabled={loading || hasLockedClass}
                       >
                         <SelectTrigger className="border-slate-300 focus:border-blue-500 focus:ring-blue-500">
                           <SelectValue placeholder="请选择班级" />
@@ -669,9 +682,9 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, initialTab = 'info' }) 
                       </div>
                     )}
                     <p className="text-xs text-slate-500">
-                      {profileForm.class_id 
-                        ? (user.user_type === 'student' ? '更换班级后，您将加入新班级的辩论活动' : '修改班级后，您的教学活动将关联到新班级')
-                        : '请选择您所在的班级'}
+                      {hasLockedClass
+                        ? '班级已锁定，学生首次选择后不可自行修改。'
+                        : '班级只能选择一次，请确认后再保存。'}
                     </p>
                   </div>
                 )}

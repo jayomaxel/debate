@@ -3,7 +3,7 @@ Test ConfigService - verify model and Coze configuration management
 """
 import pytest
 from sqlalchemy.orm import sessionmaker
-from models.config import ModelConfig, CozeConfig
+from models.config import AsrConfig, ModelConfig, CozeConfig
 from services.config_service import ConfigService
 from database import Base
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
@@ -197,6 +197,87 @@ async def test_update_model_config_partial_update(config_service, db_session):
     assert updated_config.api_key == "original_key"
     assert updated_config.max_tokens == 2000
     assert updated_config.parameters == {"top_p": 0.9}
+
+
+@pytest.mark.asyncio
+async def test_get_asr_config_backfills_file_url_prefix_from_public_base_url(
+    config_service,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+
+    existing_config = AsrConfig(
+        id=uuid.uuid4(),
+        model_name="qwen-asr",
+        api_endpoint="https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        api_key="test-key",
+        parameters={"provider": "dashscope"},
+    )
+    db_session.add(existing_config)
+    db_session.commit()
+
+    config = await config_service.get_asr_config()
+
+    assert config.parameters["file_url_prefix"] == (
+        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_asr_config_refreshes_stale_cpolar_file_url_prefix(
+    config_service,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+
+    existing_config = AsrConfig(
+        id=uuid.uuid4(),
+        model_name="qwen-asr",
+        api_endpoint="https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        api_key="test-key",
+        parameters={
+            "provider": "dashscope",
+            "file_url_prefix": "https://old-random.r22.cpolar.top/uploads/asr",
+        },
+    )
+    db_session.add(existing_config)
+    db_session.commit()
+
+    config = await config_service.get_asr_config()
+
+    assert config.parameters["file_url_prefix"] == (
+        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_asr_config_keeps_custom_file_url_prefix(
+    config_service,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+
+    existing_config = AsrConfig(
+        id=uuid.uuid4(),
+        model_name="qwen-asr",
+        api_endpoint="https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        api_key="test-key",
+        parameters={
+            "provider": "dashscope",
+            "file_url_prefix": "https://debate.example.com/uploads/asr",
+        },
+    )
+    db_session.add(existing_config)
+    db_session.commit()
+
+    config = await config_service.get_asr_config()
+
+    assert config.parameters["file_url_prefix"] == (
+        "https://debate.example.com/uploads/asr"
+    )
 
 
 # ============================================================================

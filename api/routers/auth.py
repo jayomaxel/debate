@@ -20,7 +20,6 @@ class TeacherRegisterRequest(BaseModel):
     phone: str
     password: str
     name: str
-    class_id: Optional[str] = None  # 班级ID（可选）
 
 
 class StudentRegisterRequest(BaseModel):
@@ -102,7 +101,6 @@ async def register_teacher(
     - **phone**: 手机号
     - **password**: 密码
     - **name**: 姓名
-    - **class_id**: 班级ID（可选）
     """
     try:
         user = AuthService.register_teacher(
@@ -111,8 +109,7 @@ async def register_teacher(
             email=request.email,
             phone=request.phone,
             password=request.password,
-            name=request.name,
-            class_id=request.class_id
+            name=request.name
         )
         return {
             "code": 200,

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 import logging
 import PyPDF2
 from docx import Document as DocxDocument
@@ -16,6 +16,7 @@ import tiktoken
 
 from models.kb_document import KBDocument, KBDocumentChunk
 from services.config_service import ConfigService
+from services.kb_vector_schema_service import KBVectorSchemaService
 from openai import OpenAI
 import time
 
@@ -64,6 +65,42 @@ class DocumentService:
         
         # 确保上传目录存在
         os.makedirs(self.upload_dir, exist_ok=True)
+
+    def _is_postgresql(self) -> bool:
+        bind = self.db.get_bind()
+        return bind is not None and bind.dialect.name == "postgresql"
+
+    @staticmethod
+    def _parse_embedding_value(value: Any) -> Optional[List[float]]:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return [float(item) for item in value]
+
+        text_value = str(value).strip()
+        if not text_value:
+            return []
+
+        if text_value[0] in "[{" and text_value[-1] in "]}":
+            text_value = text_value[1:-1].strip()
+
+        if not text_value:
+            return []
+
+        return [float(item.strip()) for item in text_value.split(",") if item.strip()]
+
+    def _build_chunk_record_from_row(self, row: Any) -> KBDocumentChunk:
+        chunk = KBDocumentChunk(
+            id=row.id,
+            document_id=row.document_id,
+            chunk_index=row.chunk_index,
+            content=row.content,
+            token_count=row.token_count,
+            created_at=row.created_at,
+        )
+        embedding_value = getattr(row, "embedding_text", getattr(row, "embedding", None))
+        chunk.embedding = self._parse_embedding_value(embedding_value)
+        return chunk
     
     def validate_file_type(self, file_type: str) -> bool:
         """
@@ -689,6 +726,10 @@ class DocumentService:
             config_service = ConfigService(self.db)
             vector_config = await config_service.get_vector_config()
             expected_dim = vector_config.embedding_dimension or 1536
+            KBVectorSchemaService.ensure_schema_matches_dimension(
+                db=self.db,
+                target_dimension=int(expected_dim),
+            )
             
             # 验证文档存在
             document = self.db.execute(
@@ -708,6 +749,7 @@ class DocumentService:
                     )
                 
                 chunk_record = KBDocumentChunk(
+                    id=uuid.uuid4(),
                     document_id=uuid.UUID(document_id),
                     chunk_index=chunk_data["chunk_index"],
                     content=chunk_data["content"],
@@ -722,9 +764,6 @@ class DocumentService:
             self.db.commit()
             
             # 刷新记录以获取生成的ID
-            for record in chunk_records:
-                self.db.refresh(record)
-            
             logger.info(
                 f"成功存储 {len(chunk_records)} 个文档块到数据库, "
                 f"文档ID: {document_id}"
@@ -741,6 +780,10 @@ class DocumentService:
                 exc_info=True
             )
             self.db.rollback()
+            if "expected" in str(e) and "dimensions" in str(e):
+                raise RuntimeError(
+                    "知识库向量维度与当前配置不一致，请同步向量配置后重试"
+                )
             raise RuntimeError(f"存储文档块失败: {str(e)}")
     
     async def retrieve_chunks_by_document(
@@ -769,11 +812,32 @@ class DocumentService:
                 raise ValueError(f"文档不存在: {document_id}")
             
             # 查询文档块，按chunk_index排序
-            chunks = self.db.execute(
-                select(KBDocumentChunk)
-                .where(KBDocumentChunk.document_id == uuid.UUID(document_id))
-                .order_by(KBDocumentChunk.chunk_index)
-            ).scalars().all()
+            if self._is_postgresql():
+                rows = self.db.execute(
+                    text(
+                        """
+                        SELECT
+                            id,
+                            document_id,
+                            chunk_index,
+                            content,
+                            token_count,
+                            embedding::text AS embedding_text,
+                            created_at
+                        FROM kb_document_chunks
+                        WHERE document_id = :document_id
+                        ORDER BY chunk_index
+                        """
+                    ),
+                    {"document_id": uuid.UUID(document_id)},
+                ).fetchall()
+                chunks = [self._build_chunk_record_from_row(row) for row in rows]
+            else:
+                chunks = self.db.execute(
+                    select(KBDocumentChunk)
+                    .where(KBDocumentChunk.document_id == uuid.UUID(document_id))
+                    .order_by(KBDocumentChunk.chunk_index)
+                ).scalars().all()
             
             logger.info(
                 f"检索到 {len(chunks)} 个文档块, 文档ID: {document_id}"
@@ -804,10 +868,30 @@ class DocumentService:
             Optional[KBDocumentChunk]: 文档块记录，如果不存在则返回None
         """
         try:
-            chunk = self.db.execute(
-                select(KBDocumentChunk)
-                .where(KBDocumentChunk.id == uuid.UUID(chunk_id))
-            ).scalar_one_or_none()
+            if self._is_postgresql():
+                row = self.db.execute(
+                    text(
+                        """
+                        SELECT
+                            id,
+                            document_id,
+                            chunk_index,
+                            content,
+                            token_count,
+                            embedding::text AS embedding_text,
+                            created_at
+                        FROM kb_document_chunks
+                        WHERE id = :chunk_id
+                        """
+                    ),
+                    {"chunk_id": uuid.UUID(chunk_id)},
+                ).fetchone()
+                chunk = self._build_chunk_record_from_row(row) if row else None
+            else:
+                chunk = self.db.execute(
+                    select(KBDocumentChunk)
+                    .where(KBDocumentChunk.id == uuid.UUID(chunk_id))
+                ).scalar_one_or_none()
             
             if chunk:
                 logger.info(f"检索到文档块: {chunk_id}")
@@ -826,7 +910,7 @@ class DocumentService:
     async def process_document(self, document_id: str) -> None:
         """
         异步处理文档：解析、分块、生成嵌入、存储向量
-        
+
         这是文档处理的主要编排方法，协调以下步骤：
         1. 更新状态为 "processing"
         2. 解析文档提取文本
@@ -846,25 +930,61 @@ class DocumentService:
         """
         document = None
         chunks_created = False
-        
+        document_uuid = uuid.UUID(document_id)
+
+        def delete_existing_chunks() -> int:
+            deleted_count = (
+                self.db.query(KBDocumentChunk)
+                .filter(KBDocumentChunk.document_id == document_uuid)
+                .delete(synchronize_session=False)
+            )
+            if deleted_count:
+                self.db.commit()
+                logger.info(
+                    "重处理前已清理 %s 个旧文档块: %s",
+                    deleted_count,
+                    document_id,
+                )
+            return deleted_count
+
+        def mark_failed(error_message: str) -> None:
+            if document is None:
+                return
+
+            try:
+                if chunks_created:
+                    delete_existing_chunks()
+
+                document.upload_status = "failed"
+                document.error_message = error_message
+                self.db.commit()
+                logger.info(f"文档状态已更新为 failed: {document_id}")
+            except Exception as rollback_error:
+                logger.error(
+                    f"回滚失败: {document_id}, 错误: {rollback_error}",
+                    exc_info=True
+                )
+                self.db.rollback()
+
         try:
             # 1. 获取文档记录
             logger.info(f"开始处理文档: {document_id}")
-            
+
             document = self.db.execute(
-                select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
+                select(KBDocument).where(KBDocument.id == document_uuid)
             ).scalar_one_or_none()
-            
+
             if not document:
                 raise ValueError(f"文档不存在: {document_id}")
-            
+
             # 2. 更新状态为 "processing"
             logger.info(f"更新文档状态为 processing: {document_id}")
             document.upload_status = "processing"
+            document.processed_at = None
             document.error_message = None
             self.db.commit()
             self.db.refresh(document)
-            
+
             # 3. 解析文档提取文本
             logger.info(f"解析文档: {document.filename} ({document.file_type})")
             text_content = await self.parse_document(
@@ -872,19 +992,22 @@ class DocumentService:
                 document.file_type
             )
             logger.info(f"文档解析完成，提取文本长度: {len(text_content)}")
-            
+
             # 4. 将文本分块
             logger.info(f"开始文本分块: {document_id}")
             chunks = await self.chunk_text(text_content)
             logger.info(f"文本分块完成，生成 {len(chunks)} 个块")
-            
+
             # 5. 生成嵌入向量
             logger.info(f"开始生成嵌入向量: {document_id}")
             chunk_texts = [chunk["content"] for chunk in chunks]
             embeddings = await self.generate_embeddings(chunk_texts)
             logger.info(f"嵌入向量生成完成，共 {len(embeddings)} 个向量")
-            
-            # 6. 存储块和向量到数据库
+
+            # 6. 重处理前先清理旧块，避免唯一键冲突
+            delete_existing_chunks()
+
+            # 7. 存储块和向量到数据库
             logger.info(f"开始存储文档块和向量: {document_id}")
             chunk_records = await self.store_chunks_with_embeddings(
                 str(document.id),
@@ -893,117 +1016,155 @@ class DocumentService:
             )
             chunks_created = True
             logger.info(f"文档块存储完成，共 {len(chunk_records)} 个块")
-            
-            # 7. 更新状态为 "completed"
+
+            # 8. 更新状态为 "completed"
             document.upload_status = "completed"
             document.processed_at = datetime.utcnow()
             document.error_message = None
             self.db.commit()
             self.db.refresh(document)
-            
+
             logger.info(
                 f"文档处理成功完成: {document_id}, "
                 f"文件名: {document.filename}, "
                 f"块数: {len(chunk_records)}"
             )
-            
+
         except ValueError as e:
-            # 验证错误（文档不存在、文本为空等）
             error_msg = str(e)
             logger.error(f"文档处理失败（验证错误）: {document_id}, 错误: {error_msg}")
-            
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-                    
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
-                    self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-                    
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-            
+            mark_failed(error_msg)
             raise
-            
+
         except RuntimeError as e:
-            # 运行时错误（API调用失败、数据库错误等）
             error_msg = str(e)
             logger.error(
                 f"文档处理失败（运行时错误）: {document_id}, 错误: {error_msg}",
                 exc_info=True
             )
-            
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-                    
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
-                    self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-                    
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-            
+            mark_failed(error_msg)
             raise
-            
+
         except Exception as e:
-            # 未预期的错误
             error_msg = f"未预期的错误: {str(e)}"
             logger.error(
                 f"文档处理失败（未预期错误）: {document_id}, 错误: {e}",
                 exc_info=True
             )
-            
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-                    
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
+            mark_failed(error_msg)
+            raise RuntimeError(error_msg)
+
+    async def process_document(self, document_id: str) -> None:
+        """Final document-processing implementation with safe reprocessing support."""
+        document = None
+        chunks_created = False
+
+        def mark_failed(error_message: str) -> None:
+            if document is None:
+                return
+
+            try:
+                if chunks_created:
+                    self.db.query(KBDocumentChunk).filter(
+                        KBDocumentChunk.document_id == uuid.UUID(document_id)
+                    ).delete(synchronize_session=False)
                     self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-                    
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-            
+
+                document.upload_status = "failed"
+                document.error_message = error_message
+                self.db.commit()
+            except Exception as rollback_error:
+                logger.error(
+                    f"鍥炴粴澶辫触: {document_id}, 閿欒: {rollback_error}",
+                    exc_info=True,
+                )
+                self.db.rollback()
+
+        try:
+            logger.info(f"寮€濮嬪鐞嗘枃妗? {document_id}")
+
+            document = self.db.execute(
+                select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
+            ).scalar_one_or_none()
+
+            if not document:
+                raise ValueError(f"鏂囨。涓嶅瓨鍦? {document_id}")
+
+            document.upload_status = "processing"
+            document.error_message = None
+            self.db.commit()
+            self.db.refresh(document)
+
+            logger.info(f"瑙ｆ瀽鏂囨。: {document.filename} ({document.file_type})")
+            text_content = await self.parse_document(
+                document.file_path,
+                document.file_type,
+            )
+
+            logger.info(f"寮€濮嬫枃鏈垎鍧? {document_id}")
+            chunks = await self.chunk_text(text_content)
+
+            logger.info(f"寮€濮嬬敓鎴愬祵鍏ュ悜閲? {document_id}")
+            chunk_texts = [chunk["content"] for chunk in chunks]
+            embeddings = await self.generate_embeddings(chunk_texts)
+
+            existing_chunk_count = (
+                self.db.query(KBDocumentChunk)
+                .filter(KBDocumentChunk.document_id == uuid.UUID(document_id))
+                .delete(synchronize_session=False)
+            )
+            if existing_chunk_count:
+                self.db.commit()
+                logger.info(
+                    "Deleted %s existing chunks before reprocessing document %s",
+                    existing_chunk_count,
+                    document_id,
+                )
+
+            logger.info(f"寮€濮嬪瓨鍌ㄦ枃妗ｅ潡鍜屽悜閲? {document_id}")
+            chunk_records = await self.store_chunks_with_embeddings(
+                str(document.id),
+                chunks,
+                embeddings,
+            )
+            chunks_created = True
+
+            document.upload_status = "completed"
+            document.processed_at = datetime.utcnow()
+            document.error_message = None
+            self.db.commit()
+            self.db.refresh(document)
+
+            logger.info(
+                f"鏂囨。澶勭悊鎴愬姛瀹屾垚: {document_id}, "
+                f"鏂囦欢鍚? {document.filename}, "
+                f"鍧楁暟: {len(chunk_records)}"
+            )
+
+        except ValueError as e:
+            error_msg = str(e)
+            logger.error(
+                f"鏂囨。澶勭悊澶辫触锛堥獙璇侀敊璇級: {document_id}, 閿欒: {error_msg}"
+            )
+            mark_failed(error_msg)
+            raise
+
+        except RuntimeError as e:
+            error_msg = str(e)
+            logger.error(
+                f"鏂囨。澶勭悊澶辫触锛堣繍琛屾椂閿欒锛? {document_id}, 閿欒: {error_msg}",
+                exc_info=True,
+            )
+            mark_failed(error_msg)
+            raise
+
+        except Exception as e:
+            error_msg = f"鏈鏈熺殑閿欒: {str(e)}"
+            logger.error(
+                f"鏂囨。澶勭悊澶辫触锛堟湭棰勬湡閿欒锛? {document_id}, 閿欒: {e}",
+                exc_info=True,
+            )
+            mark_failed(error_msg)
             raise RuntimeError(error_msg)
     
     async def search_similar_chunks(
@@ -1045,6 +1206,10 @@ class DocumentService:
             config_service = ConfigService(self.db)
             vector_config = await config_service.get_vector_config()
             expected_dim = vector_config.embedding_dimension or 1536
+            KBVectorSchemaService.ensure_schema_matches_dimension(
+                db=self.db,
+                target_dimension=int(expected_dim),
+            )
             
             if len(query_embedding) != expected_dim:
                 raise ValueError(
@@ -1142,7 +1307,7 @@ class DocumentService:
         2. 解析文档提取文本
         3. 将文本分块
         4. 生成嵌入向量
-        5. 存储块和向量到数据库
+        5. 清理旧块并写入新块
         6. 更新状态为 "completed"
 
         如果任何步骤失败，将回滚部分数据并更新状态为 "failed"
@@ -1156,13 +1321,48 @@ class DocumentService:
         """
         document = None
         chunks_created = False
+        document_uuid = uuid.UUID(document_id)
+
+        def delete_existing_chunks() -> int:
+            deleted_count = (
+                self.db.query(KBDocumentChunk)
+                .filter(KBDocumentChunk.document_id == document_uuid)
+                .delete(synchronize_session=False)
+            )
+            if deleted_count:
+                self.db.commit()
+                logger.info(
+                    "重处理前已清理 %s 个旧文档块: %s",
+                    deleted_count,
+                    document_id,
+                )
+            return deleted_count
+
+        def mark_failed(error_message: str) -> None:
+            if document is None:
+                return
+
+            try:
+                if chunks_created:
+                    delete_existing_chunks()
+
+                document.upload_status = "failed"
+                document.error_message = error_message
+                self.db.commit()
+                logger.info(f"文档状态已更新为 failed: {document_id}")
+            except Exception as rollback_error:
+                logger.error(
+                    f"回滚失败: {document_id}, 错误: {rollback_error}",
+                    exc_info=True
+                )
+                self.db.rollback()
 
         try:
             # 1. 获取文档记录
             logger.info(f"开始处理文档: {document_id}")
 
             document = self.db.execute(
-                select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
+                select(KBDocument).where(KBDocument.id == document_uuid)
             ).scalar_one_or_none()
 
             if not document:
@@ -1171,6 +1371,7 @@ class DocumentService:
             # 2. 更新状态为 "processing"
             logger.info(f"更新文档状态为 processing: {document_id}")
             document.upload_status = "processing"
+            document.processed_at = None
             document.error_message = None
             self.db.commit()
             self.db.refresh(document)
@@ -1194,7 +1395,10 @@ class DocumentService:
             embeddings = await self.generate_embeddings(chunk_texts)
             logger.info(f"嵌入向量生成完成，共 {len(embeddings)} 个向量")
 
-            # 6. 存储块和向量到数据库
+            # 6. 重处理前清理旧块，避免 document_id + chunk_index 唯一键冲突
+            delete_existing_chunks()
+
+            # 7. 存储块和向量到数据库
             logger.info(f"开始存储文档块和向量: {document_id}")
             chunk_records = await self.store_chunks_with_embeddings(
                 str(document.id),
@@ -1204,7 +1408,7 @@ class DocumentService:
             chunks_created = True
             logger.info(f"文档块存储完成，共 {len(chunk_records)} 个块")
 
-            # 7. 更新状态为 "completed"
+            # 8. 更新状态为 "completed"
             document.upload_status = "completed"
             document.processed_at = datetime.utcnow()
             document.error_message = None
@@ -1218,113 +1422,26 @@ class DocumentService:
             )
 
         except ValueError as e:
-            # 验证错误（文档不存在、文本为空等）
             error_msg = str(e)
             logger.error(f"文档处理失败（验证错误）: {document_id}, 错误: {error_msg}")
-
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.execute(
-                            select(KBDocumentChunk)
-                            .where(KBDocumentChunk.document_id == uuid.UUID(document_id))
-                        )
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
-                    self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-
+            mark_failed(error_msg)
             raise
 
         except RuntimeError as e:
-            # 运行时错误（API调用失败、数据库错误等）
             error_msg = str(e)
             logger.error(
                 f"文档处理失败（运行时错误）: {document_id}, 错误: {error_msg}",
                 exc_info=True
             )
-
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.execute(
-                            select(KBDocumentChunk)
-                            .where(KBDocumentChunk.document_id == uuid.UUID(document_id))
-                        )
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
-                    self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-
+            mark_failed(error_msg)
             raise
 
         except Exception as e:
-            # 未预期的错误
             error_msg = f"未预期的错误: {str(e)}"
             logger.error(
                 f"文档处理失败（未预期错误）: {document_id}, 错误: {e}",
                 exc_info=True
             )
-
-            if document:
-                try:
-                    # 回滚：删除已创建的块
-                    if chunks_created:
-                        logger.info(f"回滚：删除部分创建的文档块: {document_id}")
-                        self.db.execute(
-                            select(KBDocumentChunk)
-                            .where(KBDocumentChunk.document_id == uuid.UUID(document_id))
-                        )
-                        self.db.query(KBDocumentChunk).filter(
-                            KBDocumentChunk.document_id == uuid.UUID(document_id)
-                        ).delete()
-                        self.db.commit()
-                        logger.info(f"回滚完成：已删除部分文档块")
-
-                    # 更新状态为 "failed"
-                    document.upload_status = "failed"
-                    document.error_message = error_msg
-                    self.db.commit()
-                    logger.info(f"文档状态已更新为 failed: {document_id}")
-
-                except Exception as rollback_error:
-                    logger.error(
-                        f"回滚失败: {document_id}, 错误: {rollback_error}",
-                        exc_info=True
-                    )
-                    self.db.rollback()
-
+            mark_failed(error_msg)
             raise RuntimeError(error_msg)
 

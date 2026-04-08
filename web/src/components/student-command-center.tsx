@@ -250,11 +250,11 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               <Button 
                 variant="outline" 
                 size="sm" 
-                onClick={() => setShowProfile(!showProfile)}
+                onClick={() => setShowProfile((prev) => !prev)}
                 className="flex items-center gap-2"
               >
                 <Settings className="w-4 h-4" />
-                个人中心
+                {showProfile ? '控制中心' : '个人中心'}
               </Button>
               <Button variant="ghost" size="sm" onClick={onLogout}>
                 退出登录

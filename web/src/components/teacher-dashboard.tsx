@@ -87,13 +87,22 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         setLoading(true);
         setError(null);
 
-        const [classesData, debatesData] = await Promise.all([
-          TeacherService.getClasses(),
-          TeacherService.getDebates()
-        ]);
-
+        const classesData = await TeacherService.getClasses();
         setClasses(classesData);
-        setDebates(debatesData);
+
+        try {
+          const debatesData = await TeacherService.getDebates();
+          setDebates(debatesData);
+        } catch (debatesError: any) {
+          console.error('Failed to load debates:', debatesError);
+          setDebates([]);
+          toast({
+            variant: 'destructive',
+            title: '辩论记录加载失败',
+            description: debatesError?.message || '历史辩论暂时不可用，但班级数据仍可继续使用',
+            duration: 3000,
+          });
+        }
 
         // 如果有班级，默认选择第一个
         if (classesData.length > 0) {
@@ -113,7 +122,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
     };
 
     loadData();
-  }, []);
+  }, [toast]);
 
   // 当选择的班级改变时，加载该班级的学生
   useEffect(() => {

@@ -69,7 +69,7 @@ echo ""
 echo "正在安装Python依赖..."
 
 # 安装Python包
-pip install weasyprint>=62.0 markdown>=3.5.0 pygments>=2.17.0
+pip install weasyprint>=68.1 markdown>=3.5.0 pygments>=2.17.0
 
 if [ $? -eq 0 ]; then
     echo "✓ Python依赖安装完成"

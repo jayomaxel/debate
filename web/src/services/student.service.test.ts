@@ -1696,4 +1696,49 @@ describe('Student Service - Unit Tests', () => {
       expect(report.final_score).toBe(92);
     });
   });
+
+  describe('knowledge base timestamps', () => {
+    it('should normalize KB conversation timestamps without timezone suffix', async () => {
+      vi.mocked(api.get).mockResolvedValue({
+        conversations: [
+          {
+            id: 'conv-001',
+            question: '问题',
+            answer: '回答',
+            sources: [],
+            created_at: '2026-04-07T01:00:00',
+          },
+        ],
+        count: 1,
+      });
+
+      const result = await StudentService.getKBConversationHistory('session-001');
+
+      expect(api.get).toHaveBeenCalledWith('/api/student/kb/conversations/session-001', {
+        params: { limit: 20 },
+      });
+      expect(result[0].created_at).toBe('2026-04-07T01:00:00Z');
+    });
+
+    it('should normalize KB session timestamps without changing timezone-aware values', async () => {
+      vi.mocked(api.get).mockResolvedValue([
+        {
+          session_id: 'session-001',
+          title: '新会话',
+          updated_at: '2026-04-07T01:13:18',
+        },
+        {
+          session_id: 'session-002',
+          title: '旧会话',
+          updated_at: '2026-04-07T01:13:18+08:00',
+        },
+      ]);
+
+      const result = await StudentService.getKBSessions();
+
+      expect(api.get).toHaveBeenCalledWith('/api/student/kb/sessions');
+      expect(result[0].updated_at).toBe('2026-04-07T01:13:18Z');
+      expect(result[1].updated_at).toBe('2026-04-07T01:13:18+08:00');
+    });
+  });
 });

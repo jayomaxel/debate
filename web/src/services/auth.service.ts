@@ -14,7 +14,6 @@ export interface TeacherRegisterParams {
   phone: string;
   password: string;
   name: string;
-  class_id?: string; // 班级ID（可选）
 }
 
 export interface StudentRegisterParams {

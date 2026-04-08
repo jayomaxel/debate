@@ -4,6 +4,7 @@
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 from models.user import User
+from utils.user_email import build_placeholder_email, to_public_email
 import uuid
 
 
@@ -37,7 +38,7 @@ class ProfileService:
             "id": str(user.id),
             "account": user.account,
             "name": user.name,
-            "email": user.email,
+            "email": to_public_email(user.email),
             "phone": user.phone,
             "student_id": user.student_id,
             "class_id": str(user.class_id) if user.class_id else None,
@@ -74,35 +75,53 @@ class ProfileService:
             ValueError: 如果用户不存在或邮箱已被使用或班级不存在
         """
         user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+        normalized_email = email.strip() if email is not None else None
+        normalized_class_id = class_id.strip() if class_id is not None else None
+        current_public_email = to_public_email(user.email) if user else ""
         
         if not user:
             raise ValueError("用户不存在")
         
         # 检查邮箱是否已被其他用户使用
-        if email and email != user.email:
+        if normalized_email and normalized_email != current_public_email:
             existing = db.query(User).filter(
-                User.email == email,
+                User.email == normalized_email,
                 User.id != uuid.UUID(user_id)
             ).first()
             if existing:
                 raise ValueError("邮箱已被使用")
         
-        # 如果更新班级ID，验证班级是否存在
-        if class_id is not None and class_id != '':
-            from models.class_model import Class
-            cls = db.query(Class).filter(Class.id == uuid.UUID(class_id)).first()
-            if not cls:
-                raise ValueError("班级不存在")
-            user.class_id = uuid.UUID(class_id)
-        elif class_id == '':
-            # 空字符串表示退出班级
-            user.class_id = None
+        # 学生班级仅允许首次设置，已选后不可自行修改或清空
+        if class_id is not None:
+            if user.user_type != 'student':
+                raise ValueError("仅学生可以设置班级")
+
+            current_class_id = str(user.class_id) if user.class_id else None
+            if current_class_id:
+                if not normalized_class_id or normalized_class_id != current_class_id:
+                    raise ValueError("学生选择班级后不可修改，请联系管理员处理")
+            elif normalized_class_id:
+                from models.class_model import Class
+
+                cls = db.query(Class).filter(
+                    Class.id == uuid.UUID(normalized_class_id)
+                ).first()
+                if not cls:
+                    raise ValueError("班级不存在")
+                user.class_id = uuid.UUID(normalized_class_id)
+            else:
+                user.class_id = None
         
         # 更新字段
         if name is not None:
             user.name = name
         if email is not None:
-            user.email = email
+            if normalized_email:
+                user.email = normalized_email
+            elif user.user_type == 'student':
+                user.email = build_placeholder_email(user.account)
+            else:
+                raise ValueError("邮箱不能为空")
         if phone is not None:
             user.phone = phone
         if student_id is not None:
@@ -115,7 +134,7 @@ class ProfileService:
             "id": str(user.id),
             "account": user.account,
             "name": user.name,
-            "email": user.email,
+            "email": to_public_email(user.email),
             "phone": user.phone,
             "student_id": user.student_id,
             "class_id": str(user.class_id) if user.class_id else None,

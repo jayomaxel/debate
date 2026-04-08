@@ -342,6 +342,32 @@ class StudentService {
   private static availableDebatesInFlight: Promise<Debate[]> | null = null;
   private static readonly availableDebatesCacheTtlMs = 1000;
 
+  private static normalizeApiTimestamp(value?: string): string {
+    if (!value || typeof value !== 'string') {
+      return value || '';
+    }
+
+    if (/[zZ]$|[+-]\d{2}:\d{2}$/.test(value)) {
+      return value;
+    }
+
+    return `${value}Z`;
+  }
+
+  private static normalizeConversation(conversation: Conversation): Conversation {
+    return {
+      ...conversation,
+      created_at: this.normalizeApiTimestamp(conversation.created_at),
+    };
+  }
+
+  private static normalizeSession(session: KBSession): KBSession {
+    return {
+      ...session,
+      updated_at: this.normalizeApiTimestamp(session.updated_at),
+    };
+  }
+
   // ==================== 个人信息 ====================
 
   /**
@@ -666,7 +692,9 @@ class StudentService {
       // The API returns { code, message, data: { conversations: [], count: 0 } }
       // The api.get interceptor unwraps 'data', so we get { conversations: [], count: 0 }
       // We need to return the conversations array
-      return response.conversations || [];
+      return (response.conversations || []).map((conversation) => (
+        this.normalizeConversation(conversation)
+      ));
     } catch (error) {
       console.error('[StudentService] Get KB conversation history failed:', error);
       throw error;
@@ -678,7 +706,8 @@ class StudentService {
    */
   static async getKBSessions(): Promise<KBSession[]> {
     try {
-      return await api.get<KBSession[]>('/api/student/kb/sessions');
+      const sessions = await api.get<KBSession[]>('/api/student/kb/sessions');
+      return sessions.map((session) => this.normalizeSession(session));
     } catch (error) {
       console.error('[StudentService] Get KB sessions failed:', error);
       throw error;

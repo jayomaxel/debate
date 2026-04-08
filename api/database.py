@@ -94,6 +94,7 @@ def init_db():
         init_engine()
     Base.metadata.create_all(bind=engine)
     _ensure_ability_assessment_columns()
+    _ensure_debate_report_columns()
     _ensure_debate_participation_columns()
 
 
@@ -177,3 +178,24 @@ def _ensure_debate_participation_columns():
             if column_name in existing_columns:
                 continue
             conn.execute(text(f"ALTER TABLE debate_participations ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_debate_report_columns():
+    if engine is None:
+        return
+
+    inspector = inspect(engine)
+    if "debates" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("debates")}
+    required_columns = [
+        ("report", "JSON"),
+        ("report_pdf", "TEXT"),
+    ]
+
+    with engine.begin() as conn:
+        for column_name, column_type in required_columns:
+            if column_name in existing_columns:
+                continue
+            conn.execute(text(f"ALTER TABLE debates ADD COLUMN {column_name} {column_type}"))

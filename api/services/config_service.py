@@ -6,6 +6,7 @@ from copy import deepcopy
 import os
 from threading import RLock
 from typing import Optional, Type, TypeVar
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -157,6 +158,40 @@ class ConfigService:
         normalized_parameters["speed"] = speed
         return normalized_parameters
 
+    @staticmethod
+    def _get_public_base_url() -> str:
+        return os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+    @staticmethod
+    def _is_cpolar_host(hostname: str) -> bool:
+        host = (hostname or "").lower()
+        return host.endswith(".cpolar.cn") or host.endswith(".cpolar.top")
+
+    @classmethod
+    def _resolve_public_file_url_prefix(
+        cls,
+        current_prefix: Optional[str],
+        public_base_url: str,
+    ) -> Optional[str]:
+        public_base_url = (public_base_url or "").strip().rstrip("/")
+        if not public_base_url:
+            return None
+
+        desired_prefix = f"{public_base_url}/uploads/asr"
+        normalized_current = (current_prefix or "").strip().rstrip("/")
+        if not normalized_current:
+            return desired_prefix
+        if normalized_current == desired_prefix:
+            return desired_prefix
+
+        current_host = urlparse(normalized_current).hostname or ""
+        if current_host in {"localhost", "127.0.0.1"}:
+            return desired_prefix
+        if cls._is_cpolar_host(current_host):
+            return desired_prefix
+
+        return normalized_current
+
     async def get_model_config(self) -> ModelConfigModel:
         """
         获取当前 AI 模型配置。
@@ -283,14 +318,16 @@ class ConfigService:
                     or (config.model_name or "").startswith("qwen")
                     or ("dashscope" in (config.api_endpoint or ""))
                 )
-                public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-                if (
-                    should_need_file_url
-                    and not (params.get("file_url_prefix") or "").strip()
-                    and public_base_url
-                ):
-                    params["file_url_prefix"] = f"{public_base_url}/uploads/asr"
-                    updated = True
+                public_base_url = self._get_public_base_url()
+                if should_need_file_url:
+                    current_prefix = (params.get("file_url_prefix") or "").strip()
+                    resolved_prefix = self._resolve_public_file_url_prefix(
+                        current_prefix,
+                        public_base_url,
+                    )
+                    if resolved_prefix and resolved_prefix != current_prefix.rstrip("/"):
+                        params["file_url_prefix"] = resolved_prefix
+                        updated = True
 
                 if updated:
                     # 读取时顺手补齐旧字段，避免后续链路再做兜底判断。
@@ -303,7 +340,7 @@ class ConfigService:
                 return config
 
             logger.info("数据库中无ASR配置，使用环境变量创建默认配置")
-            public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+            public_base_url = self._get_public_base_url()
             default_config = AsrConfigModel(
                 model_name=settings.ASR_MODEL_NAME,
                 api_endpoint=settings.ASR_API_ENDPOINT,
@@ -321,10 +358,12 @@ class ConfigService:
                     "enable_words": True,
                 },
             )
-            if public_base_url:
-                default_config.parameters["file_url_prefix"] = (
-                    f"{public_base_url}/uploads/asr"
-                )
+            resolved_prefix = self._resolve_public_file_url_prefix(
+                default_config.parameters.get("file_url_prefix"),
+                public_base_url,
+            )
+            if resolved_prefix:
+                default_config.parameters["file_url_prefix"] = resolved_prefix
             self.db.add(default_config)
             self.db.commit()
             self.db.refresh(default_config)
@@ -349,7 +388,7 @@ class ConfigService:
             config = self.db.execute(
                 select(AsrConfigModel).limit(1)
             ).scalar_one_or_none()
-            public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+            public_base_url = self._get_public_base_url()
             if not config:
                 normalized_parameters = (
                     dict(parameters) if isinstance(parameters, dict) else None
@@ -378,10 +417,12 @@ class ConfigService:
                         "enable_words": True,
                     },
                 )
-                if public_base_url and "file_url_prefix" not in config.parameters:
-                    config.parameters["file_url_prefix"] = (
-                        f"{public_base_url}/uploads/asr"
-                    )
+                resolved_prefix = self._resolve_public_file_url_prefix(
+                    config.parameters.get("file_url_prefix"),
+                    public_base_url,
+                )
+                if resolved_prefix:
+                    config.parameters["file_url_prefix"] = resolved_prefix
                 self.db.add(config)
             else:
                 if model_name is not None:
@@ -415,14 +456,13 @@ class ConfigService:
                         or next_model_name.startswith("qwen")
                         or ("dashscope" in next_api_endpoint)
                     )
-                    if (
-                        should_need_file_url
-                        and not (normalized_parameters.get("file_url_prefix") or "").strip()
-                        and public_base_url
-                    ):
-                        normalized_parameters["file_url_prefix"] = (
-                            f"{public_base_url}/uploads/asr"
+                    if should_need_file_url:
+                        resolved_prefix = self._resolve_public_file_url_prefix(
+                            normalized_parameters.get("file_url_prefix"),
+                            public_base_url,
                         )
+                        if resolved_prefix:
+                            normalized_parameters["file_url_prefix"] = resolved_prefix
 
                     config.parameters = normalized_parameters
 
@@ -691,6 +731,8 @@ class ConfigService:
         更新向量模型配置。
         """
         try:
+            from services.kb_vector_schema_service import KBVectorSchemaService
+
             config = self.db.execute(
                 select(VectorConfigModel).limit(1)
             ).scalar_one_or_none()
@@ -719,6 +761,11 @@ class ConfigService:
                     config.parameters = parameters
                 logger.info(f"更新向量配置: {config.model_name}")
 
+            self.db.flush()
+            KBVectorSchemaService.ensure_schema_matches_dimension(
+                db=self.db,
+                target_dimension=int(config.embedding_dimension or 1536),
+            )
             self.db.commit()
             self.db.refresh(config)
             self._set_cached_config(config)

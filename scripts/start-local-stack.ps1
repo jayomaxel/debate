@@ -1,5 +1,5 @@
 param(
-    [string]$PublicBaseUrl = "https://62c52b1f.r22.cpolar.top",
+    [string]$PublicBaseUrl = "",
     [int]$ApiPort = 7860,
     [int]$WebPort = 8860
 )
@@ -15,9 +15,14 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $apiScript = Join-Path $scriptDir "start-local-api.ps1"
 $webScript = Join-Path $scriptDir "start-local-web.ps1"
 
+$apiArgumentList = @("-NoProfile", "-File", $apiScript, "-Port", $ApiPort)
+if ($PublicBaseUrl) {
+    $apiArgumentList += @("-PublicBaseUrl", $PublicBaseUrl)
+}
+
 $apiProcess = Start-Process `
     -FilePath "powershell.exe" `
-    -ArgumentList "-NoProfile", "-File", $apiScript, "-PublicBaseUrl", $PublicBaseUrl, "-Port", $ApiPort `
+    -ArgumentList $apiArgumentList `
     -WorkingDirectory $repoRoot `
     -RedirectStandardOutput (Join-Path $logDir "api.stdout.log") `
     -RedirectStandardError (Join-Path $logDir "api.stderr.log") `

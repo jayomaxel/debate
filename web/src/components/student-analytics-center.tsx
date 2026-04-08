@@ -52,9 +52,15 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({ onBack,
   const [comparison, setComparison] = useState<ClassComparison | null>(null);
   const [comparisonMetric, setComparisonMetric] = useState<string>('overall');
   const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonNotice, setComparisonNotice] = useState('');
   const [checkingAchievements, setCheckingAchievements] = useState(false);
   const [recentlyUnlockedAchievementIds, setRecentlyUnlockedAchievementIds] = useState<string[]>([]);
   const achievementsAutoCheckedRef = useRef(false);
+
+  const isMissingClassError = (error: any) => {
+    const message = String(error?.message || error?.detail || '');
+    return message.includes('未加入班级');
+  };
 
   // 加载数据
   useEffect(() => {
@@ -114,10 +120,15 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({ onBack,
   const loadComparison = async (metric: string) => {
     try {
       setComparisonLoading(true);
+      setComparisonNotice('');
       const data = await StudentService.getClassComparison({ metric, top: 10 });
       setComparison(data);
     } catch (err: any) {
       setComparison(null);
+      if (isMissingClassError(err)) {
+        setComparisonNotice('您还未加入班级');
+        return;
+      }
       toast({
         variant: "destructive",
         title: "加载失败",
@@ -342,6 +353,16 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({ onBack,
           <CardContent className="p-12 text-center">
             <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-4" />
             <p className="text-slate-600">加载对比数据中...</p>
+          </CardContent>
+        </Card>
+      ) : comparisonNotice ? (
+        <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
+          <CardContent className="p-12 text-center">
+            <Users className="w-16 h-16 text-amber-400 mx-auto mb-4" />
+            <h4 className="text-xl font-semibold text-slate-900 mb-2">{comparisonNotice}</h4>
+            <p className="text-slate-600">
+              加入班级后，这里会展示你与班级同学的对比分析与排行榜
+            </p>
           </CardContent>
         </Card>
       ) : !comparison || comparison.sample_size === 0 ? (

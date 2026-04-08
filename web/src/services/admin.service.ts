@@ -152,11 +152,21 @@ export interface User {
   account: string;
   name: string;
   email: string;
+  phone?: string;
   user_type: string;
   student_id?: string;
   class_id?: string;
   class_name?: string; // 班级名称
   created_at: string;
+}
+
+export interface UserUpdate {
+  account?: string;
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  student_id?: string | null;
+  class_id?: string | null;
 }
 
 export interface PasswordChangeParams {
@@ -453,6 +463,15 @@ class AdminService {
       return response;
     } catch (error) {
       console.error('[AdminService] Get user by ID failed:', error);
+      throw error;
+    }
+  }
+
+  static async updateUser(userId: string, userData: UserUpdate): Promise<User> {
+    try {
+      return await api.put<User>(`/api/admin/users/${userId}`, userData);
+    } catch (error) {
+      console.error('[AdminService] Update user failed:', error);
       throw error;
     }
   }

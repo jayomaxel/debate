@@ -12,6 +12,7 @@ from sqlalchemy import select, text, func, distinct
 import json
 import asyncio
 import logging
+import re
 from openai import OpenAI
 
 from models.kb_document import KBDocument, KBDocumentChunk
@@ -48,6 +49,22 @@ class RAGService:
         self.openai_client = None
         self.embedding_model = None
         self._embedding_column_is_vector: Optional[bool] = None
+
+    @staticmethod
+    def _sanitize_answer_chunk(chunk: str) -> str:
+        if not chunk:
+            return ""
+        return chunk.replace("*", "").replace("`", "")
+
+    @classmethod
+    def _sanitize_answer_text(cls, answer: str) -> str:
+        cleaned = cls._sanitize_answer_chunk(answer)
+        cleaned = re.sub(r"^[ \t]*#{1,6}[ \t]*", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"^[ \t]*>\s?", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"^[ \t]*[-+]\s+", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"^[ \t]*\d+\.\s+", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
 
     def _detect_embedding_column_is_vector(self) -> bool:
         try:
@@ -481,7 +498,9 @@ class RAGService:
                 )
                 
                 # 提取答案
-                answer = response.choices[0].message.content.strip()
+                answer = self._sanitize_answer_text(
+                    response.choices[0].message.content.strip()
+                )
                 
                 if not answer:
                     raise RuntimeError("LLM返回了空答案")
@@ -1077,6 +1096,8 @@ class RAGService:
 请回答学生的问题。注意：当前知识库中没有找到相关内容，请基于你的一般知识回答。"""
 
             # 步骤5: 流式调用LLM
+            system_prompt += "\n7. 只能输出纯文本，不要使用 Markdown 格式。\n8. 不要输出星号、反引号、井号或项目符号。"
+            user_prompt += "\n\n请直接用纯文本回答，不要使用 Markdown，不要输出星号或项目符号。"
             llm_base_url = model_config.api_endpoint
             if llm_base_url.endswith('/chat/completions'):
                 llm_base_url = llm_base_url[:-len('/chat/completions')]
@@ -1099,7 +1120,9 @@ class RAGService:
             
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
+                    content = self._sanitize_answer_chunk(
+                        chunk.choices[0].delta.content
+                    )
                     full_answer += content
                     yield json.dumps({"type": "answer", "content": content}, ensure_ascii=False)
                     if (
@@ -1118,7 +1141,7 @@ class RAGService:
             # 步骤6: 完成后更新最终答案
             self._update_stream_conversation_record(
                 conversation_id=conversation_id,
-                answer=full_answer,
+                answer=self._sanitize_answer_text(full_answer),
                 sources=sources,
                 status="completed"
             )
@@ -1126,6 +1149,8 @@ class RAGService:
             yield json.dumps({"type": "done", "id": done_id}, ensure_ascii=False)
 
         except asyncio.CancelledError:
+            system_prompt += "\n7. 只能输出纯文本，不要使用 Markdown 格式。\n8. 不要输出星号、反引号、井号或项目符号。"
+            user_prompt += "\n\n请直接用纯文本回答，不要使用 Markdown，不要输出星号或项目符号。"
             logger.info(
                 f"流式回答被中断: user_id={user_id}, session_id={session_id}"
             )

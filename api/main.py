@@ -13,6 +13,8 @@ from config import settings
 from database import init_db, init_engine, init_redis
 from logging_config import get_logger, setup_logging
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
+from services.kb_seed_service import KBSeedService
+from services.kb_vector_schema_service import KBVectorSchemaService
 from utils.http_client_pool import async_http_client_pool
 
 
@@ -99,6 +101,30 @@ async def startup_event():
 
             db.commit()
             logger.info("Default configuration ready.")
+
+            try:
+                schema_changed = await KBVectorSchemaService.ensure_schema_matches_vector_config(
+                    db
+                )
+                if schema_changed:
+                    logger.info("Knowledge base vector schema aligned with vector config.")
+            except Exception:
+                db.rollback()
+                logger.exception("Failed to align knowledge base vector schema.")
+
+            try:
+                repo_root = Path(__file__).resolve().parent.parent
+                imported_seed_documents = await KBSeedService.import_repo_root_docx_files(
+                    db=db,
+                    repo_root=repo_root,
+                )
+                if imported_seed_documents:
+                    logger.info(
+                        "Imported %s repo-root knowledge documents into the KB.",
+                        len(imported_seed_documents),
+                    )
+            except Exception:
+                logger.exception("Failed to import repo-root knowledge documents.")
         except Exception:
             db.rollback()
             logger.exception("Failed to initialize default configuration.")
@@ -131,6 +157,7 @@ async def root():
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "healthy"}
 

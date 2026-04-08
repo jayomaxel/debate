@@ -49,7 +49,7 @@ services:
       REDIS_DB: "0"
       REDIS_PASSWORD: ""
       SECRET_KEY: local-delivery-secret-key
-      PUBLIC_BASE_URL: https://62c52b1f.r22.cpolar.top
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     command: >
       sh -c "alembic upgrade head &&
       uvicorn main:app --host 0.0.0.0 --port 7860"

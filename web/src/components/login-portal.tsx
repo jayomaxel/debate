@@ -75,9 +75,13 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
   // 加载班级列表
   useEffect(() => {
-    if (!isLogin && (activeRole === 'student' || activeRole === 'teacher')) {
+    if (!isLogin && activeRole === 'student') {
       loadClasses();
+      return;
     }
+
+    setClasses([]);
+    setLoadingClasses(false);
   }, [isLogin, activeRole]);
 
   const loadClasses = async () => {
@@ -189,7 +193,6 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
             phone: '', // 暂时使用教工号作为phone，后续可以添加单独的phone字段
             password: formData.password,
             name: formData.name,
-            class_id: formData.classId || undefined,
           });
 
           // 注册成功，显示提示并切换到登录模式
@@ -576,47 +579,8 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           </div>
 
                           {/* 班级选择 - 仅注册时显示 */}
-                          <div className="space-y-2">
-                            <Label htmlFor="teacher-class-select" className="text-slate-700 font-medium flex items-center gap-2">
-                              <Users className="w-4 h-4" />
-                              选择班级
-
-                              <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
-                                必填
-                              </Badge>
-                            </Label>
-                            {loadingClasses ? (
-                              <div className="flex items-center justify-center py-3 text-slate-500">
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                加载班级列表...
-                              </div>
-                            ) : classes.length > 0 ? (
-                              <Select
-                                value={formData.classId}
-                                onValueChange={(value) => handleInputChange('classId', value)}
-                                disabled={loading}
-                              >
-                                <SelectTrigger className="border-slate-300 focus:border-blue-500 focus:ring-blue-500">
-                                  <SelectValue placeholder="请选择班级" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {classes.map((cls) => (
-                                    <SelectItem key={cls.id} value={cls.id}>
-                                      <div className="flex flex-col">
-                                        <span className="font-medium">{cls.name}</span>
-                                        <span className="text-xs text-slate-500">
-                                          教师：{cls.teacher_name} | 学生数：{cls.student_count}
-                                        </span>
-                                      </div>
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <div className="text-sm text-slate-500 py-2">
-                                暂无可选班级
-                              </div>
-                            )}
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                            教师账号注册后由管理员创建并管理班级，无需在注册时选择班级。
                           </div>
                         </>
                       )}

@@ -9,6 +9,7 @@ from typing import Optional, List
 import uuid
 
 from database import get_db
+from models.class_model import Class
 from models.user import User
 from services.class_service import ClassService
 from services.config_service import ConfigService
@@ -835,6 +836,7 @@ class UserListResponse(BaseModel):
     account: str
     name: str
     email: str
+    phone: Optional[str] = None
     user_type: str
     student_id: Optional[str] = None
     class_id: Optional[str] = None
@@ -843,6 +845,31 @@ class UserListResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class UserUpdateRequest(BaseModel):
+    """更新用户请求"""
+    account: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    student_id: Optional[str] = None
+    class_id: Optional[str] = None
+
+
+def _build_user_response(user: User) -> UserListResponse:
+    return UserListResponse(
+        id=str(user.id),
+        account=user.account,
+        name=user.name,
+        email=user.email,
+        phone=user.phone,
+        user_type=user.user_type,
+        student_id=user.student_id,
+        class_id=str(user.class_id) if user.class_id else None,
+        class_name=user.class_.name if user.class_ else None,
+        created_at=user.created_at.isoformat()
+    )
 
 
 @router.get(
@@ -887,20 +914,7 @@ async def get_users(
         users = query.order_by(User.created_at.desc()).all()
         
         # Convert to response format
-        user_list = [
-            UserListResponse(
-                id=str(user.id),
-                account=user.account,
-                name=user.name,
-                email=user.email,
-                user_type=user.user_type,
-                student_id=user.student_id,
-                class_id=str(user.class_id) if user.class_id else None,
-                class_name=user.class_.name if user.class_ else None,
-                created_at=user.created_at.isoformat()
-            )
-            for user in users
-        ]
+        user_list = [_build_user_response(user) for user in users]
         
         return {
             "code": 200,
@@ -945,18 +959,7 @@ async def get_user_by_id(
                 detail=f"用户ID {user_id} 不存在"
             )
         
-        # Convert to response format
-        user_data = UserListResponse(
-            id=str(user.id),
-            account=user.account,
-            name=user.name,
-            email=user.email,
-            user_type=user.user_type,
-            student_id=user.student_id,
-            class_id=str(user.class_id) if user.class_id else None,
-            class_name=user.class_.name if user.class_ else None,
-            created_at=user.created_at.isoformat()
-        )
+        user_data = _build_user_response(user)
         
         return {
             "code": 200,
@@ -975,6 +978,152 @@ async def get_user_by_id(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="获取用户详情失败"
+        )
+
+
+@router.put(
+    "/users/{user_id}",
+    summary="更新用户信息",
+    dependencies=[Depends(require_role(["administrator"]))]
+)
+async def update_user(
+    user_id: str,
+    request: UserUpdateRequest,
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db)
+):
+    """
+    更新指定用户的资料（管理员专用）
+
+    支持更新账号、姓名、邮箱、手机号，以及学生的学号和班级。
+    """
+    try:
+        user_uuid = uuid.UUID(user_id)
+        user = (
+            db.query(User)
+            .options(joinedload(User.class_))
+            .filter(User.id == user_uuid)
+            .first()
+        )
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"用户ID {user_id} 不存在"
+            )
+
+        if user.user_type == "administrator":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="管理员账号请通过管理员专用入口维护"
+            )
+
+        if request.account is not None:
+            account = request.account.strip()
+            if not account:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="账号不能为空"
+                )
+            existing_account = (
+                db.query(User)
+                .filter(User.account == account, User.id != user.id)
+                .first()
+            )
+            if existing_account:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="账号已存在"
+                )
+            user.account = account
+
+        if request.name is not None:
+            name = request.name.strip()
+            if not name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="姓名不能为空"
+                )
+            user.name = name
+
+        if request.email is not None:
+            email = request.email.strip()
+            if not email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="邮箱不能为空"
+                )
+            existing_email = (
+                db.query(User)
+                .filter(User.email == email, User.id != user.id)
+                .first()
+            )
+            if existing_email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="邮箱已存在"
+                )
+            user.email = email
+
+        if request.phone is not None:
+            phone = request.phone.strip()
+            user.phone = phone or None
+
+        if user.user_type == "student":
+            if request.student_id is not None:
+                student_id = request.student_id.strip()
+                user.student_id = student_id or None
+
+            if request.class_id is not None:
+                class_id = request.class_id.strip()
+                if not class_id:
+                    user.class_id = None
+                else:
+                    try:
+                        class_uuid = uuid.UUID(class_id)
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="无效的班级ID格式"
+                        ) from exc
+
+                    class_record = db.query(Class).filter(Class.id == class_uuid).first()
+                    if not class_record:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="班级不存在"
+                        )
+                    user.class_id = class_record.id
+
+        db.commit()
+        db.refresh(user)
+        user = (
+            db.query(User)
+            .options(joinedload(User.class_))
+            .filter(User.id == user_uuid)
+            .first()
+        )
+
+        return {
+            "code": 200,
+            "message": "更新成功",
+            "data": _build_user_response(user)
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except ValueError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无效的用户ID格式"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update user {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新用户信息失败"
         )
 
 

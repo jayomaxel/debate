@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.user import User
 from utils.security import hash_password, verify_password, create_access_token, create_refresh_token
+from utils.user_email import build_placeholder_email, to_public_email
 import uuid
 
 
@@ -147,6 +148,7 @@ class AuthService:
             student_id=student_id,
             class_id=uuid.UUID(class_id) if class_id else None
         )
+        user.email = email or build_placeholder_email(account)
         
         try:
             db.add(user)
@@ -160,7 +162,7 @@ class AuthService:
             "id": str(user.id),
             "account": user.account,
             "name": user.name,
-            "email": user.email,
+            "email": to_public_email(user.email),
             "user_type": user.user_type,
             "student_id": user.student_id,
             "class_id": str(user.class_id) if user.class_id else None
@@ -210,7 +212,7 @@ class AuthService:
             "user_id": str(user.id),
             "account": user.account,
             "name": user.name,
-            "email": user.email,
+            "email": to_public_email(user.email),
             "user_type": user.user_type
         }
         access_token = create_access_token(token_data)
@@ -228,7 +230,7 @@ class AuthService:
                 "id": str(user.id),
                 "account": user.account,
                 "name": user.name,
-                "email": user.email,
+                "email": to_public_email(user.email),
                 "user_type": user.user_type
             }
         }
