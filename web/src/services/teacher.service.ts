@@ -1,9 +1,10 @@
 /**
  * Teacher Service
- * 教师端服务 - 处理教师相关的所有API调用
+ * 处理教师端相关 API 调用
  */
 
 import { api } from '../lib/api';
+
 export interface DebateGroupingItem {
   user_id: string;
   name: string;
@@ -24,9 +25,6 @@ export interface TeacherDebate {
   grouping?: DebateGroupingItem[];
 }
 
-// ==================== 接口定义 ====================
-
-// 班级管理
 export interface Class {
   id: string;
   name: string;
@@ -40,7 +38,6 @@ export interface CreateClassParams {
   name: string;
 }
 
-// 学生管理
 export interface Student {
   id: string;
   name: string;
@@ -60,16 +57,25 @@ export interface AddStudentParams {
   student_id?: string;
 }
 
-// 辩论管理
 export interface CreateDebateParams {
   class_id: string;
   topic: string;
   duration: number;
   description?: string;
   student_ids?: string[];
+  status?: 'draft' | 'published';
 }
 
-// 配置管理
+export interface TeacherDashboardStats {
+  managed_students: number;
+  participating_students: number;
+  active_debates: number;
+  completed_debates: number;
+  today_debates: number;
+  total_debates: number;
+  updated_at: string;
+}
+
 export interface OpenAIConfig {
   api_key: string;
   base_url: string;
@@ -94,14 +100,7 @@ export interface ConfigData {
   coze: CozeConfig | null;
 }
 
-// ==================== Teacher Service ====================
-
 class TeacherService {
-  // ==================== 班级管理 ====================
-
-  /**
-   * 创建班级
-   */
   static async createClass(params: CreateClassParams): Promise<Class> {
     try {
       return await api.post<Class>('/api/teacher/classes', params);
@@ -111,9 +110,6 @@ class TeacherService {
     }
   }
 
-  /**
-   * 获取班级列表
-   */
   static async getClasses(): Promise<Class[]> {
     try {
       return await api.get<Class[]>('/api/teacher/classes');
@@ -123,11 +119,6 @@ class TeacherService {
     }
   }
 
-  // ==================== 学生管理 ====================
-
-  /**
-   * 添加学生
-   */
   static async addStudent(params: AddStudentParams): Promise<Student> {
     try {
       return await api.post<Student>('/api/teacher/students', params);
@@ -137,9 +128,6 @@ class TeacherService {
     }
   }
 
-  /**
-   * 获取学生列表
-   */
   static async getStudents(classId?: string): Promise<Student[]> {
     try {
       return await api.get<Student[]>('/api/teacher/students', {
@@ -151,11 +139,6 @@ class TeacherService {
     }
   }
 
-  // ==================== 辩论管理 ====================
-
-  /**
-   * 创建辩论
-   */
   static async createDebate(params: CreateDebateParams): Promise<TeacherDebate> {
     try {
       return await api.post<TeacherDebate>('/api/teacher/debates', params);
@@ -165,9 +148,6 @@ class TeacherService {
     }
   }
 
-  /**
-   * 更新辩论
-   */
   static async updateDebate(debateId: string, params: CreateDebateParams): Promise<TeacherDebate> {
     try {
       return await api.put<TeacherDebate>(`/api/teacher/debates/${debateId}`, params);
@@ -177,9 +157,6 @@ class TeacherService {
     }
   }
 
-  /**
-   * 获取单个辩论详情
-   */
   static async getDebate(debateId: string): Promise<TeacherDebate> {
     try {
       return await api.get<TeacherDebate>(`/api/teacher/debates/${debateId}`);
@@ -189,9 +166,6 @@ class TeacherService {
     }
   }
 
-  /**
-   * 获取辩论列表
-   */
   static async getDebates(classId?: string): Promise<TeacherDebate[]> {
     try {
       return await api.get<TeacherDebate[]>('/api/teacher/debates', {
@@ -203,9 +177,14 @@ class TeacherService {
     }
   }
 
-  // ==================== 配置管理已迁移至管理员端 ====================
-  // 配置管理功能已移至 AdminService
-  // 使用 /api/admin/config 路由
+  static async getDashboardStats(): Promise<TeacherDashboardStats> {
+    try {
+      return await api.get<TeacherDashboardStats>('/api/teacher/dashboard');
+    } catch (error) {
+      console.error('[TeacherService] Get dashboard stats failed:', error);
+      throw error;
+    }
+  }
 }
 
 export default TeacherService;

@@ -2,6 +2,8 @@ import pytest
 import uuid
 from httpx import ASGITransport, AsyncClient
 from main import app
+from database import SessionLocal, init_db, init_engine
+from models.debate import Debate
 from services.debate_service import DebateService
 
 
@@ -252,3 +254,170 @@ async def test_teacher_update_debate_can_switch_class_with_matching_students(mon
         data = response.json()["data"]
         assert data["class_id"] == class_b_id
         assert data["student_ids"] == [student_b_id]
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_save_debate_as_draft_without_students():
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_draft_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "草稿测试教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000004",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"草稿班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "允许先保存草稿再继续配置吗",
+                "duration": 30,
+                "description": "草稿保存测试",
+                "status": "draft",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["status"] == "draft"
+        assert data["student_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_teacher_dashboard_counts_actual_participants_and_statuses(monkeypatch):
+    async def fake_openai_assign_roles(db, students):
+        raise Exception("openai disabled in test")
+
+    monkeypatch.setattr(DebateService, "_openai_assign_roles", fake_openai_assign_roles)
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_dashboard_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "看板测试教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000005",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"看板班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        student_ids = []
+        for i in range(3):
+            student_account = f"dashboard_student_{suffix}_{i}"
+            response = await client.post(
+                "/api/teacher/students",
+                json={
+                    "account": student_account,
+                    "password": "Test123456",
+                    "name": f"看板学生{i}",
+                    "class_id": class_id,
+                    "email": f"{student_account}@test.com",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+            student_ids.append(response.json()["data"]["id"])
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "第一场看板测试",
+                "duration": 30,
+                "description": "第一场",
+                "student_ids": student_ids[:2],
+                "status": "published",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        debate_a_id = response.json()["data"]["id"]
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "第二场看板测试",
+                "duration": 30,
+                "description": "第二场",
+                "student_ids": student_ids[1:],
+                "status": "published",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        debate_b_id = response.json()["data"]["id"]
+
+        init_engine()
+        init_db()
+        db = SessionLocal()
+        try:
+            debate_a = db.query(Debate).filter(Debate.id == uuid.UUID(debate_a_id)).one()
+            debate_b = db.query(Debate).filter(Debate.id == uuid.UUID(debate_b_id)).one()
+            debate_a.status = "in_progress"
+            debate_b.status = "completed"
+            db.commit()
+        finally:
+            db.close()
+
+        response = await client.get("/api/teacher/dashboard", headers=headers)
+        assert response.status_code == 200
+        stats = response.json()["data"]
+        assert stats["managed_students"] == 3
+        assert stats["participating_students"] == 3
+        assert stats["active_debates"] == 1
+        assert stats["completed_debates"] == 1
+        assert stats["total_debates"] >= 2

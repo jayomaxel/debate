@@ -268,6 +268,7 @@ class DebateService:
             Class.teacher_id == uuid.UUID(teacher_id)
         ).first()
 
+
         if not cls:
             raise ValueError("班级不存在或无权限")
 
@@ -312,6 +313,13 @@ class DebateService:
             raise ValueError("所选学生必须属于当前班级")
 
         return normalized_ids
+
+    @staticmethod
+    def _normalize_editable_status(status: Optional[str], *, default: str = "published") -> str:
+        normalized_status = (status or default).strip()
+        if normalized_status not in {"draft", "published"}:
+            raise ValueError("辩论状态仅支持 draft 或 published")
+        return normalized_status
 
     @staticmethod
     async def _assign_students_to_debate(
@@ -383,7 +391,8 @@ class DebateService:
         topic: str,
         duration: int,
         description: Optional[str] = None,
-        student_ids: Optional[List[str]] = None
+        student_ids: Optional[List[str]] = None,
+        status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         创建辩论任务
@@ -404,6 +413,7 @@ class DebateService:
             ValueError: 如果班级不存在或邀请码生成失败
         """
         DebateService._get_teacher_class(db=db, teacher_id=teacher_id, class_id=class_id)
+        normalized_status = DebateService._normalize_editable_status(status)
         selected_student_ids = DebateService._validate_selected_student_ids(
             db=db,
             class_id=class_id,
@@ -433,7 +443,7 @@ class DebateService:
             invitation_code=invitation_code,
             class_id=uuid.UUID(class_id),
             teacher_id=uuid.UUID(teacher_id),
-            status='published'
+            status=normalized_status
         )
         
         try:
@@ -495,7 +505,8 @@ class DebateService:
         topic: Optional[str] = None,
         duration: Optional[int] = None,
         description: Optional[str] = None,
-        student_ids: Optional[List[str]] = None
+        student_ids: Optional[List[str]] = None,
+        status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         更新辩论任务
@@ -519,6 +530,12 @@ class DebateService:
             Debate.id == uuid.UUID(debate_id),
             Debate.teacher_id == uuid.UUID(teacher_id)
         ).first()
+
+        next_status = (
+            DebateService._normalize_editable_status(status, default=str(debate.status))
+            if status is not None and debate is not None
+            else (str(debate.status) if debate is not None else "published")
+        )
         
         if not debate:
             raise ValueError("辩论不存在或无权限")
@@ -531,6 +548,9 @@ class DebateService:
                  raise ValueError("无法修改进行中或已完成辩论的主题")
              if duration is not None and duration != debate.duration:
                  raise ValueError("无法修改进行中或已完成辩论的时长")
+
+        if debate.status in ['in_progress', 'completed'] and next_status != debate.status:
+             raise ValueError("无法修改进行中或已完成辩论的状态")
 
         normalized_class_id = str(debate.class_id)
         class_changed = False
@@ -554,6 +574,8 @@ class DebateService:
             debate.description = description
             
         # 更新参与学生
+        if status is not None:
+            debate.status = next_status
         if student_ids is not None:
             if debate.status in ["in_progress", "completed"]:
                 raise ValueError("无法修改进行中或已完成辩论的辩手")

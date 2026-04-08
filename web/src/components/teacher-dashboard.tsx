@@ -16,7 +16,7 @@ import { buildDebateDescription, parseDebateDescription } from '@/lib/debate-des
 import UserProfile from './user-profile';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
-import type { Class, Student, CreateDebateParams, TeacherDebate, DebateGroupingItem } from '@/services/teacher.service';
+import type { Class, Student, CreateDebateParams, TeacherDebate, DebateGroupingItem, TeacherDashboardStats } from '@/services/teacher.service';
 import {
   Plus,
   Upload,
@@ -72,6 +72,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
   const [groupingOpenByDebateId, setGroupingOpenByDebateId] = useState<Record<string, boolean>>({});
   const [groupingLoadingByDebateId, setGroupingLoadingByDebateId] = useState<Record<string, boolean>>({});
   const [debateDetailsById, setDebateDetailsById] = useState<Record<string, TeacherDebate>>({});
+  const [dashboardStats, setDashboardStats] = useState<TeacherDashboardStats | null>(null);
+  const [editingDebateStatus, setEditingDebateStatus] = useState<TeacherDebate['status'] | null>(null);
+  const [submitMode, setSubmitMode] = useState<'draft' | 'published' | null>(null);
 
   const [debateConfig, setDebateConfig] = useState<DebateConfig>({
     topic: '人类应不应该与高度拟人化的AI伴侣建立真实的感情羁绊？',
@@ -160,14 +163,63 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
     }
   }, [selectedClass]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshDashboardData = async () => {
+      const [debatesResult, statsResult] = await Promise.allSettled([
+        TeacherService.getDebates(),
+        TeacherService.getDashboardStats(),
+      ]);
+
+      if (cancelled) return;
+
+      if (debatesResult.status === 'fulfilled') {
+        setDebates(debatesResult.value);
+      }
+
+      if (statsResult.status === 'fulfilled') {
+        setDashboardStats(statsResult.value);
+      }
+    };
+
+    void refreshDashboardData();
+
+    const intervalId = window.setInterval(() => {
+      void refreshDashboardData();
+    }, 15000);
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshDashboardData();
+      }
+    };
+
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
+  }, []);
+
+  const fallbackParticipatingStudents = new Set(
+    debates.flatMap((debate) => debate.student_ids || []).filter(Boolean)
+  ).size;
+  const fallbackManagedStudents = classes.reduce((sum, item) => sum + (item.student_count || 0), 0);
+  const fallbackTodayDebates = debates.filter((debate) => {
+    const today = new Date().toDateString();
+    return new Date(debate.created_at).toDateString() === today;
+  }).length;
   const stats = {
-    activeDebates: debates.filter(d => d.status === 'in_progress').length,
-    completedDebates: debates.filter(d => d.status === 'completed').length,
-    totalStudents: students.length,
-    todayDebates: debates.filter(d => {
-      const today = new Date().toDateString();
-      return new Date(d.created_at).toDateString() === today;
-    }).length
+    activeDebates: dashboardStats?.active_debates ?? debates.filter(d => d.status === 'in_progress').length,
+    completedDebates: dashboardStats?.completed_debates ?? debates.filter(d => d.status === 'completed').length,
+    managedStudents: dashboardStats?.managed_students ?? fallbackManagedStudents,
+    participatingStudents: dashboardStats?.participating_students ?? fallbackParticipatingStudents,
+    todayDebates: dashboardStats?.today_debates ?? fallbackTodayDebates,
   };
 
   const menuItems = [
@@ -198,6 +250,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
 
     // Set basic info first for immediate feedback
     setEditingDebateId(debate.id);
+    setEditingDebateStatus(debate.status);
     setActiveTab('new');
     setError(null);
 
@@ -222,6 +275,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         }
 
         setSelectedStudentIds(debateDetails.student_ids || []);
+        setEditingDebateStatus(debateDetails.status);
 
     } catch (err) {
         console.error("Failed to fetch debate details:", err);
@@ -238,6 +292,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
         });
         if (debate.class_id) setSelectedClass(debate.class_id);
         setSelectedStudentIds(debate.student_ids || []);
+        setEditingDebateStatus(debate.status);
     }
   };
 
@@ -251,6 +306,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
       });
       setSelectedStudentIds([]);
       setEditingDebateId(null);
+      setEditingDebateStatus(null);
       setError(null);
   };
 
@@ -365,6 +421,210 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
   };
 
   // 加载状态
+  /*
+  const handleSaveDebate = async (saveMode: 'draft' | 'published') => {
+    if (!debateConfig.class_id) {
+      setError('璇烽€夋嫨鐝骇');
+      return;
+    }
+
+    if (!debateConfig.topic.trim()) {
+      setError('璇疯緭鍏ヨ京璁轰富棰?);
+      return;
+    }
+
+    if (saveMode === 'published' && selectedStudentIds.length === 0) {
+      setError('璇疯嚦灏戦€夋嫨涓€鍚嶅鐢熷弬涓庤京璁?);
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setSubmitMode(saveMode);
+      setError(null);
+
+      const params: CreateDebateParams = {
+        class_id: debateConfig.class_id,
+        topic: debateConfig.topic.trim(),
+        duration: parseInt(debateConfig.duration, 10),
+        description: buildDebateDescription(debateConfig.rounds, debateConfig.knowledgePoints),
+        student_ids: selectedStudentIds,
+        status: saveMode,
+      };
+
+      if (editingDebateId) {
+        const updatedDebate = await TeacherService.updateDebate(editingDebateId, params);
+        setDebates(prev => prev.map(d => d.id === editingDebateId ? updatedDebate : d));
+        setDebateDetailsById(prev => ({ ...prev, [editingDebateId]: updatedDebate }));
+        toast({
+          variant: 'success',
+          title: editingDebateStatus === 'draft' && saveMode === 'published' ? '鑽夌鍙戝竷鎴愬姛' : '杈╄鏇存柊鎴愬姛',
+          description: editingDebateStatus === 'draft' && saveMode === 'published' ? '鑽夌宸插彂甯冿紝瀛︾敓鍙互鍔犲叆浜? : '杈╄淇℃伅宸蹭繚瀛?,
+          duration: 3000,
+        });
+      } else {
+        const newDebate = await TeacherService.createDebate(params);
+        setDebates(prev => [newDebate, ...prev]);
+        setDebateDetailsById(prev => ({ ...prev, [newDebate.id]: newDebate }));
+
+        if (saveMode === 'draft') {
+          toast({
+            variant: 'success',
+            title: '鑽夌宸蹭繚瀛?',
+            description: '鍙互鍦ㄥ巻鍙茶褰曚腑缁х画缂栬緫鎴栧彂甯?,
+            duration: 3000,
+          });
+        } else {
+          toast({
+            variant: 'success',
+            title: '杈╄鍒涘缓鎴愬姛',
+            description: `閭€璇风爜锛?{newDebate.invitation_code}锛堝凡鏅鸿兘鍒嗙粍锛塦,
+            duration: 5000,
+            action: (
+              <ToastAction
+                altText="鏌ョ湅鍒嗙粍"
+                onClick={() => {
+                  setActiveTab('history');
+                  setGroupingOpen(newDebate.id, true);
+                }}
+              >
+                鏌ョ湅鍒嗙粍
+              </ToastAction>
+            ),
+          });
+        }
+      }
+
+      try {
+        const latestStats = await TeacherService.getDashboardStats();
+        setDashboardStats(latestStats);
+      } catch (statsError) {
+        console.warn('Failed to refresh dashboard stats after save:', statsError);
+      }
+
+      setDebateConfig({
+        topic: '',
+        duration: '30',
+        rounds: '3',
+        class_id: selectedClass,
+        knowledgePoints: '',
+      });
+      setSelectedStudentIds([]);
+      setEditingDebateId(null);
+      setEditingDebateStatus(null);
+      setError(null);
+    } catch (err: any) {
+      console.error('Failed to save debate:', err);
+      setError(err.message || '淇濆瓨澶辫触');
+    } finally {
+      setSubmitting(false);
+      setSubmitMode(null);
+    }
+  };
+
+  */
+  const handleSaveDebate = async (saveMode: 'draft' | 'published') => {
+    if (!debateConfig.class_id) {
+      setError('Please select a class');
+      return;
+    }
+
+    if (!debateConfig.topic.trim()) {
+      setError('Please enter a debate topic');
+      return;
+    }
+
+    if (saveMode === 'published' && selectedStudentIds.length === 0) {
+      setError('Please select at least one student');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setSubmitMode(saveMode);
+      setError(null);
+
+      const params: CreateDebateParams = {
+        class_id: debateConfig.class_id,
+        topic: debateConfig.topic.trim(),
+        duration: parseInt(debateConfig.duration, 10),
+        description: buildDebateDescription(debateConfig.rounds, debateConfig.knowledgePoints),
+        student_ids: selectedStudentIds,
+        status: saveMode,
+      };
+
+      if (editingDebateId) {
+        const updatedDebate = await TeacherService.updateDebate(editingDebateId, params);
+        setDebates(prev => prev.map(d => d.id === editingDebateId ? updatedDebate : d));
+        setDebateDetailsById(prev => ({ ...prev, [editingDebateId]: updatedDebate }));
+        toast({
+          variant: 'success',
+          title: editingDebateStatus === 'draft' && saveMode === 'published' ? 'Draft published' : 'Debate updated',
+          description: editingDebateStatus === 'draft' && saveMode === 'published'
+            ? 'Students can now join this debate.'
+            : 'Debate settings were saved.',
+          duration: 3000,
+        });
+      } else {
+        const newDebate = await TeacherService.createDebate(params);
+        setDebates(prev => [newDebate, ...prev]);
+        setDebateDetailsById(prev => ({ ...prev, [newDebate.id]: newDebate }));
+
+        if (saveMode === 'draft') {
+          toast({
+            variant: 'success',
+            title: 'Draft saved',
+            description: 'You can come back later to edit or publish it.',
+            duration: 3000,
+          });
+        } else {
+          toast({
+            variant: 'success',
+            title: 'Debate created',
+            description: `Invitation code: ${newDebate.invitation_code} (grouping ready)`,
+            duration: 5000,
+            action: (
+              <ToastAction
+                altText="View grouping"
+                onClick={() => {
+                  setActiveTab('history');
+                  setGroupingOpen(newDebate.id, true);
+                }}
+              >
+                View grouping
+              </ToastAction>
+            ),
+          });
+        }
+      }
+
+      try {
+        const latestStats = await TeacherService.getDashboardStats();
+        setDashboardStats(latestStats);
+      } catch (statsError) {
+        console.warn('Failed to refresh dashboard stats after save:', statsError);
+      }
+
+      setDebateConfig({
+        topic: '',
+        duration: '30',
+        rounds: '3',
+        class_id: selectedClass,
+        knowledgePoints: '',
+      });
+      setSelectedStudentIds([]);
+      setEditingDebateId(null);
+      setEditingDebateStatus(null);
+      setError(null);
+    } catch (err: any) {
+      console.error('Failed to save debate:', err);
+      setError(err.message || 'Save failed');
+    } finally {
+      setSubmitting(false);
+      setSubmitMode(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-amber-50 flex items-center justify-center">
@@ -450,7 +710,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                 <div className="flex gap-2">
                   <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                     <Users className="w-4 h-4 mr-1" />
-                    {stats.totalStudents} 学生
+                    {stats.managedStudents} 在管学生
                   </Badge>
                   <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
                     <Play className="w-4 h-4 mr-1" />
@@ -502,7 +762,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium text-purple-700">参与学生</p>
-                        <p className="text-2xl font-bold text-purple-900">{stats.totalStudents}</p>
+                        <p className="text-2xl font-bold text-purple-900">{stats.participatingStudents}</p>
                       </div>
                       <Users className="w-8 h-8 text-purple-600 opacity-50" />
                     </div>
@@ -649,6 +909,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                                   <div className="flex items-center gap-3">
                                     <Checkbox
                                       checked={selectedStudentIds.includes(student.id)}
+                                      onClick={(event) => event.stopPropagation()}
                                       onCheckedChange={() => handleStudentToggle(student.id)}
                                     />
                                     <div className="w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-medium">
@@ -675,26 +936,37 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onLogout, onNavigat
                               取消编辑
                           </Button>
                       ) : (
-                        <Button variant="outline" className="border-slate-300 text-slate-700">
+                        <Button
+                          variant="outline"
+                          className="border-slate-300 text-slate-700"
+                          disabled={submitting}
+                          onClick={() => handleSaveDebate('draft')}
+                        >
                           保存草稿
                         </Button>
                       )}
                       <Button
-                        onClick={handleCreateDebate}
+                        onClick={() => handleSaveDebate('published')}
                         disabled={submitting || !debateConfig.class_id}
                         className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-8"
                       >
                         {submitting ? (
                           <>
                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            {editingDebateId ? '保存中...' : '智能分组中...'}
+                            {submitMode === 'draft'
+                              ? '保存草稿中...'
+                              : editingDebateStatus === 'draft'
+                                ? '发布草稿中...'
+                                : editingDebateId
+                                  ? '保存中...'
+                                  : '智能分组中...'}
                           </>
                         ) : (
                           <>
                             {editingDebateId ? (
                                 <>
                                     <Pencil className="w-4 h-4 mr-2" />
-                                    保存修改
+                                    {editingDebateStatus === 'draft' ? '发布草稿' : '保存修改'}
                                 </>
                             ) : (
                                 <>

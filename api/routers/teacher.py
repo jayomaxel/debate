@@ -12,6 +12,7 @@ from models.user import User
 from services.class_service import ClassService
 from services.student_service import StudentService
 from services.debate_service import DebateService
+from services.analytics_service import AnalyticsService
 from middleware.auth_middleware import require_teacher, PermissionChecker
 
 logger = get_logger(__name__)
@@ -39,6 +40,7 @@ class CreateDebateRequest(BaseModel):
     duration: int
     description: Optional[str] = None
     student_ids: Optional[List[str]] = None
+    status: Optional[str] = None
 
 
 # ==================== 班级管理 ====================
@@ -84,6 +86,31 @@ async def get_classes(
             "message": "获取成功",
             "data": classes
         }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/dashboard", summary="鑾峰彇鏁欏笀鎺у埗鍙扮粺璁?")
+async def get_teacher_dashboard(
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """鑾峰彇鏁欏笀鎺у埗鍙扮粺璁版嵁"""
+    try:
+        analytics = AnalyticsService(db)
+        return {
+            "code": 200,
+            "message": "鑾峰彇鎴愬姛",
+            "data": analytics.get_teacher_dashboard(str(current_user.id))
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -186,7 +213,8 @@ async def create_debate(
             topic=request.topic,
             duration=request.duration,
             description=request.description,
-            student_ids=request.student_ids
+            student_ids=request.student_ids,
+            status=request.status,
         )
         return {
             "code": 200,
@@ -224,7 +252,8 @@ async def update_debate(
             topic=request.topic,
             duration=request.duration,
             description=request.description,
-            student_ids=request.student_ids
+            student_ids=request.student_ids,
+            status=request.status,
         )
         return {
             "code": 200,

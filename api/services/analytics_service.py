@@ -5,6 +5,7 @@
 from logging_config import get_logger
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 
@@ -28,6 +29,94 @@ class AnalyticsService:
             db: 数据库会话
         """
         self.db = db
+
+    def get_teacher_dashboard(self, teacher_id: str) -> Dict[str, Any]:
+        """
+        获取教师控制台统计数据。
+
+        Args:
+            teacher_id: 教师ID
+
+        Returns:
+            教师控制台统计
+        """
+        try:
+            teacher_uuid = uuid.UUID(str(teacher_id))
+        except ValueError as exc:
+            raise ValueError("无效的教师ID格式") from exc
+
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + timedelta(days=1)
+
+        managed_students = (
+            self.db.query(func.count(User.id))
+            .join(Class, User.class_id == Class.id)
+            .filter(
+                Class.teacher_id == teacher_uuid,
+                User.user_type == "student",
+            )
+            .scalar()
+            or 0
+        )
+
+        participating_students = (
+            self.db.query(func.count(func.distinct(DebateParticipation.user_id)))
+            .join(Debate, DebateParticipation.debate_id == Debate.id)
+            .filter(
+                Debate.teacher_id == teacher_uuid,
+                DebateParticipation.user_id.isnot(None),
+            )
+            .scalar()
+            or 0
+        )
+
+        active_debates = (
+            self.db.query(func.count(Debate.id))
+            .filter(
+                Debate.teacher_id == teacher_uuid,
+                Debate.status == "in_progress",
+            )
+            .scalar()
+            or 0
+        )
+
+        completed_debates = (
+            self.db.query(func.count(Debate.id))
+            .filter(
+                Debate.teacher_id == teacher_uuid,
+                Debate.status == "completed",
+            )
+            .scalar()
+            or 0
+        )
+
+        today_debates = (
+            self.db.query(func.count(Debate.id))
+            .filter(
+                Debate.teacher_id == teacher_uuid,
+                Debate.created_at >= today_start,
+                Debate.created_at < tomorrow_start,
+            )
+            .scalar()
+            or 0
+        )
+
+        total_debates = (
+            self.db.query(func.count(Debate.id))
+            .filter(Debate.teacher_id == teacher_uuid)
+            .scalar()
+            or 0
+        )
+
+        return {
+            "managed_students": managed_students,
+            "participating_students": participating_students,
+            "active_debates": active_debates,
+            "completed_debates": completed_debates,
+            "today_debates": today_debates,
+            "total_debates": total_debates,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
     
     def get_class_statistics(self, class_id: str, teacher_id: str) -> Dict[str, Any]:
         """
