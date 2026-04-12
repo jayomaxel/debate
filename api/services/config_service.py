@@ -167,6 +167,21 @@ class ConfigService:
         host = (hostname or "").lower()
         return host.endswith(".cpolar.cn") or host.endswith(".cpolar.top")
 
+    @staticmethod
+    def _is_valid_public_file_url_prefix(url: Optional[str]) -> bool:
+        normalized_url = (url or "").strip()
+        if not normalized_url:
+            return False
+
+        parsed_url = urlparse(normalized_url)
+        if parsed_url.scheme not in {"http", "https"}:
+            return False
+        if not parsed_url.netloc:
+            return False
+
+        hostname = (parsed_url.hostname or "").lower()
+        return hostname not in {"localhost", "127.0.0.1"}
+
     @classmethod
     def _resolve_public_file_url_prefix(
         cls,
@@ -183,10 +198,10 @@ class ConfigService:
             return desired_prefix
         if normalized_current == desired_prefix:
             return desired_prefix
+        if not cls._is_valid_public_file_url_prefix(normalized_current):
+            return desired_prefix
 
         current_host = urlparse(normalized_current).hostname or ""
-        if current_host in {"localhost", "127.0.0.1"}:
-            return desired_prefix
         if cls._is_cpolar_host(current_host):
             return desired_prefix
 

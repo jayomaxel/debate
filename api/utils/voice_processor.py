@@ -18,6 +18,7 @@ import subprocess
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, Awaitable, List, AsyncIterator
 from http import HTTPStatus
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 from config import settings
 import uuid
@@ -78,6 +79,21 @@ class VoiceProcessor:
             purpose="voice_tts",
             timeout=self.HTTP_TIMEOUT_SECONDS,
         )
+
+    @staticmethod
+    def _is_valid_public_file_url_prefix(file_url_prefix: str) -> bool:
+        normalized_prefix = (file_url_prefix or "").strip()
+        if not normalized_prefix:
+            return False
+
+        parsed_prefix = urlparse(normalized_prefix)
+        if parsed_prefix.scheme not in {"http", "https"}:
+            return False
+        if not parsed_prefix.netloc:
+            return False
+
+        hostname = (parsed_prefix.hostname or "").lower()
+        return hostname not in {"localhost", "127.0.0.1"}
 
     def get_default_ai_tts_speed(self) -> float:
         """返回统一定义在 config.py 中的 TTS 默认语速。"""
@@ -1309,7 +1325,7 @@ class VoiceProcessor:
                     "text": "",
                     "duration": 0,
                     "confidence": 0.0,
-                    "error": "未安装dashscope SDK，请先安装依赖：pip install dashscope>=2.22.5",
+                    "error": "未安装dashscope SDK，请先安装依赖：pip install dashscope>=1.25.16",
                 }
 
             status_code = getattr(result, "status_code", None)
@@ -1361,8 +1377,10 @@ class VoiceProcessor:
         else:
             file_url_prefix = ""
 
-        if not file_url_prefix:
-            public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+        if not self._is_valid_public_file_url_prefix(file_url_prefix):
+            public_base_url = settings.PUBLIC_BASE_URL or os.getenv(
+                "PUBLIC_BASE_URL", ""
+            ).rstrip("/")
             if public_base_url:
                 file_url_prefix = f"{public_base_url}/uploads/asr"
             else:

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
         "DATABASE_URL",
         "postgresql://pgvector:pgvector@124.223.80.94:54333/debate_system"
     )
+    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     
     # Redis配置
     REDIS_HOST: str = os.getenv("REDIS_HOST", "124.223.80.94")
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     TTS_DEFAULT_SPEED: float = float(os.getenv("TTS_DEFAULT_SPEED", "1.5"))
     
     # Coze配置（优先从 coze_config 表读取，这里仅作为 fallback）
-    # 生产环境建议通过管理员端配置，而不是环境变量
+    # 生产2环境建议通过管理员端配置，而不是环境变量
     COZE_API_KEY: Optional[str] = os.getenv("COZE_API_KEY", None)
     COZE_BASE_URL: str = os.getenv("COZE_BASE_URL", "https://api.coze.cn")
 

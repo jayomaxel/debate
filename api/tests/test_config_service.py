@@ -253,6 +253,34 @@ async def test_get_asr_config_refreshes_stale_cpolar_file_url_prefix(
 
 
 @pytest.mark.asyncio
+async def test_get_asr_config_replaces_malformed_file_url_prefix(
+    config_service,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+
+    existing_config = AsrConfig(
+        id=uuid.uuid4(),
+        model_name="fun-asr-realtime",
+        api_endpoint="wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+        api_key="test-key",
+        parameters={
+            "provider": "dashscope",
+            "file_url_prefix": "https://",
+        },
+    )
+    db_session.add(existing_config)
+    db_session.commit()
+
+    config = await config_service.get_asr_config()
+
+    assert config.parameters["file_url_prefix"] == (
+        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_asr_config_keeps_custom_file_url_prefix(
     config_service,
     db_session,

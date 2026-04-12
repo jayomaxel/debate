@@ -64,13 +64,14 @@ $env:REDIS_HOST = "localhost"
 $env:REDIS_PORT = "6379"
 $env:REDIS_DB = "0"
 $env:REDIS_PASSWORD = ""
-$env:PUBLIC_BASE_URL = $PublicBaseUrl
 $env:DEBUG = "false"
 $env:SECRET_KEY = "local-delivery-secret-key"
 
 if ($PublicBaseUrl) {
+    $env:PUBLIC_BASE_URL = $PublicBaseUrl
     Write-Output "Resolved PUBLIC_BASE_URL: $PublicBaseUrl"
 } else {
+    Remove-Item Env:PUBLIC_BASE_URL -ErrorAction SilentlyContinue
     Write-Output "Resolved PUBLIC_BASE_URL: <empty>"
 }
 

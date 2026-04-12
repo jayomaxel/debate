@@ -8,6 +8,8 @@ services:
       dockerfile: Dockerfile.api
     image: debate-api:latest
     container_name: debate-api
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     ports:
       - "7860:7860"
     volumes:

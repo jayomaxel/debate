@@ -146,3 +146,28 @@ def test_dashscope_asr_polls_and_extracts_text(monkeypatch, tmp_path):
         )
     )
     assert result["text"] == "hello world"
+
+
+def test_persist_audio_for_dashscope_falls_back_from_invalid_public_prefix(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        settings,
+        "PUBLIC_BASE_URL",
+        "https://debate-fixed.r10.vip.cpolar.cn",
+    )
+
+    public_url = asyncio.run(
+        voice_processor._persist_audio_for_dashscope(
+            audio_data=b"fake-audio",
+            audio_format="wav",
+            parameters={"file_url_prefix": "https://"},
+        )
+    )
+
+    assert public_url is not None
+    assert public_url.startswith(
+        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr/"
+    )
