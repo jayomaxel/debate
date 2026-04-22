@@ -55,9 +55,13 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const [micOwnerUserId, setMicOwnerUserId] = useState<string | null>(null);
   const [micOwnerRole, setMicOwnerRole] = useState<string | null>(null);
   const [micExpiresAt, setMicExpiresAt] = useState<string | null>(null);
+  const [freeDebateNextSide, setFreeDebateNextSide] = useState<string | null>(null);
   const [segmentTitle, setSegmentTitle] = useState<string | null>(null);
   const [segmentId, setSegmentId] = useState<string | null>(null);
   const [segmentIndex, setSegmentIndex] = useState<number | null>(null);
+  const [aiTurnStatus, setAiTurnStatus] = useState<string>('idle');
+  const [aiTurnSegmentTitle, setAiTurnSegmentTitle] = useState<string | null>(null);
+  const [aiTurnSpeakerRole, setAiTurnSpeakerRole] = useState<string | null>(null);
   const [participants, setParticipants] = useState<any[]>([]);
   const [aiDebaters, setAiDebaters] = useState<any[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
@@ -86,6 +90,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const ignoredLiveTtsSpeechIdsRef = useRef<Set<string>>(new Set());
   const toastRef = useRef(toast);
   const onEndDebateRef = useRef(onEndDebate);
+  const aiSpeechMetaRef = useRef<Map<string, { segmentId?: string; speakerRole?: string }>>(new Map());
 
   // WebSocket连接
   const { isConnected, send, on, off } = useWebSocket(roomId, {
@@ -102,6 +107,37 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     }
   });
 
+  const sendSpeechPlaybackEvent = React.useCallback((payload: {
+    status: 'started' | 'finished' | 'failed';
+    speechId?: string;
+    segmentId?: string | null;
+    speakerRole?: string | null;
+    source: 'stream' | 'audio_element' | 'manual_audio';
+  }) => {
+    const normalizedSpeechId = String(payload.speechId || '').trim();
+    if (!normalizedSpeechId) {
+      return;
+    }
+    const cachedMeta = aiSpeechMetaRef.current.get(normalizedSpeechId);
+    const resolvedSpeakerRole = String(
+      payload.speakerRole || cachedMeta?.speakerRole || ''
+    ).trim();
+    if (!resolvedSpeakerRole.startsWith('ai_')) {
+      return;
+    }
+    const messageType = payload.status === 'started'
+      ? 'speech_playback_started'
+      : payload.status === 'finished'
+      ? 'speech_playback_finished'
+      : 'speech_playback_failed';
+    send(messageType as any, {
+      speech_id: normalizedSpeechId,
+      segment_id: payload.segmentId || cachedMeta?.segmentId || undefined,
+      speaker_role: resolvedSpeakerRole,
+      playback_source: payload.source,
+    });
+  }, [send]);
+
   useEffect(() => {
     liveTtsPlayerRef.current = new PcmStreamPlayer({
       onPlaybackStateChange: (isPlaying) => {
@@ -111,13 +147,27 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
         });
         setHasActiveLiveTtsStream(isPlaying);
       },
+      onStreamPlaybackStart: (streamId) => {
+        sendSpeechPlaybackEvent({
+          status: 'started',
+          speechId: streamId,
+          source: 'stream',
+        });
+      },
+      onStreamPlaybackComplete: (streamId) => {
+        sendSpeechPlaybackEvent({
+          status: 'finished',
+          speechId: streamId,
+          source: 'stream',
+        });
+      },
     });
 
     return () => {
       liveTtsPlayerRef.current?.dispose();
       liveTtsPlayerRef.current = null;
     };
-  }, []);
+  }, [roomId, sendSpeechPlaybackEvent]);
 
   useEffect(() => {
     // 切换房间时清空流式播报标记，避免上一场辩论残留到当前房间。
@@ -126,6 +176,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     ttsStreamStartCountRef.current.clear();
     ttsStreamChunkCountRef.current.clear();
     ttsStreamEndCountRef.current.clear();
+    aiSpeechMetaRef.current.clear();
     audioPlaybackDebug('DebateArena', '房间切换，已清空音频排查计数器', { roomId });
   }, [roomId]);
 
@@ -296,6 +347,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       if (data.mic_owner_user_id !== undefined) setMicOwnerUserId(data.mic_owner_user_id);
       if (data.mic_owner_role !== undefined) setMicOwnerRole(data.mic_owner_role);
       if (data.mic_expires_at !== undefined) setMicExpiresAt(data.mic_expires_at);
+      if (data.free_debate_next_side !== undefined) setFreeDebateNextSide(data.free_debate_next_side);
+      if (data.ai_turn_status !== undefined) setAiTurnStatus(data.ai_turn_status || 'idle');
+      if (data.ai_turn_segment_title !== undefined) setAiTurnSegmentTitle(data.ai_turn_segment_title);
+      if (data.ai_turn_speaker_role !== undefined) setAiTurnSpeakerRole(data.ai_turn_speaker_role);
       if (Array.isArray(data.participants)) setParticipants(data.participants);
       if (Array.isArray(data.ai_debaters)) setAiDebaters(data.ai_debaters);
     };
@@ -360,14 +415,21 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     // 监听发言
     const handleSpeech = (data: any) => {
       console.log('Speech:', data);
+      const speechId = String(data?.speech_id || data?.message_id || data?.id || '').trim();
       audioPlaybackDebug('DebateArena', '收到 speech 事件', {
         roomId,
-        speechId: String(data?.speech_id || data?.message_id || data?.id || ''),
+        speechId,
         role: data?.role,
         hasAudioUrl: !!(data?.audio_url || data?.file_url || data?.url),
         contentLength: String(data?.content || data?.text || '').length,
       });
       if (data.role) setCurrentSpeakerRole(data.role);
+      if (speechId && String(data?.role || '').trim().startsWith('ai_')) {
+        aiSpeechMetaRef.current.set(speechId, {
+          segmentId: String(data?.segment_id || '').trim() || undefined,
+          speakerRole: String(data?.role || '').trim() || undefined,
+        });
+      }
 
       // 使用可回填的转录合并工具，兼容“音频先到文本后补”和“文本先到音频后补”。
       const entry = normalizeTranscriptEntry(data, {
@@ -386,7 +448,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       audioPlaybackDebug('DebateArena', 'speech 事件已写入 transcript', {
         roomId,
         entryId: entry.id,
-        speechId: String(data?.speech_id || data?.message_id || data?.id || ''),
+        speechId,
         hasAudioUrl: !!entry.audioUrl,
         isPendingText: !!entry.isPendingText,
       });
@@ -715,6 +777,52 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
   const currentSpeakerInfo = getCurrentSpeakerInfo();
   const isFreeDebate = currentPhase === 'free_debate' && speakerMode === 'free';
+  const resolveAiSpeakerName = (role?: string | null) => {
+    const normalizedRole = String(role || '').trim();
+    if (!normalizedRole) return 'AI 智能体';
+    const matched = aiDebaters.find((item) => item?.id === normalizedRole);
+    if (matched?.name) return matched.name;
+    return `反方${roleToPosition(normalizedRole)}`;
+  };
+  const aiTurnStatusMeta = (() => {
+    const normalizedStatus = String(aiTurnStatus || 'idle').trim();
+    if (!normalizedStatus || normalizedStatus === 'idle') return null;
+    const speakerName = resolveAiSpeakerName(aiTurnSpeakerRole);
+    const segmentLabel = aiTurnSegmentTitle || segmentTitle || phaseLabel(currentPhase);
+
+    switch (normalizedStatus) {
+      case 'thinking':
+        return {
+          label: 'AI思考中',
+          detail: `${speakerName} 正在基于最新发言准备回应`,
+          badgeClassName: 'bg-amber-500/20 text-amber-200 border-amber-400/40',
+        };
+      case 'ready':
+        return {
+          label: 'AI已准备，等待轮次',
+          detail: `${speakerName} 已完成草稿准备，目标环节：${segmentLabel}`,
+          badgeClassName: 'bg-sky-500/20 text-sky-200 border-sky-400/40',
+        };
+      case 'speaking':
+        return {
+          label: 'AI正在发言',
+          detail: `${speakerName} 正在正式输出`,
+          badgeClassName: 'bg-purple-500/20 text-purple-200 border-purple-400/40',
+        };
+      case 'recomputing':
+        return {
+          label: 'AI重算中',
+          detail: `${speakerName} 正在根据新提交发言重算草稿`,
+          badgeClassName: 'bg-rose-500/20 text-rose-200 border-rose-400/40',
+        };
+      default:
+        return {
+          label: `AI状态：${normalizedStatus}`,
+          detail: `${speakerName} 当前目标环节：${segmentLabel}`,
+          badgeClassName: 'bg-slate-500/20 text-slate-200 border-slate-400/40',
+        };
+    }
+  })();
   
   // 检查麦克风是否处于活跃状态（未过期）
   const micActive = !!micOwnerUserId && !!micExpiresAt && new Date(micExpiresAt).getTime() > Date.now();
@@ -735,7 +843,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const canSpeak = isFreeDebate
     ? micOwnerUserId === currentUserId && micActive
     : !!currentUserRole && roleMatches(currentUserRole, currentSpeakerRole);
-  const canGrabMic = isFreeDebate && !micActive;
+  const canGrabMic = isFreeDebate && !micActive && freeDebateNextSide !== 'ai';
   const canSelectSelf =
     speakerMode === 'choice' &&
     !!currentUserRole &&
@@ -744,6 +852,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const micStatusText = isFreeDebate
     ? micActive
       ? `当前持麦：${micOwnerRole || ''}${micOwnerUserId === currentUserId ? '（你）' : ''}`
+      : freeDebateNextSide === 'ai'
+      ? aiTurnStatusMeta?.detail || '反方 AI 回合进行中，暂不可抢麦'
       : '当前无人持麦'
     : segmentTitle || undefined;
   const isDebater1 = currentUserRole === 'debater_1';
@@ -943,6 +1053,16 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
                   </div>
                 </div>
               )}
+              {aiTurnStatusMeta && (
+                <div className="mb-6 text-center">
+                  <div className="inline-flex flex-col items-center gap-2 px-5 py-3 bg-slate-900/70 backdrop-blur rounded-2xl border border-slate-700">
+                    <Badge className={aiTurnStatusMeta.badgeClassName}>
+                      {aiTurnStatusMeta.label}
+                    </Badge>
+                    <span className="text-sm text-slate-200">{aiTurnStatusMeta.detail}</span>
+                  </div>
+                </div>
+              )}
 
               {/* 对战区域 */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -1017,7 +1137,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
                 </div>
                 <div className="flex items-center justify-between text-sm mt-2">
                   <span className="text-slate-400">AI策略状态</span>
-                  <span className="text-purple-400 font-medium">自适应优化中</span>
+                  <span className="text-purple-400 font-medium">
+                    {aiTurnStatusMeta?.label || '待命中'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1060,6 +1182,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     onAutoPlayEnabledChange={setAutoPlayEnabled}
     externalPlaybackLock={hasActiveLiveTtsStream}
     suppressAutoPlayEntryIds={streamedSpeechEntryIds}
+    onSpeechPlaybackEvent={(payload) => sendSpeechPlaybackEvent(payload)}
   />
 </div>
   );

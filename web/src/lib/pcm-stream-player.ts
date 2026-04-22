@@ -9,6 +9,8 @@ interface StreamChunkPayload {
 
 interface PcmStreamPlayerOptions {
   onPlaybackStateChange?: (isPlaying: boolean) => void;
+  onStreamPlaybackStart?: (streamId: string) => void;
+  onStreamPlaybackComplete?: (streamId: string) => void;
 }
 
 interface PendingStreamState {
@@ -31,12 +33,16 @@ export class PcmStreamPlayer {
   private scheduledNodes = new Set<AudioBufferSourceNode>();
   private releaseTimer: number | null = null;
   private readonly onPlaybackStateChange?: (isPlaying: boolean) => void;
+  private readonly onStreamPlaybackStart?: (streamId: string) => void;
+  private readonly onStreamPlaybackComplete?: (streamId: string) => void;
   private streamChunkCount = 0;
   private pendingStreams = new Map<string, PendingStreamState>();
   private pendingStreamQueue: string[] = [];
 
   constructor(options: PcmStreamPlayerOptions = {}) {
     this.onPlaybackStateChange = options.onPlaybackStateChange;
+    this.onStreamPlaybackStart = options.onStreamPlaybackStart;
+    this.onStreamPlaybackComplete = options.onStreamPlaybackComplete;
   }
 
   private async ensureAudioContext(): Promise<AudioContext> {
@@ -111,6 +117,7 @@ export class PcmStreamPlayer {
       queuedStreamCount: this.pendingStreamQueue.length,
     });
     this.onPlaybackStateChange?.(true);
+    this.onStreamPlaybackStart?.(nextStreamId);
 
     // 队列里的 chunk 需要按原顺序补排到时间轴里，保证晚到的下一条语音不会插播。
     for (const chunk of nextStream.chunks) {
@@ -200,6 +207,7 @@ export class PcmStreamPlayer {
         streamId,
         queuedStreamCount: this.pendingStreamQueue.length,
       });
+      this.onStreamPlaybackComplete?.(streamId);
 
       if (this.pendingStreamQueue.length > 0) {
         void this.activateNextQueuedStream();

@@ -87,7 +87,19 @@ class CozeConfigResponse(BaseModel):
                 "api_token": "pat_...",
                 "parameters": {
                     "timeout": 30,
-                    "retry_count": 3
+                    "retry_count": 3,
+                    "ai_turns": {
+                        "default": {
+                            "prethinking_mode": "reactive",
+                            "response_delay_sec": 2,
+                            "thinking_timeout_sec": 20,
+                            "draft_ttl_sec": 120
+                        },
+                        "opening_negative_1": {
+                            "prethinking_mode": "eager",
+                            "response_delay_sec": 3
+                        }
+                    }
                 },
                 "created_at": "2024-01-15T10:30:00",
                 "updated_at": "2024-01-15T10:30:00"
@@ -118,7 +130,16 @@ class CozeConfigUpdate(BaseModel):
                 "api_token": "pat_...",
                 "parameters": {
                     "timeout": 60,
-                    "retry_count": 5
+                    "retry_count": 5,
+                    "ai_turns": {
+                        "questioning_1_ai2_ask": {
+                            "prethinking_mode": "eager",
+                            "response_delay_sec": 2
+                        },
+                        "free_debate": {
+                            "thinking_timeout_sec": 12
+                        }
+                    }
                 }
             }
         }

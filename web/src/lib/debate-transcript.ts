@@ -15,6 +15,7 @@ const MATCH_WINDOW_MS = 120_000;
 
 export interface TranscriptEntry {
   id: string;
+  speechId?: string;
   speaker: string;
   position: string;
   message: string;
@@ -73,6 +74,10 @@ const normalizeString = (value: unknown): string => {
     return '';
   }
   return String(value).trim();
+};
+
+const resolveSpeechId = (event: TranscriptEvent): string => {
+  return normalizeString(event.speech_id || event.message_id || event.id);
 };
 
 export const buildTranscriptSpeechEntryId = (
@@ -220,9 +225,11 @@ export const normalizeTranscriptEntry = (
   const timestamp = parseTimestamp(event.timestamp);
   const sourceIds = collectSourceIds(event);
   const audioFormat = normalizeString(event.audio_format);
+  const speechId = resolveSpeechId(event);
 
   return {
     id: resolveEntryId(event),
+    speechId: speechId || undefined,
     speaker: resolveSpeakerLabel(event, options.resolveSpeakerName),
     position: resolvePositionLabel(event, options.resolvePosition),
     message,
@@ -261,6 +268,7 @@ const mergeTranscriptEntry = (
     ...existing,
     ...incoming,
     id: existing.id,
+    speechId: incoming.speechId || existing.speechId,
     speaker: incoming.speaker || existing.speaker,
     position: incoming.position || existing.position,
     message: shouldReplaceMessage ? nextMessage : existing.message,

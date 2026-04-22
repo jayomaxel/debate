@@ -60,6 +60,18 @@ class RoomState:
         turn_speech_role: Optional[str] = None,
         turn_speech_timestamp: Optional[datetime] = None,
         pending_advance_reason: Optional[str] = None,
+        ai_turn_status: str = "idle",
+        ai_turn_segment_id: Optional[str] = None,
+        ai_turn_segment_title: Optional[str] = None,
+        ai_turn_speaker_role: Optional[str] = None,
+        playback_gate_status: str = "idle",
+        playback_gate_speech_id: Optional[str] = None,
+        playback_gate_segment_id: Optional[str] = None,
+        playback_gate_speaker_role: Optional[str] = None,
+        playback_gate_controller_user_id: Optional[str] = None,
+        playback_gate_started_at: Optional[datetime] = None,
+        playback_gate_deadline_at: Optional[datetime] = None,
+        pending_post_playback_action: Optional[str] = None,
         participants: Optional[List[dict]] = None,
         ai_debaters: Optional[List[dict]] = None,
     ):
@@ -89,6 +101,18 @@ class RoomState:
         self.turn_speech_role = turn_speech_role
         self.turn_speech_timestamp = turn_speech_timestamp
         self.pending_advance_reason = pending_advance_reason
+        self.ai_turn_status = ai_turn_status
+        self.ai_turn_segment_id = ai_turn_segment_id
+        self.ai_turn_segment_title = ai_turn_segment_title
+        self.ai_turn_speaker_role = ai_turn_speaker_role
+        self.playback_gate_status = playback_gate_status
+        self.playback_gate_speech_id = playback_gate_speech_id
+        self.playback_gate_segment_id = playback_gate_segment_id
+        self.playback_gate_speaker_role = playback_gate_speaker_role
+        self.playback_gate_controller_user_id = playback_gate_controller_user_id
+        self.playback_gate_started_at = playback_gate_started_at
+        self.playback_gate_deadline_at = playback_gate_deadline_at
+        self.pending_post_playback_action = pending_post_playback_action
         self.participants = participants or []
         self.ai_debaters = ai_debaters or [
             {
@@ -156,6 +180,26 @@ class RoomState:
                 else None
             ),
             "pending_advance_reason": self.pending_advance_reason,
+            "ai_turn_status": self.ai_turn_status,
+            "ai_turn_segment_id": self.ai_turn_segment_id,
+            "ai_turn_segment_title": self.ai_turn_segment_title,
+            "ai_turn_speaker_role": self.ai_turn_speaker_role,
+            "playback_gate_status": self.playback_gate_status,
+            "playback_gate_speech_id": self.playback_gate_speech_id,
+            "playback_gate_segment_id": self.playback_gate_segment_id,
+            "playback_gate_speaker_role": self.playback_gate_speaker_role,
+            "playback_gate_controller_user_id": self.playback_gate_controller_user_id,
+            "playback_gate_started_at": (
+                self.playback_gate_started_at.isoformat()
+                if self.playback_gate_started_at
+                else None
+            ),
+            "playback_gate_deadline_at": (
+                self.playback_gate_deadline_at.isoformat()
+                if self.playback_gate_deadline_at
+                else None
+            ),
+            "pending_post_playback_action": self.pending_post_playback_action,
             "participants": self.participants,
             "ai_debaters": self.ai_debaters,
         }
@@ -436,6 +480,10 @@ class DebateRoomManager:
         room_state.segment_time_remaining = 0
         room_state.speaker_mode = None
         room_state.speaker_options = []
+        room_state.ai_turn_status = "idle"
+        room_state.ai_turn_segment_id = None
+        room_state.ai_turn_segment_title = None
+        room_state.ai_turn_speaker_role = None
 
         logger.info(f"Debate started in room {room_id}")
 
@@ -514,6 +562,18 @@ class DebateRoomManager:
         room_state.turn_speech_role = None
         room_state.turn_speech_timestamp = None
         room_state.pending_advance_reason = None
+        room_state.ai_turn_status = "idle"
+        room_state.ai_turn_segment_id = None
+        room_state.ai_turn_segment_title = None
+        room_state.ai_turn_speaker_role = None
+        room_state.playback_gate_status = "idle"
+        room_state.playback_gate_speech_id = None
+        room_state.playback_gate_segment_id = None
+        room_state.playback_gate_speaker_role = None
+        room_state.playback_gate_controller_user_id = None
+        room_state.playback_gate_started_at = None
+        room_state.playback_gate_deadline_at = None
+        room_state.pending_post_playback_action = None
 
         logger.info(f"Debate ended in room {room_id}")
 

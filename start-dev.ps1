@@ -9,8 +9,16 @@ $ErrorActionPreference = 'Stop'
 function Get-CommandPath {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$Name
+    [string]$Name,
+    [switch]$PreferCmdWrapper
   )
+
+  if ($PreferCmdWrapper -and $IsWindows) {
+    $cmdCommand = Get-Command "$Name.cmd" -ErrorAction SilentlyContinue
+    if ($cmdCommand) {
+      return $cmdCommand.Source
+    }
+  }
 
   return (Get-Command $Name -ErrorAction Stop).Source
 }
@@ -117,7 +125,7 @@ if (-not (Test-Path -LiteralPath $apiPython)) {
   $apiPython = Get-CommandPath -Name 'python'
 }
 
-$pnpmPath = Get-CommandPath -Name 'pnpm'
+$pnpmPath = Get-CommandPath -Name 'pnpm' -PreferCmdWrapper
 
 if (-not (Test-Path -LiteralPath (Join-Path $webDir 'node_modules'))) {
   Write-Warning "web\\node_modules not found. Run 'pnpm install' in the web directory if the frontend fails to start."

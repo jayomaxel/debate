@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DebateArena from './debate-arena';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -12,7 +12,13 @@ const websocketOffMock = vi.fn();
 const websocketSendMock = vi.fn();
 const toastMock = vi.fn();
 const debateControlsPropsSpy = vi.fn();
+const debateAudioControlPropsSpy = vi.fn();
 const pcmPlayerInstances: MockPcmStreamPlayer[] = [];
+type MockPcmPlayerOptions = {
+  onPlaybackStateChange?: (isPlaying: boolean) => void;
+  onStreamPlaybackStart?: (speechId: string) => void;
+  onStreamPlaybackComplete?: (speechId: string) => void;
+};
 
 vi.mock('./debate-header', () => ({
   default: () => <div data-testid="debate-header" />,
@@ -41,7 +47,10 @@ vi.mock('./debate-controls', () => ({
 }));
 
 vi.mock('./debate-audio-control', () => ({
-  default: () => <div data-testid="debate-audio-control" />,
+  default: (props: any) => {
+    debateAudioControlPropsSpy(props);
+    return <div data-testid="debate-audio-control" />;
+  },
 }));
 
 vi.mock('@/hooks/use-websocket', () => ({
@@ -69,8 +78,14 @@ vi.mock('@/lib/pcm-stream-player', () => ({
     endStream = vi.fn();
     stop = vi.fn();
     dispose = vi.fn();
+    onPlaybackStateChange?: (isPlaying: boolean) => void;
+    onStreamPlaybackStart?: (speechId: string) => void;
+    onStreamPlaybackComplete?: (speechId: string) => void;
 
-    constructor() {
+    constructor(options: MockPcmPlayerOptions = {}) {
+      this.onPlaybackStateChange = options.onPlaybackStateChange;
+      this.onStreamPlaybackStart = options.onStreamPlaybackStart;
+      this.onStreamPlaybackComplete = options.onStreamPlaybackComplete;
       pcmPlayerInstances.push(this);
     }
   },
@@ -82,6 +97,15 @@ class MockPcmStreamPlayer {
   endStream = vi.fn();
   stop = vi.fn();
   dispose = vi.fn();
+  onPlaybackStateChange?: (isPlaying: boolean) => void;
+  onStreamPlaybackStart?: (speechId: string) => void;
+  onStreamPlaybackComplete?: (speechId: string) => void;
+
+  constructor(options: MockPcmPlayerOptions = {}) {
+    this.onPlaybackStateChange = options.onPlaybackStateChange;
+    this.onStreamPlaybackStart = options.onStreamPlaybackStart;
+    this.onStreamPlaybackComplete = options.onStreamPlaybackComplete;
+  }
 }
 
 describe('DebateArena', () => {
@@ -201,5 +225,138 @@ describe('DebateArena', () => {
     expect(pcmPlayer.startStream).not.toHaveBeenCalled();
     expect(pcmPlayer.appendChunk).not.toHaveBeenCalled();
     expect(pcmPlayer.endStream).not.toHaveBeenCalled();
+  });
+
+  it('should show ai turn status and block grab mic while ai is thinking in free debate', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const stateUpdateHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'state_update'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    expect(stateUpdateHandler).toBeTypeOf('function');
+
+    act(() => {
+      stateUpdateHandler?.({
+        current_phase: 'free_debate',
+        speaker_mode: 'free',
+        free_debate_next_side: 'ai',
+        ai_turn_status: 'thinking',
+        ai_turn_segment_title: '自由辩论',
+        ai_turn_speaker_role: 'ai_2',
+        participants: [
+          {
+            user_id: 'user-001',
+            role: 'debater_1',
+            name: '测试学生',
+          },
+        ],
+        ai_debaters: [
+          {
+            id: 'ai_2',
+            name: 'AI二辩',
+          },
+        ],
+      });
+    });
+
+    expect(screen.getAllByText('AI思考中')).toHaveLength(2);
+    expect(screen.getByText('AI二辩 正在基于最新发言准备回应')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(debateAudioControlPropsSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          canGrabMic: false,
+          micStatusText: 'AI二辩 正在基于最新发言准备回应',
+        })
+      );
+    });
+  });
+
+  it('should send speech playback finished event when debate controls reports ai audio completion', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const debateControlsProps = debateControlsPropsSpy.mock.lastCall?.[0];
+    expect(debateControlsProps).toBeTruthy();
+
+    act(() => {
+      debateControlsProps.onSpeechPlaybackEvent?.({
+        status: 'finished',
+        speechId: 'speech-ai-001',
+        segmentId: 'opening_negative_1',
+        speakerRole: 'ai_1',
+        source: 'audio_element',
+      });
+    });
+
+    expect(websocketSendMock).toHaveBeenCalledWith(
+      'speech_playback_finished',
+      expect.objectContaining({
+        speech_id: 'speech-ai-001',
+        segment_id: 'opening_negative_1',
+        speaker_role: 'ai_1',
+        playback_source: 'audio_element',
+      })
+    );
+  });
+
+  it('should send stream playback events when pcm player reports ai speech playback lifecycle', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const speechHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'speech'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    expect(speechHandler).toBeTypeOf('function');
+    expect(pcmPlayerInstances).toHaveLength(1);
+
+    act(() => {
+      speechHandler?.({
+        speech_id: 'speech-ai-stream-001',
+        role: 'ai_2',
+        name: 'AI二辩',
+        content: '这是流式 AI 发言',
+        phase: 'opening',
+        segment_id: 'opening_negative_1',
+        segment_title: '立论阶段：反方一辩',
+      });
+    });
+
+    const pcmPlayer = pcmPlayerInstances[0];
+    act(() => {
+      pcmPlayer.onStreamPlaybackStart?.('speech-ai-stream-001');
+      pcmPlayer.onStreamPlaybackComplete?.('speech-ai-stream-001');
+    });
+
+    expect(websocketSendMock).toHaveBeenCalledWith(
+      'speech_playback_started',
+      expect.objectContaining({
+        speech_id: 'speech-ai-stream-001',
+        segment_id: 'opening_negative_1',
+        speaker_role: 'ai_2',
+        playback_source: 'stream',
+      })
+    );
+    expect(websocketSendMock).toHaveBeenCalledWith(
+      'speech_playback_finished',
+      expect.objectContaining({
+        speech_id: 'speech-ai-stream-001',
+        segment_id: 'opening_negative_1',
+        speaker_role: 'ai_2',
+        playback_source: 'stream',
+      })
+    );
   });
 });

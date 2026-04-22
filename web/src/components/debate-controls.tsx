@@ -17,6 +17,14 @@ import {
   Send
 } from 'lucide-react';
 
+interface SpeechPlaybackEventPayload {
+  status: 'started' | 'finished' | 'failed';
+  speechId?: string;
+  segmentId?: string;
+  speakerRole?: string;
+  source: 'audio_element' | 'manual_audio';
+}
+
 interface DebateControlsProps {
   canSpeak?: boolean;
   onSendMessage?: (message: string) => void;
@@ -28,11 +36,15 @@ interface DebateControlsProps {
   onAutoPlayEnabledChange?: (enabled: boolean) => void;
   externalPlaybackLock?: boolean;
   suppressAutoPlayEntryIds?: string[];
+  onSpeechPlaybackEvent?: (payload: SpeechPlaybackEventPayload) => void;
 }
 
 interface AutoPlayQueueItem {
   key: string;
   url: string;
+  speechId?: string;
+  segmentId?: string;
+  speakerRole?: string;
 }
 
 const DebateControls: React.FC<DebateControlsProps> = ({
@@ -46,6 +58,7 @@ const DebateControls: React.FC<DebateControlsProps> = ({
   onAutoPlayEnabledChange,
   externalPlaybackLock = false,
   suppressAutoPlayEntryIds = [],
+  onSpeechPlaybackEvent,
 }) => {
   const [newMessage, setNewMessage] = useState('');
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -97,7 +110,13 @@ const DebateControls: React.FC<DebateControlsProps> = ({
       if (queuedAudioKeysRef.current.has(queueKey)) continue;
       if (currentAutoPlayItem?.key === queueKey) continue;
       queuedAudioKeysRef.current.add(queueKey);
-      newQueueItems.push({ key: queueKey, url: entry.audioUrl });
+      newQueueItems.push({
+        key: queueKey,
+        url: entry.audioUrl,
+        speechId: entry.speechId,
+        segmentId: entry.segmentId,
+        speakerRole: entry.speakerRole,
+      });
     }
     if (newQueueItems.length === 0) return;
     audioPlaybackDebug('DebateControls', '新增自动播放队列项', {
@@ -182,6 +201,17 @@ const DebateControls: React.FC<DebateControlsProps> = ({
     }
   };
 
+  const emitSpeechPlaybackEvent = (
+    payload: Omit<SpeechPlaybackEventPayload, 'source'> & {
+      source: SpeechPlaybackEventPayload['source'];
+    }
+  ) => {
+    if (!payload.speechId) {
+      return;
+    }
+    onSpeechPlaybackEvent?.(payload);
+  };
+
   const registerVisibleAudio = (entryId: string, element: HTMLAudioElement | null) => {
     if (element) {
       audioPlaybackDebug('DebateControls', '注册可见 audio 控件', {
@@ -226,7 +256,8 @@ const DebateControls: React.FC<DebateControlsProps> = ({
     });
   }, [transcript]);
 
-  const handleVisibleAudioPlay = (entryId: string) => {
+  const handleVisibleAudioPlay = (entry: TranscriptEntry) => {
+    const entryId = entry.id;
     if (externalPlaybackLock) {
       audioPlaybackDebug('DebateControls', '手动点播被流式 TTS 锁拦截', {
         entryId,
@@ -246,6 +277,13 @@ const DebateControls: React.FC<DebateControlsProps> = ({
       setCurrentAutoPlayItem(null);
     }
     pauseVisibleAudios(entryId);
+    emitSpeechPlaybackEvent({
+      status: 'started',
+      speechId: entry.speechId,
+      segmentId: entry.segmentId,
+      speakerRole: entry.speakerRole,
+      source: 'manual_audio',
+    });
   };
 
   const handleVisibleAudioStop = (entryId: string) => {
@@ -324,9 +362,28 @@ const DebateControls: React.FC<DebateControlsProps> = ({
                             controls 
                             preload="metadata" 
                             src={entry.audioUrl} 
-                            onPlay={() => handleVisibleAudioPlay(entry.id)}
+                            onPlay={() => handleVisibleAudioPlay(entry)}
                             onPause={() => handleVisibleAudioStop(entry.id)}
-                            onEnded={() => handleVisibleAudioStop(entry.id)}
+                            onEnded={() => {
+                              emitSpeechPlaybackEvent({
+                                status: 'finished',
+                                speechId: entry.speechId,
+                                segmentId: entry.segmentId,
+                                speakerRole: entry.speakerRole,
+                                source: 'manual_audio',
+                              });
+                              handleVisibleAudioStop(entry.id);
+                            }}
+                            onError={() => {
+                              emitSpeechPlaybackEvent({
+                                status: 'failed',
+                                speechId: entry.speechId,
+                                segmentId: entry.segmentId,
+                                speakerRole: entry.speakerRole,
+                                source: 'manual_audio',
+                              });
+                              handleVisibleAudioStop(entry.id);
+                            }}
                             className="w-full h-8 rounded opacity-90 hover:opacity-100 transition-opacity" 
                           />
                         </div>
@@ -341,12 +398,26 @@ const DebateControls: React.FC<DebateControlsProps> = ({
                       currentAutoPlayKey: currentAutoPlayItem?.key || null,
                       audio: getAudioElementDebugSnapshot(autoPlayAudioRef.current),
                     });
+                    emitSpeechPlaybackEvent({
+                      status: 'finished',
+                      speechId: currentAutoPlayItem?.speechId,
+                      segmentId: currentAutoPlayItem?.segmentId,
+                      speakerRole: currentAutoPlayItem?.speakerRole,
+                      source: 'audio_element',
+                    });
                     setCurrentAutoPlayItem(null);
                   }}
                   onError={() => {
                     audioPlaybackDebug('DebateControls', '隐藏自动播放器播放失败', {
                       currentAutoPlayKey: currentAutoPlayItem?.key || null,
                       audio: getAudioElementDebugSnapshot(autoPlayAudioRef.current),
+                    });
+                    emitSpeechPlaybackEvent({
+                      status: 'failed',
+                      speechId: currentAutoPlayItem?.speechId,
+                      segmentId: currentAutoPlayItem?.segmentId,
+                      speakerRole: currentAutoPlayItem?.speakerRole,
+                      source: 'audio_element',
                     });
                     setCurrentAutoPlayItem(null);
                   }}
@@ -356,6 +427,13 @@ const DebateControls: React.FC<DebateControlsProps> = ({
                       audio: getAudioElementDebugSnapshot(autoPlayAudioRef.current),
                     });
                     pauseVisibleAudios();
+                    emitSpeechPlaybackEvent({
+                      status: 'started',
+                      speechId: currentAutoPlayItem?.speechId,
+                      segmentId: currentAutoPlayItem?.segmentId,
+                      speakerRole: currentAutoPlayItem?.speakerRole,
+                      source: 'audio_element',
+                    });
                   }}
                   preload="auto"
                   className="hidden"

@@ -29,8 +29,16 @@ function Write-Note {
 function Get-CommandPathOrNull {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$Name
+    [string]$Name,
+    [switch]$PreferCmdWrapper
   )
+
+  if ($PreferCmdWrapper -and (Test-IsWindowsHost)) {
+    $cmdCommand = Get-Command "$Name.cmd" -ErrorAction SilentlyContinue
+    if ($cmdCommand) {
+      return $cmdCommand.Source
+    }
+  }
 
   $command = Get-Command $Name -ErrorAction SilentlyContinue
   if ($null -eq $command) {
@@ -147,12 +155,12 @@ function Ensure-Pnpm {
     [string]$PackageJsonPath
   )
 
-  $pnpmPath = Get-CommandPathOrNull -Name 'pnpm'
+  $pnpmPath = Get-CommandPathOrNull -Name 'pnpm' -PreferCmdWrapper
   if ($pnpmPath) {
     return $pnpmPath
   }
 
-  $corepackPath = Get-CommandPathOrNull -Name 'corepack'
+  $corepackPath = Get-CommandPathOrNull -Name 'corepack' -PreferCmdWrapper
   if (-not $corepackPath) {
     throw "pnpm was not found, and corepack is unavailable. Install Node.js 18+ or pnpm manually."
   }
@@ -163,7 +171,7 @@ function Ensure-Pnpm {
   Invoke-ExternalCommand -FilePath $corepackPath -ArgumentList @('enable')
   Invoke-ExternalCommand -FilePath $corepackPath -ArgumentList @('prepare', $pnpmSpec, '--activate')
 
-  $pnpmPath = Get-CommandPathOrNull -Name 'pnpm'
+  $pnpmPath = Get-CommandPathOrNull -Name 'pnpm' -PreferCmdWrapper
   if (-not $pnpmPath) {
     throw "pnpm is still unavailable after corepack activation."
   }

@@ -111,6 +111,38 @@ class ConfigService:
         with self._cache_lock:
             self._config_cache[cache_key] = payload
 
+    @staticmethod
+    def _normalize_coze_parameters(
+        parameters: Optional[dict],
+        existing_parameters: Optional[dict] = None,
+    ) -> dict:
+        """
+        归一化 Coze 参数，确保 base_url 与 AI 回合策略始终存在。
+        """
+        normalized: dict = {}
+        if isinstance(existing_parameters, dict):
+            normalized.update(deepcopy(existing_parameters))
+        if isinstance(parameters, dict):
+            normalized.update(deepcopy(parameters))
+
+        default_base_url = (settings.COZE_BASE_URL or "").strip()
+        base_url = str(normalized.get("base_url") or "").strip() or default_base_url
+        if base_url:
+            normalized["base_url"] = base_url
+
+        merged_ai_turns = deepcopy(CozeConfigModel.get_default_ai_turns())
+        configured_ai_turns = normalized.get("ai_turns")
+        if isinstance(configured_ai_turns, dict):
+            for key, value in configured_ai_turns.items():
+                if isinstance(value, dict) and isinstance(merged_ai_turns.get(key), dict):
+                    merged_value = deepcopy(merged_ai_turns.get(key) or {})
+                    merged_value.update(deepcopy(value))
+                    merged_ai_turns[key] = merged_value
+                else:
+                    merged_ai_turns[key] = deepcopy(value)
+        normalized["ai_turns"] = merged_ai_turns
+        return normalized
+
     @classmethod
     def invalidate_cache(cls, model_cls: Optional[Type[ConfigModelT]] = None) -> None:
         """
@@ -599,6 +631,14 @@ class ConfigService:
         try:
             cached_config = self._get_cached_config(CozeConfigModel)
             if cached_config is not None:
+                normalized_parameters = self._normalize_coze_parameters(
+                    getattr(cached_config, "parameters", None)
+                )
+                if normalized_parameters != (
+                    getattr(cached_config, "parameters", None) or {}
+                ):
+                    cached_config.parameters = normalized_parameters
+                    self._set_cached_config(cached_config)
                 logger.debug("命中Coze配置缓存")
                 return cached_config
 
@@ -607,6 +647,13 @@ class ConfigService:
             ).scalar_one_or_none()
 
             if config:
+                normalized_parameters = self._normalize_coze_parameters(
+                    getattr(config, "parameters", None)
+                )
+                if normalized_parameters != (getattr(config, "parameters", None) or {}):
+                    config.parameters = normalized_parameters
+                    self.db.commit()
+                    self.db.refresh(config)
                 self._set_cached_config(config)
                 logger.info("获取Coze配置成功")
                 return config
@@ -614,7 +661,9 @@ class ConfigService:
             logger.info("数据库中无Coze配置，使用环境变量创建默认配置")
             default_config = CozeConfigModel(
                 api_token=settings.COZE_API_KEY or "",
-                parameters={"base_url": settings.COZE_BASE_URL},
+                parameters=self._normalize_coze_parameters(
+                    {"base_url": settings.COZE_BASE_URL}
+                ),
             )
             self.db.add(default_config)
             self.db.commit()
@@ -656,7 +705,7 @@ class ConfigService:
                     judge_bot_id=judge_bot_id or "",
                     mentor_bot_id=mentor_bot_id or "",
                     api_token=api_token or "",
-                    parameters=parameters or {},
+                    parameters=self._normalize_coze_parameters(parameters),
                 )
                 self.db.add(config)
                 logger.info("创建新的Coze配置")
@@ -676,7 +725,14 @@ class ConfigService:
                 if api_token is not None:
                     config.api_token = api_token
                 if parameters is not None:
-                    config.parameters = parameters
+                    config.parameters = self._normalize_coze_parameters(
+                        parameters,
+                        getattr(config, "parameters", None),
+                    )
+                else:
+                    config.parameters = self._normalize_coze_parameters(
+                        getattr(config, "parameters", None)
+                    )
                 logger.info("更新Coze配置")
 
             self.db.commit()

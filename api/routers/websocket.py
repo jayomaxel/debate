@@ -85,6 +85,23 @@ def _extract_transcription_text_and_duration(transcription_result) -> tuple[str,
     return text, int(duration or 0)
 
 
+async def _notify_committed_speech(
+    room_id: str,
+    *,
+    speech: Speech | None,
+    speaker_role: str | None,
+    segment_id: str | None,
+) -> None:
+    if not speech or not getattr(speech, "id", None):
+        return
+    await flow_controller.notify_speech_committed(
+        room_id,
+        speech_id=str(speech.id),
+        speaker_role=str(speaker_role or ""),
+        segment_id=str(segment_id or ""),
+    )
+
+
 @router.websocket("/debate/{room_id}")
 async def websocket_debate_endpoint(
     websocket: WebSocket,
@@ -199,6 +216,21 @@ async def websocket_debate_endpoint(
 
             elif message_type == "end_debate":
                 await handle_end_debate_message(room_id, user_id, message_data, db)
+
+            elif message_type == "speech_playback_started":
+                await handle_speech_playback_started_message(
+                    room_id, user_id, message_data, db
+                )
+
+            elif message_type == "speech_playback_finished":
+                await handle_speech_playback_finished_message(
+                    room_id, user_id, message_data, db
+                )
+
+            elif message_type == "speech_playback_failed":
+                await handle_speech_playback_failed_message(
+                    room_id, user_id, message_data, db
+                )
 
             elif message_type == "ping":
                 # 心跳消息
@@ -329,6 +361,7 @@ async def handle_speech_message(
             )
             return
 
+    speech = None
     try:
         debate_uuid = uuid.UUID(str(room_state.debate_id))
         speaker_uuid = uuid.UUID(str(user_id))
@@ -410,6 +443,13 @@ async def handle_speech_message(
             pending = latest_state.pending_advance_reason
             await room_manager.update_room_state(room_id, pending_advance_reason=None)
             await flow_controller.force_advance_segment(room_id, reason=str(pending))
+
+    await _notify_committed_speech(
+        room_id,
+        speech=speech,
+        speaker_role=str(user_role),
+        segment_id=str(segment_id or ""),
+    )
 
     logger.info(f"Speech broadcast in room {room_id} from user {user_id}")
 
@@ -966,6 +1006,12 @@ async def handle_audio_message(
             turn_speech_role=str(user_role),
             turn_speech_timestamp=(datetime.utcnow() + timedelta(hours=8)),
         )
+        await _notify_committed_speech(
+            room_id,
+            speech=speech,
+            speaker_role=str(user_role),
+            segment_id=str(segment_id or ""),
+        )
         latest_state = room_manager.get_room_state(room_id)
         if (
             not is_free_debate
@@ -1207,6 +1253,33 @@ async def handle_end_debate_message(
                 },
             },
         )
+
+
+async def handle_speech_playback_started_message(
+    room_id: str,
+    user_id: str,
+    data: dict,
+    db: Session,
+) -> None:
+    await flow_controller.handle_speech_playback_started(room_id, user_id, data or {})
+
+
+async def handle_speech_playback_finished_message(
+    room_id: str,
+    user_id: str,
+    data: dict,
+    db: Session,
+) -> None:
+    await flow_controller.handle_speech_playback_finished(room_id, user_id, data or {})
+
+
+async def handle_speech_playback_failed_message(
+    room_id: str,
+    user_id: str,
+    data: dict,
+    db: Session,
+) -> None:
+    await flow_controller.handle_speech_playback_failed(room_id, user_id, data or {})
 
 
 async def handle_end_turn_message(

@@ -61,6 +61,26 @@ class CozeConfig(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     @classmethod
+    def get_default_ai_turns(cls) -> dict:
+        """返回 AI 回合时序策略默认配置。"""
+        return {
+            "default": {
+                "prethinking_mode": "reactive",
+                "response_delay_sec": 2,
+                "thinking_timeout_sec": 20,
+                "draft_ttl_sec": 120,
+            },
+            "opening_negative_1": {
+                "prethinking_mode": "eager",
+                "response_delay_sec": 3,
+            },
+            "questioning_1_ai2_ask": {
+                "prethinking_mode": "eager",
+                "response_delay_sec": 2,
+            },
+        }
+
+    @classmethod
     def get_default(cls):
         """返回默认配置"""
         return cls(
