@@ -56,6 +56,16 @@ temp/
 backups/
 *.bak
 *.backup
+*.patch
+readme(*).md
+技术脚本(*).md
+
+# Local repair/probe worktrees
+_codex_gitdir/
+_git_probe_*/
+_git_repaired_*/
+.cleanup-trash/
+cpolar-stable-windows-amd64-setup/
 
 # Docker
 docker-compose*.yml
@@ -69,6 +79,11 @@ api/uploads/
 *.db
 *.sqlite
 *.sqlite3
+
+# Archives and binary source bundles
+*.tar.gz
+*.tgz
+*.zip
 
 # Cache
 .mypy_cache/

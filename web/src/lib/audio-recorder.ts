@@ -39,7 +39,7 @@ class AudioRecorder {
   async startRecording(): Promise<void> {
     try {
       // 请求麦克风权限
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -47,6 +47,7 @@ class AudioRecorder {
           channelCount: 1,
         },
       });
+      this.stream = stream;
 
       const AudioContextCtor =
         (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -54,26 +55,30 @@ class AudioRecorder {
         throw new Error('AudioContext is not supported');
       }
 
-      this.audioContext = new AudioContextCtor();
-      this.recordedSampleRate = this.audioContext.sampleRate;
+      const audioContext = new AudioContextCtor();
+      this.audioContext = audioContext;
+      this.recordedSampleRate = audioContext.sampleRate;
 
-      this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
-      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
-      this.silentGainNode = this.audioContext.createGain();
-      this.silentGainNode.gain.value = 0;
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+      const silentGainNode = audioContext.createGain();
+      this.sourceNode = sourceNode;
+      this.processorNode = processorNode;
+      this.silentGainNode = silentGainNode;
+      silentGainNode.gain.value = 0;
 
       this.pcmChunks = [];
       this.isPaused = false;
 
-      this.processorNode.onaudioprocess = (event) => {
+      processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
         if (!this.isRecording || this.isPaused) return;
         const input = event.inputBuffer.getChannelData(0);
         this.pcmChunks.push(new Float32Array(input));
       };
 
-      this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.silentGainNode);
-      this.silentGainNode.connect(this.audioContext.destination);
+      sourceNode.connect(processorNode);
+      processorNode.connect(silentGainNode);
+      silentGainNode.connect(audioContext.destination);
 
       this.isRecording = true;
 

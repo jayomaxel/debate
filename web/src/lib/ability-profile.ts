@@ -1,24 +1,30 @@
-export interface AbilityProfileVisibilityArgs {
-  completedDebates: number | null | undefined;
-  skillValues: Array<number | null | undefined>;
-  isDefaultAssessment?: boolean;
+type AbilityValue = number | null | undefined;
+
+export interface AbilityPortraitOptions {
+  completedDebates?: number | null;
+  skillValues?: AbilityValue[];
+  isDefaultAssessment?: boolean | null;
 }
 
-export const hasRecordedAbilityValues = (
-  skillValues: Array<number | null | undefined>
-): boolean => skillValues.some((value) => typeof value === 'number');
+const isRecordedAbilityValue = (value: AbilityValue): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
 
-export const hasCompleteAbilityValues = (
-  skillValues: Array<number | null | undefined>
-): boolean =>
-  skillValues.length > 0 &&
-  skillValues.every((value) => typeof value === 'number');
+export const hasRecordedAbilityValues = (values: AbilityValue[]): boolean =>
+  values.some(isRecordedAbilityValue);
+
+export const hasCompleteAbilityValues = (values: AbilityValue[]): boolean =>
+  values.length > 0 && values.every(isRecordedAbilityValue);
 
 export const shouldRenderAbilityPortrait = ({
-  completedDebates,
-  skillValues,
+  completedDebates = 0,
+  skillValues = [],
   isDefaultAssessment = false,
-}: AbilityProfileVisibilityArgs): boolean =>
-  (completedDebates ?? 0) > 0 &&
-  !isDefaultAssessment &&
-  hasRecordedAbilityValues(skillValues);
+}: AbilityPortraitOptions): boolean => {
+  const normalizedCompletedDebates = completedDebates ?? 0;
+
+  return (
+    normalizedCompletedDebates > 0 &&
+    !isDefaultAssessment &&
+    hasRecordedAbilityValues(skillValues)
+  );
+};

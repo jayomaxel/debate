@@ -42,8 +42,9 @@ const SkillsAssessmentEditor: React.FC<SkillsAssessmentEditorProps> = ({
     </CardHeader>
     <CardContent className="space-y-6">
       {skills.map((skill) => {
-        const hasValue = typeof skill.value === 'number';
-        const currentValue = hasValue ? normalizeValue(skill.value) : 0;
+        const rawValue = skill.value;
+        const hasValue = typeof rawValue === 'number';
+        const currentValue = hasValue ? normalizeValue(rawValue) : 0;
         const level = hasValue ? getSkillLevel(currentValue) : null;
 
         return (

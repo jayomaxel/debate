@@ -31,18 +31,33 @@ const STORAGE_KEYS = {
   USER_INFO: 'user_info',
 } as const;
 
+const getSessionTokenStorage = (): Storage | null => {
+  if (typeof window === 'undefined') return null;
+  return window.sessionStorage;
+};
+
+const getPersistentTokenStorage = (): Storage | null => {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage;
+};
+
 class TokenManager {
   /**
    * 存储token数据
    */
   static setTokens(tokenData: TokenData): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokenData.access_token);
-      localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokenData.refresh_token);
+      const sessionStorage = getSessionTokenStorage();
+      const persistentStorage = getPersistentTokenStorage();
+
+      sessionStorage?.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokenData.access_token);
+      persistentStorage?.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+      persistentStorage?.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokenData.refresh_token);
       
       // 计算过期时间戳（当前时间 + expires_in秒）
       const expiresAt = Date.now() + tokenData.expires_in * 1000;
-      localStorage.setItem(STORAGE_KEYS.TOKEN_EXPIRES_AT, expiresAt.toString());
+      sessionStorage?.setItem(STORAGE_KEYS.TOKEN_EXPIRES_AT, expiresAt.toString());
+      persistentStorage?.removeItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
     } catch (error) {
       console.error('Failed to store tokens:', error);
       throw new Error('无法存储认证信息');
@@ -54,7 +69,11 @@ class TokenManager {
    */
   static getAccessToken(): string | null {
     try {
-      return localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+      return (
+        getSessionTokenStorage()?.getItem(STORAGE_KEYS.ACCESS_TOKEN) ||
+        getPersistentTokenStorage()?.getItem(STORAGE_KEYS.ACCESS_TOKEN) ||
+        null
+      );
     } catch (error) {
       console.error('Failed to get access token:', error);
       return null;
@@ -66,7 +85,7 @@ class TokenManager {
    */
   static getRefreshToken(): string | null {
     try {
-      return localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      return getPersistentTokenStorage()?.getItem(STORAGE_KEYS.REFRESH_TOKEN) || null;
     } catch (error) {
       console.error('Failed to get refresh token:', error);
       return null;
@@ -114,9 +133,11 @@ class TokenManager {
    */
   static clearTokens(): void {
     try {
-      localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
+      getSessionTokenStorage()?.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+      getSessionTokenStorage()?.removeItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
+      getPersistentTokenStorage()?.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+      getPersistentTokenStorage()?.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+      getPersistentTokenStorage()?.removeItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
     } catch (error) {
       console.error('Failed to clear tokens:', error);
     }
@@ -127,7 +148,9 @@ class TokenManager {
    */
   static isTokenExpired(): boolean {
     try {
-      const expiresAt = localStorage.getItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
+      const expiresAt =
+        getSessionTokenStorage()?.getItem(STORAGE_KEYS.TOKEN_EXPIRES_AT) ||
+        getPersistentTokenStorage()?.getItem(STORAGE_KEYS.TOKEN_EXPIRES_AT);
       
       if (!expiresAt) {
         return true;

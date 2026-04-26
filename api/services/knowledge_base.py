@@ -1,8 +1,10 @@
-"""
-知识库管理服务
-处理文档上传、文本提取、向量生成和检索
+﻿"""
+鐭ヨ瘑搴撶鐞嗘湇鍔?
+澶勭悊鏂囨。涓婁紶銆佹枃鏈彁鍙栥€佸悜閲忕敓鎴愬拰妫€绱?
 """
 import os
+import json
+import math
 from logging_config import get_logger
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -19,18 +21,59 @@ logger = get_logger(__name__)
 
 
 class KnowledgeBase:
-    """知识库管理类"""
+    """鐭ヨ瘑搴撶鐞嗙被"""
     
     def __init__(self, db: Session):
         """
-        初始化知识库
+        鍒濆鍖栫煡璇嗗簱
         
         Args:
-            db: 数据库会话
+            db: 鏁版嵁搴撲細璇?
         """
         self.db = db
         self.upload_dir = os.getenv("UPLOAD_DIR", "uploads/documents")
         os.makedirs(self.upload_dir, exist_ok=True)
+
+    def _is_postgresql(self) -> bool:
+        return self.db.bind is not None and self.db.bind.dialect.name == "postgresql"
+
+    def _ensure_embedding_store(self, dimension: int) -> None:
+        if self._is_postgresql():
+            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            self.db.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    document_id UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    embedding vector({int(dimension)}) NOT NULL,
+                    embedding_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            self.db.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_document_embeddings_vector
+                ON document_embeddings USING ivfflat (embedding vector_cosine_ops)
+            """))
+        else:
+            self.db.execute(text("""
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    document_id VARCHAR(64) PRIMARY KEY,
+                    embedding_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        self.db.commit()
+
+    @staticmethod
+    def _cosine_similarity(left: List[float], right: List[float]) -> float:
+        if not left or not right or len(left) != len(right):
+            return 0.0
+        dot = sum(a * b for a, b in zip(left, right))
+        left_norm = math.sqrt(sum(a * a for a in left))
+        right_norm = math.sqrt(sum(b * b for b in right))
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return dot / (left_norm * right_norm)
     
     async def upload_document(
         self,
@@ -40,46 +83,46 @@ class KnowledgeBase:
         debate_id: str
     ) -> Document:
         """
-        上传文档
+        涓婁紶鏂囨。
         
         Args:
-            file_data: 文件数据
-            filename: 文件名
-            file_type: 文件类型（application/pdf 或 application/vnd.openxmlformats-officedocument.wordprocessingml.document）
-            debate_id: 辩论ID
+            file_data: 鏂囦欢鏁版嵁
+            filename: 鏂囦欢鍚?
+            file_type: 鏂囦欢绫诲瀷锛坅pplication/pdf 鎴?application/vnd.openxmlformats-officedocument.wordprocessingml.document锛?
+            debate_id: 杈╄ID
             
         Returns:
-            Document对象
+            Document瀵硅薄
         """
         try:
-            # 验证文件类型
+            # 楠岃瘉鏂囦欢绫诲瀷
             allowed_types = [
                 "application/pdf",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             ]
             if file_type not in allowed_types:
-                raise ValueError(f"不支持的文件类型: {file_type}")
+                raise ValueError(f"涓嶆敮鎸佺殑鏂囦欢绫诲瀷: {file_type}")
             
-            # 验证文件大小（最大10MB）
+            # 楠岃瘉鏂囦欢澶у皬锛堟渶澶?0MB锛?
             max_size = 10 * 1024 * 1024
             if len(file_data) > max_size:
-                raise ValueError(f"文件大小超过限制（最大10MB）")
+                raise ValueError("文件大小超过限制（最大10MB）")
             
-            # 生成文件路径
+            # 鐢熸垚鏂囦欢璺緞
             timestamp = datetime.utcnow().timestamp()
             safe_filename = f"{debate_id}_{timestamp}_{filename}"
             file_path = os.path.join(self.upload_dir, safe_filename)
             
-            # 保存文件
+            # 淇濆瓨鏂囦欢
             with open(file_path, 'wb') as f:
                 f.write(file_data)
             
             logger.info(f"Document saved: {file_path}")
             
-            # 提取文本内容
+            # 鎻愬彇鏂囨湰鍐呭
             content = await self.extract_text(file_path, file_type)
             
-            # 创建文档记录
+            # 鍒涘缓鏂囨。璁板綍
             document = Document(
                 debate_id=debate_id,
                 filename=filename,
@@ -93,11 +136,11 @@ class KnowledgeBase:
             self.db.commit()
             self.db.refresh(document)
             
-            # 异步生成向量（标记为processing）
+            # 寮傛鐢熸垚鍚戦噺锛堟爣璁颁负processing锛?
             document.embedding_status = "processing"
             self.db.commit()
             
-            # 生成并存储向量
+            # 鐢熸垚骞跺瓨鍌ㄥ悜閲?
             try:
                 await self.generate_and_store_embeddings(document)
                 document.embedding_status = "completed"
@@ -115,14 +158,14 @@ class KnowledgeBase:
     
     async def extract_text(self, file_path: str, file_type: str) -> str:
         """
-        从文件中提取文本内容
+        浠庢枃浠朵腑鎻愬彇鏂囨湰鍐呭
         
         Args:
-            file_path: 文件路径
-            file_type: 文件类型
+            file_path: 鏂囦欢璺緞
+            file_type: 鏂囦欢绫诲瀷
             
         Returns:
-            提取的文本内容
+            鎻愬彇鐨勬枃鏈唴瀹?
         """
         try:
             if file_type == "application/pdf":
@@ -136,7 +179,7 @@ class KnowledgeBase:
             raise
     
     async def _extract_text_from_pdf(self, file_path: str) -> str:
-        """从PDF文件提取文本"""
+        """浠嶱DF鏂囦欢鎻愬彇鏂囨湰"""
         try:
             text_content = []
             
@@ -159,7 +202,7 @@ class KnowledgeBase:
             raise
     
     async def _extract_text_from_docx(self, file_path: str) -> str:
-        """从Word文档提取文本"""
+        """浠嶹ord鏂囨。鎻愬彇鏂囨湰"""
         try:
             doc = docx.Document(file_path)
             
@@ -179,23 +222,23 @@ class KnowledgeBase:
     
     async def generate_embeddings(self, text: str) -> List[float]:
         """
-        生成文本的语义向量
+        鐢熸垚鏂囨湰鐨勮涔夊悜閲?
         
         Args:
-            text: 文本内容
+            text: 鏂囨湰鍐呭
             
         Returns:
-            向量列表
+            鍚戦噺鍒楄〃
         """
         try:
-            # 获取OpenAI配置
+            # 鑾峰彇OpenAI閰嶇疆
             config_service = ConfigService(self.db)
             model_config = await config_service.get_model_config()
             
             if not model_config or not model_config.api_key:
                 raise ValueError("OpenAI API key not configured")
             
-            # 分块处理长文本（OpenAI embeddings API限制8191 tokens）
+            # 鍒嗗潡澶勭悊闀挎枃鏈紙OpenAI embeddings API闄愬埗8191 tokens锛?
             chunks = self._split_text_into_chunks(text, max_length=8000)
             
             all_embeddings = []
@@ -223,7 +266,7 @@ class KnowledgeBase:
                         logger.error(error_msg)
                         raise Exception(error_msg)
             
-            # 如果有多个chunk，返回第一个（或可以计算平均值）
+            # 濡傛灉鏈夊涓猚hunk锛岃繑鍥炵涓€涓紙鎴栧彲浠ヨ绠楀钩鍧囧€硷級
             return all_embeddings[0] if all_embeddings else []
             
         except Exception as e:
@@ -232,14 +275,14 @@ class KnowledgeBase:
     
     def _split_text_into_chunks(self, text: str, max_length: int = 8000) -> List[str]:
         """
-        将长文本分割成多个块
+        灏嗛暱鏂囨湰鍒嗗壊鎴愬涓潡
         
         Args:
-            text: 文本内容
-            max_length: 每块的最大长度
+            text: 鏂囨湰鍐呭
+            max_length: 姣忓潡鐨勬渶澶ч暱搴?
             
         Returns:
-            文本块列表
+            鏂囨湰鍧楀垪琛?
         """
         if len(text) <= max_length:
             return [text]
@@ -247,7 +290,7 @@ class KnowledgeBase:
         chunks = []
         current_chunk = ""
         
-        # 按段落分割
+        # 鎸夋钀藉垎鍓?
         paragraphs = text.split("\n\n")
         
         for paragraph in paragraphs:
@@ -265,31 +308,58 @@ class KnowledgeBase:
     
     async def generate_and_store_embeddings(self, document: Document) -> None:
         """
-        生成并存储文档的向量到数据库
+        鐢熸垚骞跺瓨鍌ㄦ枃妗ｇ殑鍚戦噺鍒版暟鎹簱
         
         Args:
-            document: 文档对象
+            document: 鏂囨。瀵硅薄
         """
         try:
             if not document.content:
                 logger.warning(f"Document {document.id} has no content")
                 return
             
-            # 生成向量
+            # 鐢熸垚鍚戦噺
             embeddings = await self.generate_embeddings(document.content)
             
             if not embeddings:
                 logger.warning(f"No embeddings generated for document {document.id}")
                 return
+
+            self._ensure_embedding_store(len(embeddings))
+            embedding_json = json.dumps(embeddings)
+
+            if self._is_postgresql():
+                vector_str = "[" + ",".join(str(x) for x in embeddings) + "]"
+                self.db.execute(
+                    text("""
+                        INSERT INTO document_embeddings (document_id, embedding, embedding_json, updated_at)
+                        VALUES (:document_id, CAST(:embedding AS vector), :embedding_json, CURRENT_TIMESTAMP)
+                        ON CONFLICT (document_id) DO UPDATE SET
+                            embedding = EXCLUDED.embedding,
+                            embedding_json = EXCLUDED.embedding_json,
+                            updated_at = CURRENT_TIMESTAMP
+                    """),
+                    {
+                        "document_id": str(document.id),
+                        "embedding": vector_str,
+                        "embedding_json": embedding_json,
+                    },
+                )
+            else:
+                self.db.execute(
+                    text("""
+                        INSERT OR REPLACE INTO document_embeddings
+                            (document_id, embedding_json, updated_at)
+                        VALUES (:document_id, :embedding_json, CURRENT_TIMESTAMP)
+                    """),
+                    {
+                        "document_id": str(document.id),
+                        "embedding_json": embedding_json,
+                    },
+                )
+
+            self.db.commit()
             
-            # 存储到pgvector（需要先创建向量扩展和表）
-            # 这里使用简单的方式存储，实际应该使用pgvector扩展
-            # 由于当前数据库模型中没有向量字段，这里先记录日志
-            logger.info(f"Generated embeddings for document {document.id}, vector length: {len(embeddings)}")
-            
-            # TODO: 实际存储到pgvector表
-            # 需要执行类似以下的SQL：
-            # INSERT INTO document_embeddings (document_id, embedding) VALUES (%s, %s)
             
         except Exception as e:
             logger.error(f"Failed to generate and store embeddings: {e}", exc_info=True)
@@ -302,56 +372,87 @@ class KnowledgeBase:
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        搜索相关内容
+        鎼滅储鐩稿叧鍐呭
         
         Args:
-            query: 查询文本
-            debate_id: 辩论ID（可选，用于限制搜索范围）
-            top_k: 返回结果数量
+            query: 鏌ヨ鏂囨湰
+            debate_id: 杈╄ID锛堝彲閫夛紝鐢ㄤ簬闄愬埗鎼滅储鑼冨洿锛?
+            top_k: 杩斿洖缁撴灉鏁伴噺
             
         Returns:
-            相关文档列表
+            鐩稿叧鏂囨。鍒楄〃
         """
         try:
-            # 生成查询向量
+            # 鐢熸垚鏌ヨ鍚戦噺
             query_embedding = await self.generate_embeddings(query)
             
             if not query_embedding:
                 logger.warning("Failed to generate query embedding")
                 return []
-            
-            # 使用pgvector进行相似度搜索
-            # 这里使用简单的文本匹配作为fallback
-            query_filter = self.db.query(Document).filter(
-                Document.embedding_status == "completed"
-            )
-            
+
+            self._ensure_embedding_store(len(query_embedding))
+
+            if self._is_postgresql():
+                vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+                sql = """
+                    SELECT
+                        d.id AS document_id,
+                        d.filename,
+                        d.content,
+                        1 - (e.embedding <=> CAST(:query_vector AS vector)) AS relevance_score
+                    FROM document_embeddings e
+                    JOIN documents d ON d.id = e.document_id
+                    WHERE d.embedding_status = 'completed'
+                """
+                params: Dict[str, Any] = {
+                    "query_vector": vector_str,
+                    "limit": top_k,
+                }
+                if debate_id:
+                    sql += " AND d.debate_id = CAST(:debate_id AS UUID)"
+                    params["debate_id"] = debate_id
+                sql += " ORDER BY e.embedding <=> CAST(:query_vector AS vector) LIMIT :limit"
+
+                rows = self.db.execute(text(sql), params).fetchall()
+                return [
+                    {
+                        "document_id": str(row.document_id),
+                        "filename": row.filename,
+                        "content": row.content,
+                        "relevance_score": float(row.relevance_score),
+                    }
+                    for row in rows
+                ]
+
+            sql = """
+                SELECT d.id AS document_id, d.filename, d.content, e.embedding_json
+                FROM document_embeddings e
+                JOIN documents d ON CAST(d.id AS TEXT) = e.document_id
+                WHERE d.embedding_status = 'completed'
+            """
+            params = {}
             if debate_id:
-                query_filter = query_filter.filter(Document.debate_id == debate_id)
-            
-            documents = query_filter.all()
-            
-            # 简单的关键词匹配（实际应该使用向量相似度）
+                sql += " AND CAST(d.debate_id AS TEXT) = :debate_id"
+                params["debate_id"] = str(debate_id)
+
+            rows = self.db.execute(text(sql), params).fetchall()
             results = []
-            for doc in documents:
-                if doc.content and query.lower() in doc.content.lower():
-                    # 提取相关段落
-                    paragraphs = doc.content.split("\n\n")
-                    relevant_paragraphs = [
-                        p for p in paragraphs 
-                        if query.lower() in p.lower()
-                    ]
-                    
-                    if relevant_paragraphs:
-                        results.append({
-                            "document_id": str(doc.id),
-                            "filename": doc.filename,
-                            "content": "\n\n".join(relevant_paragraphs[:3]),  # 最多3个段落
-                            "relevance_score": 0.8  # 模拟相似度分数
-                        })
-            
-            # 返回top_k结果
+            for row in rows:
+                try:
+                    document_embedding = json.loads(row.embedding_json)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                score = self._cosine_similarity(query_embedding, document_embedding)
+                results.append({
+                    "document_id": str(row.document_id),
+                    "filename": row.filename,
+                    "content": row.content,
+                    "relevance_score": score,
+                })
+
+            results.sort(key=lambda item: item["relevance_score"], reverse=True)
             return results[:top_k]
+            
             
         except Exception as e:
             logger.error(f"Failed to search relevant content: {e}", exc_info=True)
@@ -359,13 +460,13 @@ class KnowledgeBase:
     
     async def delete_document(self, document_id: str) -> bool:
         """
-        删除文档
+        鍒犻櫎鏂囨。
         
         Args:
-            document_id: 文档ID
+            document_id: 鏂囨。ID
             
         Returns:
-            是否删除成功
+            鏄惁鍒犻櫎鎴愬姛
         """
         try:
             document = self.db.query(Document).filter(Document.id == document_id).first()
@@ -374,16 +475,19 @@ class KnowledgeBase:
                 logger.warning(f"Document {document_id} not found")
                 return False
             
-            # 删除文件
+            # 鍒犻櫎鏂囦欢
             if os.path.exists(document.file_path):
                 os.remove(document.file_path)
                 logger.info(f"Deleted file: {document.file_path}")
+
+            self.db.execute(
+                text("DELETE FROM document_embeddings WHERE document_id = :document_id"),
+                {"document_id": str(document_id)}
+            )
             
-            # 删除数据库记录
+            # 鍒犻櫎鏁版嵁搴撹褰?
             self.db.delete(document)
             self.db.commit()
-            
-            # TODO: 删除向量数据
             
             logger.info(f"Deleted document: {document_id}")
             return True
@@ -395,13 +499,13 @@ class KnowledgeBase:
     
     def get_documents(self, debate_id: str) -> List[Document]:
         """
-        获取辩论的所有文档
+        鑾峰彇杈╄鐨勬墍鏈夋枃妗?
         
         Args:
-            debate_id: 辩论ID
+            debate_id: 杈╄ID
             
         Returns:
-            文档列表
+            鏂囨。鍒楄〃
         """
         try:
             documents = self.db.query(Document).filter(
@@ -416,13 +520,13 @@ class KnowledgeBase:
     
     def get_document_by_id(self, document_id: str) -> Optional[Document]:
         """
-        根据ID获取文档
+        鏍规嵁ID鑾峰彇鏂囨。
         
         Args:
-            document_id: 文档ID
+            document_id: 鏂囨。ID
             
         Returns:
-            文档对象
+            鏂囨。瀵硅薄
         """
         try:
             document = self.db.query(Document).filter(Document.id == document_id).first()
@@ -430,3 +534,4 @@ class KnowledgeBase:
         except Exception as e:
             logger.error(f"Failed to get document: {e}", exc_info=True)
             return None
+

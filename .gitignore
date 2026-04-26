@@ -47,6 +47,7 @@ api/venv/
 # Environment variables
 .env
 .env.local
+.env.cloud
 
 # Database
 *.db
@@ -88,3 +89,19 @@ api/uploads/
 ssl/
 runtime-logs/
 cpolar-stable-windows-amd64-setup/
+
+# Local repair/probe worktrees and generated patches
+_codex_gitdir/
+_git_probe_*/
+_git_repaired_*/
+.cleanup-trash/
+*.patch
+
+# Local archives and binary source bundles
+*.tar.gz
+*.tgz
+*.zip
+
+# Duplicate/manual backup documents
+readme(*).md
+技术脚本(*).md

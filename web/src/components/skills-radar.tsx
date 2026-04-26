@@ -131,8 +131,9 @@ const SkillsRadar: React.FC<SkillsRadarProps> = ({
           </div>
         ) : (
           skills.map((skill) => {
-            const hasValue = typeof skill.value === 'number';
-            const currentValue = hasValue ? normalizeValue(skill.value) : null;
+            const rawValue = skill.value;
+            const hasValue = typeof rawValue === 'number';
+            const currentValue = hasValue ? normalizeValue(rawValue) : null;
             const level = currentValue === null ? null : getSkillLevel(currentValue);
 
             return (

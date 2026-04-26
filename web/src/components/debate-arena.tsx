@@ -4,7 +4,6 @@ import ParticipantVideo, { Participant } from './participant-video';
 import AIAvatar, { AIAvatar as AIAvatarType } from './ai-avatar';
 import DebateControls from './debate-controls';
 import DebateAudioControl from './debate-audio-control';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -14,20 +13,18 @@ import StudentService from '@/services/student.service';
 import {
   TRANSCRIPT_PENDING_TEXT,
   type TranscriptEntry,
+  type TranscriptEvent,
   buildTranscriptSpeechEntryId,
   normalizeTranscriptEntry,
   upsertTranscriptEntry,
 } from '@/lib/debate-transcript';
 import { audioPlaybackDebug } from '@/lib/utils';
 import PcmStreamPlayer from '@/lib/pcm-stream-player';
+import type { MessageType } from '@/lib/websocket-client';
 import {
-  ArrowLeft,
-  Settings,
   Users,
   Bot,
   Trophy,
-  Zap,
-  Shield,
   Target,
   AlertCircle,
   Loader2,
@@ -40,7 +37,70 @@ interface DebateArenaProps {
   onEndDebate?: () => void;
 }
 
-const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDebate }) => {
+interface RoomParticipant {
+  user_id: string;
+  name: string;
+  role: string;
+  stance?: string | null;
+}
+
+interface AIDebater {
+  id: string;
+  role: string;
+  name?: string | null;
+  stance?: string | null;
+}
+
+type WsPayload = Record<string, unknown>;
+
+const isPayload = (value: unknown): value is WsPayload =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const toOptionalString = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  return String(value);
+};
+
+const toStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((item) => String(item)) : [];
+
+const toRoomParticipant = (value: unknown): RoomParticipant | null => {
+  if (!isPayload(value) || !value.user_id || !value.name || !value.role) {
+    return null;
+  }
+
+  return {
+    user_id: String(value.user_id),
+    name: String(value.name),
+    role: String(value.role),
+    stance: toOptionalString(value.stance),
+  };
+};
+
+const toRoomParticipants = (value: unknown): RoomParticipant[] =>
+  Array.isArray(value)
+    ? value.map(toRoomParticipant).filter((item): item is RoomParticipant => item !== null)
+    : [];
+
+const toAIDebater = (value: unknown): AIDebater | null => {
+  if (!isPayload(value) || !value.id || !value.role) {
+    return null;
+  }
+
+  return {
+    id: String(value.id),
+    role: String(value.role),
+    name: toOptionalString(value.name),
+    stance: toOptionalString(value.stance),
+  };
+};
+
+const toAIDebaters = (value: unknown): AIDebater[] =>
+  Array.isArray(value)
+    ? value.map(toAIDebater).filter((item): item is AIDebater => item !== null)
+    : [];
+
+const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [currentPhase, setCurrentPhase] = useState<string>('waiting');
@@ -62,8 +122,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const [aiTurnStatus, setAiTurnStatus] = useState<string>('idle');
   const [aiTurnSegmentTitle, setAiTurnSegmentTitle] = useState<string | null>(null);
   const [aiTurnSpeakerRole, setAiTurnSpeakerRole] = useState<string | null>(null);
-  const [participants, setParticipants] = useState<any[]>([]);
-  const [aiDebaters, setAiDebaters] = useState<any[]>([]);
+  const [participants, setParticipants] = useState<RoomParticipant[]>([]);
+  const [aiDebaters, setAiDebaters] = useState<AIDebater[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const [hasActiveLiveTtsStream, setHasActiveLiveTtsStream] = useState(false);
@@ -125,12 +185,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     if (!resolvedSpeakerRole.startsWith('ai_')) {
       return;
     }
-    const messageType = payload.status === 'started'
+    const messageType: MessageType = payload.status === 'started'
       ? 'speech_playback_started'
       : payload.status === 'finished'
       ? 'speech_playback_finished'
       : 'speech_playback_failed';
-    send(messageType as any, {
+    send(messageType, {
       speech_id: normalizedSpeechId,
       segment_id: payload.segmentId || cachedMeta?.segmentId || undefined,
       speaker_role: resolvedSpeakerRole,
@@ -181,7 +241,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   }, [roomId]);
 
   const debateTopic = '辩论进行中';
-  const phases = ['立论陈词', '攻辩环节', '自由辩论', '总结陈词'];
   const currentUserId = user?.id || '';
   const currentUserRole = participants.find((p) => p.user_id === currentUserId)?.role || null;
 
@@ -271,7 +330,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     if (!trimmed) return undefined;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
     
-    let base = (((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || '').replace(/\/+$/, '');
+    const env = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env;
+    let base = (env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
     
     // 如果是上传文件，通常挂载在根目录下的 /uploads
     // 如果 base 包含 /api/v1，需要去除，指向根目录
@@ -324,80 +384,77 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   // WebSocket事件监听
   useEffect(() => {
     // 监听状态更新
-    const handleStateUpdate = (data: any) => {
+    const handleStateUpdate = (data: WsPayload) => {
       console.log('State update:', data);
-      const currentUserRoleFromState = Array.isArray(data.participants)
-        ? data.participants.find((participant: any) => participant?.user_id === currentUserIdRef.current)?.role || currentUserRoleRef.current
+      const nextParticipants = toRoomParticipants(data.participants);
+      const currentUserRoleFromState = nextParticipants.length > 0
+        ? nextParticipants.find((participant) => participant.user_id === currentUserIdRef.current)?.role || currentUserRoleRef.current
         : currentUserRoleRef.current;
       if (data.current_speaker !== undefined) {
-        setCurrentSpeakerRole(data.current_speaker);
+        setCurrentSpeakerRole(toOptionalString(data.current_speaker));
         // 如果轮到当前用户发言，自动取消静音
         if (currentUserRoleFromState && roleMatches(currentUserRoleFromState, data.current_speaker)) {
           setIsMuted(false);
           console.log('轮到当前用户发言，自动取消静音');
         }
       }
-      if (data.current_phase) setCurrentPhase(data.current_phase);
+      if (data.current_phase) setCurrentPhase(String(data.current_phase));
       if (typeof data.time_remaining === 'number') setTimeRemaining(data.time_remaining);
-      if (data.segment_title) setSegmentTitle(data.segment_title);
-      if (data.segment_id !== undefined) setSegmentId(data.segment_id);
+      if (data.segment_title) setSegmentTitle(String(data.segment_title));
+      if (data.segment_id !== undefined) setSegmentId(toOptionalString(data.segment_id));
       if (typeof data.segment_index === 'number') setSegmentIndex(data.segment_index);
-      if (data.speaker_mode !== undefined) setSpeakerMode(data.speaker_mode);
-      if (Array.isArray(data.speaker_options)) setSpeakerOptions(data.speaker_options);
-      if (data.mic_owner_user_id !== undefined) setMicOwnerUserId(data.mic_owner_user_id);
-      if (data.mic_owner_role !== undefined) setMicOwnerRole(data.mic_owner_role);
-      if (data.mic_expires_at !== undefined) setMicExpiresAt(data.mic_expires_at);
-      if (data.free_debate_next_side !== undefined) setFreeDebateNextSide(data.free_debate_next_side);
-      if (data.ai_turn_status !== undefined) setAiTurnStatus(data.ai_turn_status || 'idle');
-      if (data.ai_turn_segment_title !== undefined) setAiTurnSegmentTitle(data.ai_turn_segment_title);
-      if (data.ai_turn_speaker_role !== undefined) setAiTurnSpeakerRole(data.ai_turn_speaker_role);
-      if (Array.isArray(data.participants)) setParticipants(data.participants);
-      if (Array.isArray(data.ai_debaters)) setAiDebaters(data.ai_debaters);
+      if (data.speaker_mode !== undefined) setSpeakerMode(toOptionalString(data.speaker_mode));
+      if (Array.isArray(data.speaker_options)) setSpeakerOptions(toStringArray(data.speaker_options));
+      if (data.mic_owner_user_id !== undefined) setMicOwnerUserId(toOptionalString(data.mic_owner_user_id));
+      if (data.mic_owner_role !== undefined) setMicOwnerRole(toOptionalString(data.mic_owner_role));
+      if (data.mic_expires_at !== undefined) setMicExpiresAt(toOptionalString(data.mic_expires_at));
+      if (data.free_debate_next_side !== undefined) setFreeDebateNextSide(toOptionalString(data.free_debate_next_side));
+      if (data.ai_turn_status !== undefined) setAiTurnStatus(toOptionalString(data.ai_turn_status) || 'idle');
+      if (data.ai_turn_segment_title !== undefined) setAiTurnSegmentTitle(toOptionalString(data.ai_turn_segment_title));
+      if (data.ai_turn_speaker_role !== undefined) setAiTurnSpeakerRole(toOptionalString(data.ai_turn_speaker_role));
+      if (Array.isArray(data.participants)) setParticipants(nextParticipants);
+      if (Array.isArray(data.ai_debaters)) setAiDebaters(toAIDebaters(data.ai_debaters));
     };
 
     // 监听用户加入事件
-    const handleUserJoined = (data: any) => {
+    const handleUserJoined = (data: WsPayload) => {
       console.log('User joined:', data);
-      if (!data.user_id || !data.name || !data.role) return;
+      const participant = toRoomParticipant(data);
+      if (!participant) return;
       // 使用函数式更新基于最新 participants 去重，避免旧闭包导致同一用户被重复插入。
       setParticipants(prev => {
-        const exists = prev.some((participant) => participant.user_id === data.user_id);
+        const exists = prev.some((item) => item.user_id === participant.user_id);
         if (exists) return prev;
-        return [...prev, {
-          user_id: data.user_id,
-          name: data.name,
-          role: data.role,
-          stance: data.stance
-        }];
+        return [...prev, participant];
       });
     };
 
     // 监听用户离开事件
-    const handleUserLeft = (data: any) => {
+    const handleUserLeft = (data: WsPayload) => {
       console.log('User left:', data);
       if (data.user_id) {
         // 从participants列表中移除用户
-        setParticipants(prev => prev.filter(p => p.user_id !== data.user_id));
+        setParticipants(prev => prev.filter(p => p.user_id !== String(data.user_id)));
       }
     };
 
     // 监听阶段变化
-    const handlePhaseChange = (data: any) => {
+    const handlePhaseChange = (data: WsPayload) => {
       console.log('Phase change:', data);
-      if (data.phase) setCurrentPhase(data.phase);
+      if (data.phase) setCurrentPhase(String(data.phase));
     };
 
-    const handleSegmentChange = (data: any) => {
-      if (data.segment_title) setSegmentTitle(data.segment_title);
-      if (data.segment_id !== undefined) setSegmentId(data.segment_id);
+    const handleSegmentChange = (data: WsPayload) => {
+      if (data.segment_title) setSegmentTitle(String(data.segment_title));
+      if (data.segment_id !== undefined) setSegmentId(toOptionalString(data.segment_id));
       if (typeof data.segment_index === 'number') setSegmentIndex(data.segment_index);
-      if (data.speaker_mode !== undefined) setSpeakerMode(data.speaker_mode);
-      if (Array.isArray(data.speaker_options)) setSpeakerOptions(data.speaker_options);
-      if (data.phase) setCurrentPhase(data.phase);
+      if (data.speaker_mode !== undefined) setSpeakerMode(toOptionalString(data.speaker_mode));
+      if (Array.isArray(data.speaker_options)) setSpeakerOptions(toStringArray(data.speaker_options));
+      if (data.phase) setCurrentPhase(String(data.phase));
     };
 
     // 监听计时器更新
-    const handleTimerUpdate = (data: any) => {
+    const handleTimerUpdate = (data: WsPayload) => {
       console.log('Timer update:', data);
       if (typeof data.time_remaining === 'number') {
         setTimeRemaining(data.time_remaining);
@@ -405,15 +462,15 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     };
 
     // 监听字幕
-    const handleSubtitle = (data: any) => {
+    const handleSubtitle = (data: WsPayload) => {
       console.log('Subtitle:', data);
-      setSubtitle(data.text || '');
+      setSubtitle(toOptionalString(data.text) || '');
       // 5秒后清除字幕
       setTimeout(() => setSubtitle(''), 5000);
     };
 
     // 监听发言
-    const handleSpeech = (data: any) => {
+    const handleSpeech = (data: WsPayload) => {
       console.log('Speech:', data);
       const speechId = String(data?.speech_id || data?.message_id || data?.id || '').trim();
       audioPlaybackDebug('DebateArena', '收到 speech 事件', {
@@ -423,7 +480,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
         hasAudioUrl: !!(data?.audio_url || data?.file_url || data?.url),
         contentLength: String(data?.content || data?.text || '').length,
       });
-      if (data.role) setCurrentSpeakerRole(data.role);
+      if (data.role) setCurrentSpeakerRole(String(data.role));
       if (speechId && String(data?.role || '').trim().startsWith('ai_')) {
         aiSpeechMetaRef.current.set(speechId, {
           segmentId: String(data?.segment_id || '').trim() || undefined,
@@ -432,7 +489,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       }
 
       // 使用可回填的转录合并工具，兼容“音频先到文本后补”和“文本先到音频后补”。
-      const entry = normalizeTranscriptEntry(data, {
+      const entry = normalizeTranscriptEntry(data as TranscriptEvent, {
         resolveMediaUrl,
         resolvePosition: roleToPosition,
         resolveSpeakerName: (event) =>
@@ -456,7 +513,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       setTimeout(() => setSubtitle(''), 5000);
     };
 
-    const handleTtsStreamStart = (data: any) => {
+    const handleTtsStreamStart = (data: WsPayload) => {
       const speechId = String(data?.speech_id || data?.message_id || '').trim();
       if (!speechId) return;
       const startCount = increaseStreamEventCount(ttsStreamStartCountRef, speechId);
@@ -485,7 +542,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       void liveTtsPlayerRef.current?.startStream(speechId);
     };
 
-    const handleTtsStreamChunk = (data: any) => {
+    const handleTtsStreamChunk = (data: WsPayload) => {
       const speechId = String(data?.speech_id || data?.message_id || '').trim();
       const audioBase64 = String(data?.audio_base64 || '').trim();
       if (!speechId || !audioBase64) return;
@@ -516,7 +573,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       });
     };
 
-    const handleTtsStreamEnd = (data: any) => {
+    const handleTtsStreamEnd = (data: WsPayload) => {
       const speechId = String(data?.speech_id || data?.message_id || '').trim();
       if (!speechId) return;
       if (!autoPlayEnabledRef.current || ignoredLiveTtsSpeechIdsRef.current.has(speechId)) {
@@ -534,19 +591,19 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     };
 
 
-    const handlePermissionDenied = (data: any) => {
+    const handlePermissionDenied = (data: WsPayload) => {
       toastRef.current({
         title: '无法发言',
-        description: data?.message || '当前无发言权限',
+        description: toOptionalString(data.message) || '当前无发言权限',
         variant: 'destructive',
       });
     };
 
-    const handleMicGrabbed = (data: any) => {
-      if (data.user_id !== undefined) setMicOwnerUserId(data.user_id);
-      if (data.role !== undefined) setMicOwnerRole(data.role);
-      if (data.expires_at !== undefined) setMicExpiresAt(data.expires_at);
-      if (data.role) setCurrentSpeakerRole(data.role);
+    const handleMicGrabbed = (data: WsPayload) => {
+      if (data.user_id !== undefined) setMicOwnerUserId(toOptionalString(data.user_id));
+      if (data.role !== undefined) setMicOwnerRole(toOptionalString(data.role));
+      if (data.expires_at !== undefined) setMicExpiresAt(toOptionalString(data.expires_at));
+      if (data.role) setCurrentSpeakerRole(String(data.role));
       // 自由辩论阶段：当前用户抢到麦时，自动取消静音，允许发言
       if (data.user_id === currentUserIdRef.current) {
         setIsMuted(false);
@@ -562,39 +619,39 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     };
 
     // 监听错误
-    const handleError = (data: any) => {
+    const handleError = (data: WsPayload) => {
       console.error('WebSocket error:', data);
-      setError(data.message || '发生错误');
+      setError(toOptionalString(data.message) || '发生错误');
     };
 
-    const handleDebateProcessing = (data: any) => {
+    const handleDebateProcessing = (data: WsPayload) => {
       console.log('Debate processing:', data);
       setIsProcessingReport(true);
       toastRef.current({
         title: '辩论已结束',
-        description: data?.message || '正在生成辩论报告和评分，请稍候...',
+        description: toOptionalString(data.message) || '正在生成辩论报告和评分，请稍候...',
         duration: 10000, 
       });
     };
 
-    const handleDebateEnded = (data: any) => {
+    const handleDebateEnded = (data: WsPayload) => {
       setIsProcessingReport(false);
       toastRef.current({
         title: '报告生成完成',
-        description: data?.timestamp ? `结束时间：${data.timestamp}` : undefined,
+        description: data.timestamp ? `结束时间：${String(data.timestamp)}` : undefined,
       });
       setCurrentPhase('finished');
       onEndDebateRef.current?.();
     };
 
-    const handleRecordingPermission = (data: any) => {
+    const handleRecordingPermission = (data: WsPayload) => {
       const requestId = data?.request_id;
       if (!requestId) return;
       const waiter = recordingPermissionWaiters.current.get(String(requestId));
       if (!waiter) return;
       clearTimeout(waiter.timeoutId);
       recordingPermissionWaiters.current.delete(String(requestId));
-      waiter.resolve({ allowed: !!data.allowed, message: data.message });
+      waiter.resolve({ allowed: !!data.allowed, message: toOptionalString(data.message) || undefined });
     };
 
     // 注册事件监听器
@@ -703,8 +760,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       return { allowed: false, message: '未连接到辩论房间，请稍后重试' };
     }
     const requestId =
-      (globalThis.crypto as any)?.randomUUID?.() ||
-      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const result = await new Promise<{ allowed: boolean; message?: string }>((resolve) => {
       const timeoutId = window.setTimeout(() => {
         recordingPermissionWaiters.current.delete(String(requestId));
@@ -844,11 +902,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     ? micOwnerUserId === currentUserId && micActive
     : !!currentUserRole && roleMatches(currentUserRole, currentSpeakerRole);
   const canGrabMic = isFreeDebate && !micActive && freeDebateNextSide !== 'ai';
-  const canSelectSelf =
-    speakerMode === 'choice' &&
-    !!currentUserRole &&
-    speakerOptions.some((opt) => roleMatches(currentUserRole, opt)) &&
-    !roleMatches(currentUserRole, currentSpeakerRole);
   const micStatusText = isFreeDebate
     ? micActive
       ? `当前持麦：${micOwnerRole || ''}${micOwnerUserId === currentUserId ? '（你）' : ''}`

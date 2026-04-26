@@ -32,6 +32,8 @@ interface StudentOnboardingProps {
   onMatchFound?: () => void;
 }
 
+type DebateRole = NonNullable<Debate['role']>;
+
 const roleLabel: Record<NonNullable<Debate['role']>, string> = {
   debater_1: '一辩',
   debater_2: '二辩',
@@ -45,6 +47,9 @@ const roleDescription: Record<NonNullable<Debate['role']>, string> = {
   debater_3: '三辩 - 逻辑交锋，快速反应',
   debater_4: '四辩 - 总结陈词，价值升华',
 };
+
+const isDebateRole = (role: unknown): role is DebateRole =>
+  typeof role === 'string' && role in roleLabel;
 
 const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   initialDebate,
@@ -217,6 +222,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
 
   const overallScore = calculateOverallScore();
   const effectiveRole = assignedRole?.role || assessmentResult?.recommended_role;
+  const displayRole = isDebateRole(effectiveRole) ? effectiveRole : null;
 
   if (loading) {
     return (
@@ -339,7 +345,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                         </div>
                       </div>
 
-                      {effectiveRole && (
+                      {displayRole && (
                         <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-200">
                           <h3 className="font-medium text-emerald-900 mb-2">
                             {assignedRole
@@ -348,13 +354,13 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                           </h3>
                           <div className="flex items-center gap-2 mb-2">
                             <Badge className="bg-emerald-600 text-white">
-                              {effectiveRole}
+                              {displayRole}
                             </Badge>
                             <Badge
                               variant="outline"
                               className="bg-white text-emerald-700 border-emerald-200"
                             >
-                              {roleLabel[effectiveRole]}
+                              {roleLabel[displayRole]}
                             </Badge>
                           </div>
                           <p className="text-sm text-emerald-700">
