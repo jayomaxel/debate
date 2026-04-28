@@ -52,6 +52,8 @@ export interface TranscriptEvent {
   file_url?: string | null;
   url?: string | null;
   audio_format?: string | null;
+  transcription_status?: string | null;
+  transcription_error?: string | null;
   timestamp?: string | number | Date | null;
   phase?: string | null;
   segment_id?: string | number | null;
@@ -218,7 +220,11 @@ export const normalizeTranscriptEntry = (
 ): TranscriptEntry => {
   // 统一把服务端各种消息格式归一成前端可直接渲染的转录结构。
   const audioSourceUrl = getAudioSourceUrl(event);
-  const content = normalizeString(event.content || event.text);
+  const transcriptionStatus = normalizeString(event.transcription_status).toLowerCase();
+  const transcriptionError = normalizeString(event.transcription_error);
+  const content = transcriptionStatus === 'failed'
+    ? (transcriptionError || '语音识别失败')
+    : normalizeString(event.content || event.text);
   const placeholderText = options.placeholderText || TRANSCRIPT_PENDING_TEXT;
   const message = content || (audioSourceUrl ? placeholderText : '');
   const speakerKey = buildSpeakerKey(event);

@@ -6,10 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import GrowthTrendChart, { DataPoint } from './growth-trend-chart';
-import TeacherSearchFilter from './teacher-search-filter';
-import ComparisonMode from './comparison-mode';
-import AchievementBadges from './achievement-badges';
 import AbilityRadarChart from './ability-radar-chart';
 import SpeakingTimeChart from './speaking-time-chart';
 import DebateResultDisplay from './debate-result-display';
@@ -21,32 +17,14 @@ import {
   Share2,
   FileText,
   Users,
-  Bot,
-  TrendingUp,
   Calendar,
-  Clock,
-  Award,
-  Star,
   BarChart3,
-  PieChart,
   Brain,
   Zap,
   Heart,
-  Target,
   ChevronLeft,
   ChevronRight,
-  Settings,
   History,
-  GitCompare,
-  Trophy,
-  Search,
-  Filter,
-  Maximize2,
-  Minimize2,
-  UserCheck,
-  GraduationCap,
-  Eye,
-  EyeOff,
   Loader2
 } from 'lucide-react';
 
@@ -76,7 +54,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
   studentStats,
   onBack
 }) => {
-  const [activeView, setActiveView] = useState<'overview' | 'history' | 'trends' | 'comparison' | 'achievements' | 'teacher'>('overview');
+  const [activeView, setActiveView] = useState<'overview' | 'history'>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
   const { user } = useAuth();
@@ -318,8 +296,6 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
     );
   }
 
-  const historicalData: DataPoint[] = [];
-
   const handleDownloadReport = async (format: 'pdf' | 'excel') => {
     if (!report) return;
     if (format === 'pdf') {
@@ -347,7 +323,46 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
     }
   };
 
-  const handleShareReport = () => {};
+  const handleShareReport = async () => {
+    if (!report) {
+      toast({
+        title: '暂无可分享报告',
+        description: '报告加载完成后再试一次。',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const participant =
+      report.participants.find(p => p.user_id === user?.id) ||
+      report.participants.find(p => !p.is_ai) ||
+      report.participants[0];
+    const overallScore = participant?.final_score?.overall_score ?? 0;
+    const summary = `辩题：${report.topic}\n最终得分：${overallScore}\n对局ID：${report.debate_id}\n${report.summary || '我刚完成了一场人机辩论，来看看这份赛后分析。'}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: '辩论赛后分析报告',
+          text: summary,
+        });
+        return;
+      }
+
+      await navigator.clipboard.writeText(summary);
+      toast({
+        title: '分享内容已复制',
+        description: '当前浏览器不支持系统分享，已复制摘要文本。',
+        variant: 'success',
+      });
+    } catch (error) {
+      toast({
+        title: '分享失败',
+        description: '请稍后重试。',
+        variant: 'destructive',
+      });
+    }
+  };
 
   const navigationItems = [
     {
@@ -361,31 +376,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
       label: '历史记录',
       icon: <History className="w-4 h-4" />,
       description: '查看历史辩论'
-    },
-    {
-      id: 'trends',
-      label: '成长趋势',
-      icon: <TrendingUp className="w-4 h-4" />,
-      description: '能力发展分析'
-    },
-    {
-      id: 'comparison',
-      label: '对比分析',
-      icon: <GitCompare className="w-4 h-4" />,
-      description: '表现对比'
-    },
-    ...(userType === 'student' ? [{
-      id: 'achievements',
-      label: '成就系统',
-      icon: <Trophy className="w-4 h-4" />,
-      description: '成就与徽章'
-    }] : []),
-    ...(userType === 'teacher' ? [{
-      id: 'teacher',
-      label: '学生管理',
-      icon: <GraduationCap className="w-4 h-4" />,
-      description: '搜索筛选学生'
-    }] : [])
+    }
   ];
 
   const renderMainContent = () => {
@@ -480,73 +471,6 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
           </div>
         );
 
-      case 'trends':
-        return (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">成长趋势分析</h2>
-              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">
-                +{safeStudentStats.totalImprovement} 总进步
-              </Badge>
-            </div>
-
-            {historicalData.length === 0 ? (
-              <div className="text-center text-sm text-slate-500 py-10">暂无成长趋势数据</div>
-            ) : (
-              <GrowthTrendChart
-                data={historicalData}
-                timeframe="all"
-                studentName={resolvedStudentName}
-              />
-            )}
-          </div>
-        );
-
-      case 'comparison':
-        return (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">对比分析</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              >
-                {sidebarCollapsed ? (
-                  <Maximize2 className="w-4 h-4" />
-                ) : (
-                  <Minimize2 className="w-4 h-4" />
-                )}
-                {sidebarCollapsed ? '展开边栏' : '收起边栏'}
-              </Button>
-            </div>
-
-            <div className="text-center text-sm text-slate-500 py-10">暂无可对比的历史数据</div>
-          </div>
-        );
-
-      case 'achievements':
-        return (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">成就系统</h2>
-              <Badge className="bg-amber-100 text-amber-700 border-amber-300">
-                <Trophy className="w-3 h-3 mr-1" />
-                成就大师
-              </Badge>
-            </div>
-
-            <div className="text-center text-sm text-slate-500 py-10">暂无成就数据</div>
-          </div>
-        );
-
-      case 'teacher':
-        return (
-          <div className="space-y-6">
-            <div className="text-center text-sm text-slate-500 py-10">暂无教师端数据</div>
-          </div>
-        );
-
       default:
         return null;
     }
@@ -575,10 +499,6 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
                 <p className="text-sm text-slate-600">
                   {activeView === 'overview' && '详细的辩论表现分析和个性化改进建议'}
                   {activeView === 'history' && '查看历史辩论记录和详细数据'}
-                  {activeView === 'trends' && '能力成长趋势和进步分析'}
-                  {activeView === 'comparison' && '多维度表现对比分析'}
-                  {activeView === 'achievements' && '成就系统和成长记录'}
-                  {activeView === 'teacher' && '学生表现管理和分析'}
                 </p>
               </div>
             </div>

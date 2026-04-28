@@ -72,6 +72,7 @@ class RoomState:
         playback_gate_started_at: Optional[datetime] = None,
         playback_gate_deadline_at: Optional[datetime] = None,
         pending_post_playback_action: Optional[str] = None,
+        flow_segments: Optional[List[dict]] = None,
         participants: Optional[List[dict]] = None,
         ai_debaters: Optional[List[dict]] = None,
     ):
@@ -113,6 +114,7 @@ class RoomState:
         self.playback_gate_started_at = playback_gate_started_at
         self.playback_gate_deadline_at = playback_gate_deadline_at
         self.pending_post_playback_action = pending_post_playback_action
+        self.flow_segments = flow_segments or []
         self.participants = participants or []
         self.ai_debaters = ai_debaters or [
             {
@@ -200,6 +202,7 @@ class RoomState:
                 else None
             ),
             "pending_post_playback_action": self.pending_post_playback_action,
+            "flow_segments": self.flow_segments,
             "participants": self.participants,
             "ai_debaters": self.ai_debaters,
         }
@@ -536,6 +539,13 @@ class DebateRoomManager:
                 select(Debate).where(Debate.id == debate_uuid)
             ).scalar_one_or_none()
 
+        if (
+            room_state.current_phase == DebatePhase.FINISHED
+            and (not debate or str(getattr(debate, "status", "") or "") == "completed")
+        ):
+            logger.info(f"Debate already ended in room {room_id}; skipping duplicate end flow")
+            return True
+
         if debate:
             debate.status = "completed"
             debate.end_time = (datetime.utcnow() + timedelta(hours=8))
@@ -656,6 +666,11 @@ class DebateRoomManager:
                     Speech.debate_id == debate_id
                 ).order_by(Speech.timestamp)
             ).scalars().all()
+            speeches = [
+                speech
+                for speech in speeches
+                if str(getattr(speech, "content", "") or "").strip()
+            ]
 
             logger.info(f"找到 {len(speeches)} 条发言需要评分")
 

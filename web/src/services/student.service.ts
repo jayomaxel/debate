@@ -727,6 +727,37 @@ class StudentService {
       throw error;
     }
   }
+
+  static getKBDocumentPreviewUrl(documentId: string): string {
+    return `/api/student/kb/documents/${documentId}/download`;
+  }
+
+  static async getKBDocumentBlob(documentId: string): Promise<Blob> {
+    return await api.get<Blob>(
+      `/api/student/kb/documents/${documentId}/download`,
+      {
+        responseType: 'blob',
+      }
+    );
+  }
+
+  static async downloadKBDocument(kbDocument: KBDocument): Promise<void> {
+    try {
+      const response = await this.getKBDocumentBlob(kbDocument.id);
+
+      const url = window.URL.createObjectURL(response as any);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = kbDocument.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('[StudentService] Download KB document failed:', error);
+      throw error;
+    }
+  }
 }
 
 export default StudentService;

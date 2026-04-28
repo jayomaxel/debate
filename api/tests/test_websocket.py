@@ -246,6 +246,83 @@ def test_force_advance_waits_for_voice_processing():
     room_manager.rooms.pop(room_id, None)
 
 
+def test_ai_response_turn_without_question_is_skippable():
+    turn_plan = {
+        "speech_type": "response",
+        "dependency_scope": "last_opponent_question",
+    }
+
+    assert flow_controller._should_skip_ai_turn_without_dependency(
+        "questioning_2_neg_answer",
+        turn_plan,
+        [],
+    )
+    assert not flow_controller._should_skip_ai_turn_without_dependency(
+        "questioning_2_neg_answer",
+        turn_plan,
+        [_make_flow_test_speech("debater_2", "这是一个有效提问")],
+    )
+
+
+def test_segment_timeout_forces_past_stuck_ai_thinking():
+    room_id = "test_room_ai_timeout_force_advance_001"
+    debate_id = str(uuid.uuid4())
+
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.QUESTIONING,
+        current_speaker="ai_2",
+        segment_index=0,
+        segment_id="questioning_2_neg_answer",
+        segment_title="AI回答",
+        turn_processing_status="processing",
+        turn_processing_kind="llm",
+        ai_turn_status="thinking",
+        ai_turn_segment_id="questioning_2_neg_answer",
+        ai_turn_speaker_role="ai_2",
+    )
+    room_manager.rooms[room_id] = room_state
+    flow_controller.segments[room_id] = [
+        {
+            "id": "questioning_2_neg_answer",
+            "title": "AI回答",
+            "phase": DebatePhase.QUESTIONING,
+            "duration": 1,
+            "mode": "choice",
+            "speaker_roles": ["ai_2", "ai_3"],
+        },
+        {
+            "id": "questioning_3_ai3_ask",
+            "title": "AI提问",
+            "phase": DebatePhase.QUESTIONING,
+            "duration": 1,
+            "mode": "fixed",
+            "speaker_roles": ["ai_3"],
+        },
+    ]
+    flow_controller.segment_index[room_id] = 0
+
+    async def _sleep_forever():
+        await asyncio.Event().wait()
+
+    async def _run_timeout():
+        task = asyncio.create_task(_sleep_forever())
+        flow_controller.ai_tasks[room_id] = task
+        try:
+            await flow_controller.handle_segment_timeout(room_id)
+            return task
+        finally:
+            await flow_controller.cleanup_room(room_id)
+            room_manager.rooms.pop(room_id, None)
+
+    task = asyncio.run(_run_timeout())
+
+    assert room_state.segment_id == "questioning_3_ai3_ask"
+    assert room_state.turn_processing_status == "idle"
+    assert task.cancelled()
+
+
 def test_prepare_ai_draft_does_not_commit_speech_before_release(monkeypatch):
     from services import flow_controller as fc
 

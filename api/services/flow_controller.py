@@ -59,6 +59,9 @@ class DebateFlowController:
         """
         self.segments[room_id] = segments or self._build_default_segments()
         self.segment_index[room_id] = 0
+        room_state = room_manager.get_room_state(room_id)
+        if room_state:
+            room_state.flow_segments = self._serialize_segments(self.segments[room_id])
 
         logger.info(f"Initialized flow for room {room_id}")
 
@@ -220,6 +223,21 @@ class DebateFlowController:
 
     def get_segments(self, room_id: str) -> List[Dict[str, Any]]:
         return self.segments.get(room_id) or self._build_default_segments()
+
+    def _serialize_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        serialized = []
+        for segment in segments:
+            phase = segment.get("phase")
+            serialized.append(
+                {
+                    "id": str(segment.get("id") or ""),
+                    "title": str(segment.get("title") or ""),
+                    "phase": str(getattr(phase, "value", phase) or ""),
+                    "duration": int(segment.get("duration") or 0),
+                    "mode": str(segment.get("mode") or ""),
+                }
+            )
+        return serialized
 
     def _now(self) -> datetime:
         return datetime.utcnow() + timedelta(hours=8)
@@ -665,6 +683,64 @@ class DebateFlowController:
             return "positive"
         return None
 
+    def _should_skip_ai_turn_without_dependency(
+        self,
+        segment_id: str,
+        turn_plan: Dict[str, Any],
+        dependency_speeches: List[Speech],
+    ) -> bool:
+        if str(turn_plan.get("speech_type") or "") != "response":
+            return False
+        if str(turn_plan.get("dependency_scope") or "") != "last_opponent_question":
+            return False
+        if str(segment_id or "") not in {
+            "questioning_2_neg_answer",
+            "questioning_4_neg_answer",
+        }:
+            return False
+        return not any(
+            str(getattr(speech, "content", "") or "").strip()
+            for speech in dependency_speeches
+        )
+
+    async def _skip_ai_turn_due_to_missing_dependency(
+        self,
+        room_id: str,
+        *,
+        segment: Dict[str, Any],
+        speaker_role: str,
+    ) -> None:
+        await self._clear_ai_turn_state_if_matches(
+            room_id,
+            segment_id=str(segment.get("id") or ""),
+            speaker_role=speaker_role,
+        )
+        await room_manager.update_room_state(
+            room_id,
+            turn_processing_status="idle",
+            turn_processing_kind=None,
+            turn_processing_error=None,
+            turn_speech_committed=False,
+            turn_speech_user_id=None,
+            turn_speech_role=None,
+            turn_speech_timestamp=None,
+            pending_advance_reason=None,
+        )
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "ai_turn_skipped",
+                "data": {
+                    "reason": "missing_opponent_question",
+                    "segment_id": str(segment.get("id") or ""),
+                    "segment_title": str(segment.get("title") or ""),
+                    "speaker_role": speaker_role,
+                    "timestamp": self._now().isoformat(),
+                },
+            },
+        )
+        await self.advance_segment(room_id)
+
     def _resolve_ai_stance(
         self, room_state: Any, speaker_role: Optional[str]
     ) -> str:
@@ -834,6 +910,7 @@ class DebateFlowController:
             playback_gate_started_at=None,
             playback_gate_deadline_at=None,
             pending_post_playback_action=None,
+            flow_segments=self._serialize_segments(segments),
         )
 
     async def _start_playback_gate(
@@ -2001,6 +2078,8 @@ class DebateFlowController:
 
         if speaker_role not in (room_state.speaker_options or []):
             return False
+        if getattr(room_state, "turn_speech_committed", False):
+            return False
 
         await room_manager.update_room_state(room_id, current_speaker=speaker_role)
         segments = self.get_segments(room_id)
@@ -2026,6 +2105,71 @@ class DebateFlowController:
 
         self.segment_index[room_id] = self.segment_index.get(room_id, 0) + 1
         return await self._apply_current_segment(room_id)
+
+    async def finish_debate_flow(
+        self, room_id: str, reason: str = "flow_completed"
+    ) -> bool:
+        room_state = room_manager.get_room_state(room_id)
+        if not room_state:
+            return False
+
+        if room_state.current_phase == DebatePhase.FINISHED:
+            return True
+
+        logger.info(
+            "Finishing debate flow for room %s (reason=%s)",
+            room_id,
+            reason,
+        )
+        try:
+            if db_module.SessionLocal is None:
+                db_module.init_engine()
+            if db_module.SessionLocal is None:
+                raise RuntimeError("Database session factory is not available")
+            db = db_module.SessionLocal()
+        except Exception as e:
+            logger.error(
+                "Unable to finish debate flow for room %s: %s",
+                room_id,
+                e,
+                exc_info=True,
+            )
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "debate_end_failed",
+                    "data": {
+                        "reason": reason,
+                        "message": "辩论结束失败，请稍后重试或手动结束",
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
+            return False
+
+        try:
+            return await room_manager.end_debate(room_id, db)
+        except Exception as e:
+            logger.error(
+                "Failed to finish debate flow for room %s: %s",
+                room_id,
+                e,
+                exc_info=True,
+            )
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "debate_end_failed",
+                    "data": {
+                        "reason": reason,
+                        "message": "辩论结束失败，请稍后重试或手动结束",
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
+            return False
+        finally:
+            db.close()
 
     async def force_advance_segment(self, room_id: str, reason: str = "forced") -> bool:
         room_state = room_manager.get_room_state(room_id)
@@ -2073,7 +2217,8 @@ class DebateFlowController:
 
         if room_id in self.ai_tasks:
             task = self.ai_tasks.pop(room_id)
-            task.cancel()
+            if task is not asyncio.current_task():
+                task.cancel()
 
         if str(getattr(room_state, "playback_gate_status", "idle") or "idle") != "idle":
             await self._clear_playback_gate_state(room_id)
@@ -2145,7 +2290,8 @@ class DebateFlowController:
         # 取消当前的AI任务和定时器
         if room_id in self.ai_tasks:
             task = self.ai_tasks.pop(room_id)
-            task.cancel()
+            if task is not asyncio.current_task():
+                task.cancel()
             
         # 更新segment_index
         self.segment_index[room_id] = next_phase_index
@@ -2179,43 +2325,7 @@ class DebateFlowController:
         index = self.segment_index.get(room_id, 0)
 
         if index >= len(segments):
-            await self.stop_timer(room_id)
-            await self._cancel_ai_draft_tasks(room_id)
-            await room_manager.update_room_state(
-                room_id,
-                current_phase=DebatePhase.FINISHED,
-                current_speaker=None,
-                time_remaining=0,
-                segment_time_remaining=0,
-                speaker_mode=None,
-                speaker_options=[],
-                segment_id=None,
-                segment_title=None,
-                segment_start_time=None,
-                ai_turn_status="idle",
-                ai_turn_segment_id=None,
-                ai_turn_segment_title=None,
-                ai_turn_speaker_role=None,
-                playback_gate_status="idle",
-                playback_gate_speech_id=None,
-                playback_gate_segment_id=None,
-                playback_gate_speaker_role=None,
-                playback_gate_controller_user_id=None,
-                playback_gate_started_at=None,
-                playback_gate_deadline_at=None,
-                pending_post_playback_action=None,
-            )
-            await websocket_manager.broadcast_to_room(
-                room_id,
-                {
-                    "type": "phase_change",
-                    "data": {
-                        "phase": DebatePhase.FINISHED,
-                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                    },
-                },
-            )
-            return False
+            return await self.finish_debate_flow(room_id, reason="segments_completed")
 
         segment = segments[index]
         now = (datetime.utcnow() + timedelta(hours=8))
@@ -2317,7 +2427,8 @@ class DebateFlowController:
         )
         if room_id in self.ai_tasks:
             task = self.ai_tasks.pop(room_id)
-            task.cancel()
+            if task is not asyncio.current_task():
+                task.cancel()
         if (
             current_speaker
             and str(current_speaker).startswith("ai_")
@@ -3747,6 +3858,23 @@ class DebateFlowController:
                     debate_uuid,
                     limit=self._resolve_recent_speeches_limit(segment, turn_plan),
                 )
+                dependency_speeches = self._collect_dependency_speeches(
+                    str(segment.get("id") or ""),
+                    turn_plan,
+                    recent_speeches,
+                    speaker_role,
+                )
+                if self._should_skip_ai_turn_without_dependency(
+                    str(segment.get("id") or ""),
+                    turn_plan,
+                    dependency_speeches,
+                ):
+                    await self._skip_ai_turn_due_to_missing_dependency(
+                        room_id,
+                        segment=segment,
+                        speaker_role=speaker_role,
+                    )
+                    return
                 draft = await self.prepare_ai_draft(
                     room_id=room_id,
                     segment=segment,
@@ -3881,6 +4009,10 @@ class DebateFlowController:
         """
         if room_id in self.timer_tasks:
             task = self.timer_tasks[room_id]
+            if task is asyncio.current_task():
+                del self.timer_tasks[room_id]
+                logger.info(f"Stopped timer for room {room_id} from current task")
+                return
             task.cancel()
             try:
                 await task
@@ -3922,13 +4054,34 @@ class DebateFlowController:
                         and room_state.mic_expires_at
                     ):
                         if (datetime.utcnow() + timedelta(hours=8)) >= room_state.mic_expires_at:
+                            expired_owner_role = str(
+                                getattr(room_state, "mic_owner_role", "") or ""
+                            )
+                            next_side = "human"
+                            last_side = getattr(room_state, "free_debate_last_side", None)
+                            should_trigger_ai = False
+                            if expired_owner_role.startswith("debater_"):
+                                next_side = "ai"
+                                last_side = "human"
+                                should_trigger_ai = True
+                            elif expired_owner_role.startswith("ai_"):
+                                next_side = "human"
+                                last_side = "ai"
                             await room_manager.update_room_state(
                                 room_id,
                                 mic_owner_user_id=None,
                                 mic_owner_role=None,
                                 mic_expires_at=None,
                                 current_speaker=None,
+                                free_debate_last_side=last_side,
+                                free_debate_next_side=next_side,
                             )
+                            if expired_owner_role.startswith("ai_"):
+                                await self._clear_ai_turn_state_if_matches(
+                                    room_id,
+                                    segment_id=str(getattr(room_state, "segment_id", "") or ""),
+                                    speaker_role=expired_owner_role,
+                                )
                             await websocket_manager.broadcast_to_room(
                                 room_id,
                                 {
@@ -3939,6 +4092,10 @@ class DebateFlowController:
                                     },
                                 },
                             )
+                            if should_trigger_ai:
+                                asyncio.create_task(
+                                    self.trigger_free_debate_ai_turn(room_id)
+                                )
                     segments = (
                         self.segments.get(room_id) or self._build_default_segments()
                     )
@@ -4043,6 +4200,27 @@ class DebateFlowController:
             )
 
         if turn_processing_status == "processing":
+            if (
+                turn_processing_kind == "llm"
+                and str(getattr(room_state, "current_speaker", "") or "").startswith("ai_")
+            ):
+                logger.warning(
+                    "AI turn timed out while thinking; forcing segment advance "
+                    "(room_id=%s, segment_id=%s)",
+                    room_id,
+                    getattr(room_state, "segment_id", None),
+                )
+                await room_manager.update_room_state(
+                    room_id,
+                    turn_processing_status="idle",
+                    turn_processing_kind=None,
+                    turn_processing_error=None,
+                    pending_advance_reason=None,
+                )
+                return await self.force_advance_segment(
+                    room_id,
+                    reason="host_advance",
+                )
             if not pending_advance_reason:
                 await room_manager.update_room_state(
                     room_id, pending_advance_reason="timeout"
@@ -4095,7 +4273,8 @@ class DebateFlowController:
 
         if room_id in self.ai_tasks:
             task = self.ai_tasks.pop(room_id)
-            task.cancel()
+            if task is not asyncio.current_task():
+                task.cancel()
             try:
                 await task
             except asyncio.CancelledError:

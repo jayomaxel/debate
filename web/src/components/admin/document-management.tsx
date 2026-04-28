@@ -50,6 +50,8 @@ const DocumentManagement: React.FC = () => {
   const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [isPollingDocuments, setIsPollingDocuments] = useState(false);
+  const pollTimerRef = useRef<number | null>(null);
   
   // Upload state
   const [uploading, setUploading] = useState(false);
@@ -81,9 +83,38 @@ const DocumentManagement: React.FC = () => {
     loadDocuments();
   }, [page]);
 
-  const loadDocuments = async () => {
+  useEffect(() => {
+    if (pollTimerRef.current) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+
+    const hasProcessingDocuments = documents.some((doc) =>
+      ['pending', 'processing'].includes(String(doc.upload_status || '').toLowerCase())
+    );
+    setIsPollingDocuments(hasProcessingDocuments);
+
+    if (!hasProcessingDocuments) {
+      return;
+    }
+
+    pollTimerRef.current = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadDocuments({ silent: true });
+      }
+    }, 5000);
+
+    return () => {
+      if (pollTimerRef.current) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [documents, page]);
+
+  const loadDocuments = async (options?: { silent?: boolean }) => {
     try {
-      setLoading(true);
+      if (!options?.silent) setLoading(true);
       setError('');
       
       const response = await AdminService.listKBDocuments(page, pageSize);
@@ -459,7 +490,15 @@ const DocumentManagement: React.FC = () => {
       {/* Document List */}
       <Card>
         <CardHeader>
-          <CardTitle>文档列表</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>文档列表</span>
+            {isPollingDocuments && (
+              <Badge className="bg-blue-100 text-blue-700 border-blue-200">
+                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                自动刷新处理中
+              </Badge>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {documents.length === 0 ? (

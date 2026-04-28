@@ -274,7 +274,7 @@ async def handle_speech_message(
         data: 消息数据
         db: 数据库会话
     """
-    content = data.get("content", "")
+    content = str(data.get("content", "") or "").strip()
     audio_url = data.get("audio_url")
     duration = data.get("duration", 0)
     duration_value = 0
@@ -313,6 +313,19 @@ async def handle_speech_message(
 
     user_role = participant.get("role")
     if not user_role:
+        return
+
+    if not content:
+        await websocket_manager.send_to_user(
+            user_id,
+            {
+                "type": "error",
+                "data": {
+                    "message": "发言内容不能为空",
+                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                },
+            },
+        )
         return
 
     now = (datetime.utcnow() + timedelta(hours=8))
@@ -728,6 +741,24 @@ async def handle_audio_message(
         data: 消息数据（包含audio_data, audio_format等）
         db: 数据库会话
     """
+    asr_started_segment_id = None
+    asr_started_phase = None
+    asr_started_speaker = None
+    asr_started_user_role = None
+
+    def asr_turn_still_current() -> bool:
+        latest = room_manager.get_room_state(room_id)
+        if not latest:
+            return False
+        return (
+            getattr(latest, "segment_id", None) == asr_started_segment_id
+            and getattr(latest, "current_phase", None) == asr_started_phase
+            and getattr(latest, "current_speaker", None) == asr_started_speaker
+            and getattr(latest, "turn_processing_kind", None) == "asr"
+            and getattr(latest, "turn_speech_user_id", None) == str(user_id)
+            and getattr(latest, "turn_speech_role", None) == str(asr_started_user_role)
+        )
+
     try:
         room_state = room_manager.get_room_state(room_id)
         if not room_state:
@@ -801,6 +832,10 @@ async def handle_audio_message(
                 return
 
         segment_id = getattr(room_state, "segment_id", None)
+        asr_started_segment_id = segment_id
+        asr_started_phase = getattr(room_state, "current_phase", None)
+        asr_started_speaker = getattr(room_state, "current_speaker", None)
+        asr_started_user_role = user_role
         await room_manager.update_room_state(
             room_id,
             turn_processing_status="processing",
@@ -816,13 +851,14 @@ async def handle_audio_message(
         audio_format = data.get("audio_format", "webm")
         if not audio_base64:
             logger.warning(f"No audio data in message from user {user_id}")
-            await room_manager.update_room_state(
-                room_id,
-                turn_processing_status="failed",
-                turn_processing_kind="asr",
-                turn_processing_error="音频数据为空",
-                turn_speech_committed=False,
-            )
+            if asr_turn_still_current():
+                await room_manager.update_room_state(
+                    room_id,
+                    turn_processing_status="failed",
+                    turn_processing_kind="asr",
+                    turn_processing_error="音频数据为空",
+                    turn_speech_committed=False,
+                )
             await websocket_manager.send_to_user(
                 user_id,
                 {
@@ -912,13 +948,40 @@ async def handle_audio_message(
         )
         if isinstance(transcription_result, dict) and "error" in transcription_result:
             logger.error(f"ASR failed: {transcription_result['error']}")
-            await room_manager.update_room_state(
-                room_id,
-                turn_processing_status="failed",
-                turn_processing_kind="asr",
-                turn_processing_error=str(transcription_result.get("error")),
-                turn_speech_committed=False,
-            )
+            if asr_turn_still_current():
+                await room_manager.update_room_state(
+                    room_id,
+                    turn_processing_status="failed",
+                    turn_processing_kind="asr",
+                    turn_processing_error=str(transcription_result.get("error")),
+                    turn_speech_committed=False,
+                )
+            if speech is not None:
+                await websocket_manager.broadcast_to_room(
+                    room_id,
+                    {
+                        "type": "speech",
+                        "data": {
+                            "speech_id": str(speech.id),
+                            "message_id": str(speech.id),
+                            "user_id": user_id,
+                            "role": user_role,
+                            "name": participant.get("name"),
+                            "stance": participant.get("stance"),
+                            "content": "",
+                            "audio_url": audio_url,
+                            "audio_format": audio_format,
+                            "duration": int(duration or 0),
+                            "timestamp": speech_timestamp.isoformat(),
+                            "is_audio": True,
+                            "transcription_status": "failed",
+                            "transcription_error": str(transcription_result.get("error")),
+                            "phase": str(room_state.current_phase.value),
+                            "segment_id": segment_id,
+                            "segment_title": getattr(room_state, "segment_title", None),
+                        },
+                    },
+                )
             await websocket_manager.send_to_user(
                 user_id,
                 {
@@ -934,13 +997,40 @@ async def handle_audio_message(
         text, asr_duration = _extract_transcription_text_and_duration(transcription_result)
         if not text:
             logger.warning(f"Empty transcription result for user {user_id}")
-            await room_manager.update_room_state(
-                room_id,
-                turn_processing_status="failed",
-                turn_processing_kind="asr",
-                turn_processing_error="未识别到语音内容",
-                turn_speech_committed=False,
-            )
+            if asr_turn_still_current():
+                await room_manager.update_room_state(
+                    room_id,
+                    turn_processing_status="failed",
+                    turn_processing_kind="asr",
+                    turn_processing_error="未识别到语音内容",
+                    turn_speech_committed=False,
+                )
+            if speech is not None:
+                await websocket_manager.broadcast_to_room(
+                    room_id,
+                    {
+                        "type": "speech",
+                        "data": {
+                            "speech_id": str(speech.id),
+                            "message_id": str(speech.id),
+                            "user_id": user_id,
+                            "role": user_role,
+                            "name": participant.get("name"),
+                            "stance": participant.get("stance"),
+                            "content": "",
+                            "audio_url": audio_url,
+                            "audio_format": audio_format,
+                            "duration": int(duration or 0),
+                            "timestamp": speech_timestamp.isoformat(),
+                            "is_audio": True,
+                            "transcription_status": "failed",
+                            "transcription_error": "未识别到语音内容",
+                            "phase": str(room_state.current_phase.value),
+                            "segment_id": segment_id,
+                            "segment_title": getattr(room_state, "segment_title", None),
+                        },
+                    },
+                )
             await websocket_manager.send_to_user(
                 user_id,
                 {
@@ -996,27 +1086,30 @@ async def handle_audio_message(
             },
         )
 
-        await room_manager.update_room_state(
-            room_id,
-            turn_processing_status="succeeded",
-            turn_processing_kind="asr",
-            turn_processing_error=None,
-            turn_speech_committed=True,
-            turn_speech_user_id=str(user_id),
-            turn_speech_role=str(user_role),
-            turn_speech_timestamp=(datetime.utcnow() + timedelta(hours=8)),
-        )
-        await _notify_committed_speech(
-            room_id,
-            speech=speech,
-            speaker_role=str(user_role),
-            segment_id=str(segment_id or ""),
-        )
+        asr_current = asr_turn_still_current()
+        if asr_current:
+            await room_manager.update_room_state(
+                room_id,
+                turn_processing_status="succeeded",
+                turn_processing_kind="asr",
+                turn_processing_error=None,
+                turn_speech_committed=True,
+                turn_speech_user_id=str(user_id),
+                turn_speech_role=str(user_role),
+                turn_speech_timestamp=(datetime.utcnow() + timedelta(hours=8)),
+            )
+            await _notify_committed_speech(
+                room_id,
+                speech=speech,
+                speaker_role=str(user_role),
+                segment_id=str(segment_id or ""),
+            )
         latest_state = room_manager.get_room_state(room_id)
         if (
             not is_free_debate
             and latest_state
             and latest_state.segment_id == segment_id
+            and asr_current
             and getattr(latest_state, "pending_advance_reason", None)
         ):
             pending = latest_state.pending_advance_reason
@@ -1044,6 +1137,14 @@ async def handle_audio_message(
 
     except Exception as e:
         logger.error(f"Failed to process audio message: {e}", exc_info=True)
+        if asr_turn_still_current():
+            await room_manager.update_room_state(
+                room_id,
+                turn_processing_status="failed",
+                turn_processing_kind="asr",
+                turn_processing_error=str(e),
+                turn_speech_committed=False,
+            )
         await websocket_manager.send_to_user(
             user_id,
             {

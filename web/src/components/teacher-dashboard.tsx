@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   Card,
   CardContent,
@@ -40,24 +40,21 @@ import type {
   Student,
   CreateDebateParams,
   TeacherDebate,
+  TeacherDebateSupportDocument,
   DebateGroupingItem,
   TeacherDashboardStats,
 } from '@/services/teacher.service';
 import {
   Plus,
   Upload,
+  Trash2,
   Users,
-  Clock,
   CheckCircle,
   FileSpreadsheet,
   Play,
   History,
   Settings,
-  BarChart3,
-  TrendingUp,
   Calendar,
-  MessageSquare,
-  Award,
   Loader2,
   AlertCircle,
   User as UserIcon,
@@ -115,9 +112,18 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [editingDebateStatus, setEditingDebateStatus] = useState<
     TeacherDebate['status'] | null
   >(null);
+  const [supportDocuments, setSupportDocuments] = useState<
+    TeacherDebateSupportDocument[]
+  >([]);
+  const [supportDocumentsLoading, setSupportDocumentsLoading] = useState(false);
+  const [supportUploading, setSupportUploading] = useState(false);
+  const [deletingSupportDocumentId, setDeletingSupportDocumentId] = useState<
+    string | null
+  >(null);
   const [submitMode, setSubmitMode] = useState<'draft' | 'published' | null>(
     null
   );
+  const supportFileInputRef = useRef<HTMLInputElement>(null);
 
   const [debateConfig, setDebateConfig] = useState<DebateConfig>({
     topic: '人类应不应该与高度拟人化的AI伴侣建立真实的感情羁绊？',
@@ -282,7 +288,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     { id: 'new', label: '新建辩论', icon: Plus },
     { id: 'history', label: '历史记录', icon: History },
     { id: 'students', label: '学生管理', icon: Users },
-    { id: 'analytics', label: '数据分析', icon: BarChart3 },
     { id: 'profile', label: '个人中心', icon: UserIcon },
   ];
 
@@ -301,6 +306,87 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     });
   };
 
+  const loadSupportDocuments = async (debateId: string) => {
+    try {
+      setSupportDocumentsLoading(true);
+      const documents = await TeacherService.listDebateSupportDocuments(debateId);
+      setSupportDocuments(documents);
+    } catch (err: any) {
+      console.error('Failed to load support documents:', err);
+      toast({
+        variant: 'destructive',
+        title: '支撑材料加载失败',
+        description: err?.message || '请稍后重试',
+        duration: 3000,
+      });
+    } finally {
+      setSupportDocumentsLoading(false);
+    }
+  };
+
+  const handleSupportDocumentUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!editingDebateId) {
+      setError('请先保存草稿后再上传支撑材料');
+      return;
+    }
+
+    const allowedExtensions = ['.pdf', '.docx'];
+    const lowerName = file.name.toLowerCase();
+    if (!allowedExtensions.some(ext => lowerName.endsWith(ext))) {
+      setError('仅支持上传 PDF 或 DOCX 支撑材料');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('文件大小不能超过 10MB');
+      return;
+    }
+
+    try {
+      setSupportUploading(true);
+      setError(null);
+      const document = await TeacherService.uploadDebateSupportDocument(
+        editingDebateId,
+        file
+      );
+      setSupportDocuments(prev => [document, ...prev]);
+      toast({
+        variant: 'success',
+        title: '支撑材料已上传',
+        description: '系统正在处理文档内容，稍后可刷新查看状态。',
+        duration: 3000,
+      });
+    } catch (err: any) {
+      console.error('Failed to upload support document:', err);
+      setError(err?.message || '上传支撑材料失败');
+    } finally {
+      setSupportUploading(false);
+    }
+  };
+
+  const handleDeleteSupportDocument = async (documentId: string) => {
+    if (!editingDebateId) return;
+    try {
+      setDeletingSupportDocumentId(documentId);
+      await TeacherService.deleteDebateSupportDocument(editingDebateId, documentId);
+      setSupportDocuments(prev => prev.filter(item => item.id !== documentId));
+      toast({
+        variant: 'success',
+        title: '支撑材料已删除',
+        duration: 2500,
+      });
+    } catch (err: any) {
+      console.error('Failed to delete support document:', err);
+      setError(err?.message || '删除支撑材料失败');
+    } finally {
+      setDeletingSupportDocumentId(null);
+    }
+  };
+
   const handleEditDebate = async (debate: TeacherDebate) => {
     console.log('Editing debate (initial):', debate);
 
@@ -309,6 +395,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     setEditingDebateStatus(debate.status);
     setActiveTab('new');
     setError(null);
+    setSupportDocuments([]);
+    void loadSupportDocuments(debate.id);
 
     try {
       // Fetch latest details to ensure we have student_ids
@@ -362,6 +450,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     setSelectedStudentIds([]);
     setEditingDebateId(null);
     setEditingDebateStatus(null);
+    setSupportDocuments([]);
     setError(null);
     setActiveTab('history');
   };
@@ -721,6 +810,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     setSelectedStudentIds([]);
     setEditingDebateId(null);
     setEditingDebateStatus(null);
+    setSupportDocuments([]);
     setError(null);
   };
 
@@ -931,13 +1021,19 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         setDebateDetailsById(prev => ({ ...prev, [newDebate.id]: newDebate }));
 
         if (targetStatus === 'draft') {
+          setEditingDebateId(newDebate.id);
+          setEditingDebateStatus('draft');
+          setActiveTab('new');
+          setSupportDocuments([]);
           toast({
             variant: 'success',
             title: '\u8349\u7a3f\u5df2\u4fdd\u5b58',
             description:
-              '\u4f60\u53ef\u4ee5\u7a0d\u540e\u7ee7\u7eed\u7f16\u8f91\u6216\u76f4\u63a5\u53d1\u5e03\u3002',
+              '\u8349\u7a3f\u5df2\u4fdd\u5b58\uff0c\u53ef\u7ee7\u7eed\u4e0a\u4f20\u652f\u6491\u6750\u6599\u3002',
             duration: 3000,
           });
+          await refetchHistoryData();
+          return;
         } else {
           toast({
             variant: 'success',
@@ -973,6 +1069,26 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const isDraftEditMode = Boolean(
     editingDebateId && editingDebateStatus === 'draft'
   );
+
+  const supportStatusLabel: Record<
+    TeacherDebateSupportDocument['embedding_status'],
+    string
+  > = {
+    pending: '待处理',
+    processing: '处理中',
+    completed: '已完成',
+    failed: '处理失败',
+  };
+
+  const supportStatusClassName: Record<
+    TeacherDebateSupportDocument['embedding_status'],
+    string
+  > = {
+    pending: 'bg-slate-100 text-slate-700 border-slate-200',
+    processing: 'bg-blue-100 text-blue-700 border-blue-200',
+    completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    failed: 'bg-red-100 text-red-700 border-red-200',
+  };
 
   if (loading) {
     return (
@@ -1224,6 +1340,149 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <p className='text-xs text-slate-500'>
                         使用顿号、逗号或换行分隔，发布后会在议题详情页以标签形式展示。
                       </p>
+
+                      <div className='rounded-lg border border-slate-200 bg-slate-50 p-4'>
+                        <input
+                          ref={supportFileInputRef}
+                          type='file'
+                          accept='.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                          className='hidden'
+                          onChange={handleSupportDocumentUpload}
+                        />
+                        <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                          <div>
+                            <div className='text-sm font-medium text-slate-800'>
+                              支撑材料
+                            </div>
+                            <p className='text-xs text-slate-500'>
+                              支持 PDF / DOCX，单个文件不超过 10MB。文本知识点和上传材料会并行保留。
+                            </p>
+                          </div>
+                          {editingDebateId ? (
+                            <div className='flex gap-2'>
+                              <Button
+                                type='button'
+                                variant='outline'
+                                size='sm'
+                                disabled={supportDocumentsLoading}
+                                onClick={() => loadSupportDocuments(editingDebateId)}
+                              >
+                                {supportDocumentsLoading ? (
+                                  <Loader2 className='w-4 h-4 mr-2 animate-spin' />
+                                ) : (
+                                  <History className='w-4 h-4 mr-2' />
+                                )}
+                                刷新
+                              </Button>
+                              <Button
+                                type='button'
+                                size='sm'
+                                disabled={supportUploading}
+                                onClick={() => supportFileInputRef.current?.click()}
+                              >
+                                {supportUploading ? (
+                                  <Loader2 className='w-4 h-4 mr-2 animate-spin' />
+                                ) : (
+                                  <Upload className='w-4 h-4 mr-2' />
+                                )}
+                                上传材料
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              type='button'
+                              variant='outline'
+                              size='sm'
+                              disabled={submitting}
+                              onClick={() => handleSubmit('draft')}
+                            >
+                              {submitting && submitMode === 'draft' ? (
+                                <Loader2 className='w-4 h-4 mr-2 animate-spin' />
+                              ) : (
+                                <Upload className='w-4 h-4 mr-2' />
+                              )}
+                              先保存草稿
+                            </Button>
+                          )}
+                        </div>
+
+                        {!editingDebateId ? (
+                          <Alert className='mt-3 border-amber-200 bg-amber-50'>
+                            <AlertCircle className='h-4 w-4 text-amber-600' />
+                            <AlertDescription className='text-amber-800'>
+                              请先保存草稿后再上传支撑材料。
+                            </AlertDescription>
+                          </Alert>
+                        ) : supportDocumentsLoading ? (
+                          <div className='mt-3 flex items-center gap-2 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500'>
+                            <Loader2 className='w-4 h-4 animate-spin' />
+                            正在加载支撑材料...
+                          </div>
+                        ) : supportDocuments.length === 0 ? (
+                          <div className='mt-3 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500'>
+                            暂无已上传支撑材料。
+                          </div>
+                        ) : (
+                          <div className='mt-3 space-y-2'>
+                            {supportDocuments.map(document => (
+                              <div
+                                key={document.id}
+                                className='flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-3'
+                              >
+                                <div className='min-w-0'>
+                                  <div className='flex items-center gap-2'>
+                                    <FileSpreadsheet className='h-4 w-4 shrink-0 text-slate-500' />
+                                    <span className='truncate text-sm font-medium text-slate-800'>
+                                      {document.filename}
+                                    </span>
+                                  </div>
+                                  <div className='mt-1 flex items-center gap-2 text-xs text-slate-500'>
+                                    <Badge
+                                      variant='outline'
+                                      className={
+                                        supportStatusClassName[
+                                          document.embedding_status
+                                        ]
+                                      }
+                                    >
+                                      {
+                                        supportStatusLabel[
+                                          document.embedding_status
+                                        ]
+                                      }
+                                    </Badge>
+                                    {document.uploaded_at && (
+                                      <span>
+                                        {new Date(
+                                          document.uploaded_at
+                                        ).toLocaleString('zh-CN')}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <Button
+                                  type='button'
+                                  variant='ghost'
+                                  size='sm'
+                                  className='shrink-0 text-red-600 hover:bg-red-50 hover:text-red-700'
+                                  disabled={
+                                    deletingSupportDocumentId === document.id
+                                  }
+                                  onClick={() =>
+                                    handleDeleteSupportDocument(document.id)
+                                  }
+                                >
+                                  {deletingSupportDocumentId === document.id ? (
+                                    <Loader2 className='h-4 w-4 animate-spin' />
+                                  ) : (
+                                    <Trash2 className='h-4 w-4' />
+                                  )}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* 赛制设置 */}

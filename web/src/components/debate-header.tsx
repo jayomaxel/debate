@@ -5,8 +5,10 @@ import {
   Clock,
   Users,
   Volume2,
+  VolumeX,
   Settings,
   Maximize,
+  Minimize,
   Trophy,
   Zap,
   Target
@@ -25,6 +27,9 @@ interface DebateHeaderProps {
   onEndDebate?: () => void;
   onSettings?: () => void;
   onFullscreen?: () => void;
+  isFullscreen?: boolean;
+  autoPlayEnabled?: boolean;
+  onToggleAutoPlay?: () => void;
 }
 
 const DebateHeader: React.FC<DebateHeaderProps> = ({
@@ -39,7 +44,10 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
   onAdvanceSegment,
   onEndDebate,
   onSettings,
-  onFullscreen
+  onFullscreen,
+  isFullscreen = false,
+  autoPlayEnabled = true,
+  onToggleAutoPlay
 }) => {
   const [isPulsing, setIsPulsing] = useState(false);
 
@@ -181,8 +189,9 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
               size="sm"
               onClick={onFullscreen}
               className="text-slate-400 hover:text-white hover:bg-slate-700"
+              title={isFullscreen ? '退出全屏' : '进入全屏'}
             >
-              <Maximize className="w-4 h-4" />
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </Button>
 
             <div className="w-px h-6 bg-slate-600 mx-2" />
@@ -190,9 +199,11 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
             <Button
               variant="ghost"
               size="sm"
+              onClick={onToggleAutoPlay}
               className="text-slate-400 hover:text-white hover:bg-slate-700"
+              title={autoPlayEnabled ? '关闭自动播放' : '开启自动播放'}
             >
-              <Volume2 className="w-4 h-4" />
+              {autoPlayEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </Button>
           </div>
         </div>

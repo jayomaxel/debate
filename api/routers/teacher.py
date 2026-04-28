@@ -9,10 +9,12 @@ from typing import Optional, List
 from logging_config import get_logger
 from database import get_db
 from models.user import User
+from models.document import Document
 from services.class_service import ClassService
 from services.student_service import StudentService
 from services.debate_service import DebateService
 from services.analytics_service import AnalyticsService
+from services.knowledge_base import KnowledgeBase
 from middleware.auth_middleware import require_teacher, PermissionChecker
 
 logger = get_logger(__name__)
@@ -41,6 +43,48 @@ class CreateDebateRequest(BaseModel):
     description: Optional[str] = None
     student_ids: Optional[List[str]] = None
     status: Optional[str] = None
+
+
+def _serialize_support_document(document: Document) -> dict:
+    return {
+        "id": str(document.id),
+        "filename": document.filename,
+        "file_type": document.file_type,
+        "embedding_status": document.embedding_status,
+        "uploaded_at": document.uploaded_at.isoformat()
+        if document.uploaded_at
+        else None,
+    }
+
+
+def _ensure_teacher_can_modify_debate(
+    db: Session,
+    current_user: User,
+    debate_id: str,
+) -> None:
+    checker = PermissionChecker(db)
+    if not checker.can_modify_debate(current_user, debate_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该辩论",
+        )
+
+
+def _resolve_support_file_type(file: UploadFile) -> str:
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    if content_type == "application/pdf" or filename.endswith(".pdf"):
+        return "application/pdf"
+    if (
+        content_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        or filename.endswith(".docx")
+    ):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="仅支持 PDF 或 DOCX 支撑材料",
+    )
 
 
 # ==================== 班级管理 ====================
@@ -340,6 +384,92 @@ async def get_debates(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+@router.get(
+    "/debates/{debate_id}/support-documents",
+    summary="获取辩论支撑材料列表",
+)
+async def list_debate_support_documents(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """获取某场辩论绑定的支撑材料列表"""
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    knowledge_base = KnowledgeBase(db)
+    documents = knowledge_base.get_documents(debate_id)
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": [_serialize_support_document(document) for document in documents],
+    }
+
+
+@router.post(
+    "/debates/{debate_id}/support-documents",
+    summary="上传辩论支撑材料",
+)
+async def upload_debate_support_document(
+    debate_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """上传某场辩论绑定的 PDF/DOCX 支撑材料"""
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    file_type = _resolve_support_file_type(file)
+    file_data = await file.read()
+    knowledge_base = KnowledgeBase(db)
+    try:
+        document = await knowledge_base.upload_document(
+            file_data=file_data,
+            filename=file.filename or "support-document",
+            file_type=file_type,
+            debate_id=debate_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    return {
+        "code": 200,
+        "message": "上传成功",
+        "data": _serialize_support_document(document),
+    }
+
+
+@router.delete(
+    "/debates/{debate_id}/support-documents/{document_id}",
+    summary="删除辩论支撑材料",
+)
+async def delete_debate_support_document(
+    debate_id: str,
+    document_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """删除某场辩论绑定的支撑材料"""
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document or str(document.debate_id) != str(debate_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="支撑材料不存在",
+        )
+    knowledge_base = KnowledgeBase(db)
+    ok = await knowledge_base.delete_document(document_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="删除支撑材料失败",
+        )
+    return {
+        "code": 200,
+        "message": "删除成功",
+        "data": None,
+    }
 
 
 # ==================== 配置管理已迁移至管理员端 ====================

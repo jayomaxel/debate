@@ -76,6 +76,14 @@ export interface TeacherDashboardStats {
   updated_at: string;
 }
 
+export interface TeacherDebateSupportDocument {
+  id: string;
+  filename: string;
+  file_type: string;
+  embedding_status: 'pending' | 'processing' | 'completed' | 'failed';
+  uploaded_at: string | null;
+}
+
 export interface OpenAIConfig {
   api_key: string;
   base_url: string;
@@ -182,6 +190,53 @@ class TeacherService {
       return await api.get<TeacherDashboardStats>('/api/teacher/dashboard');
     } catch (error) {
       console.error('[TeacherService] Get dashboard stats failed:', error);
+      throw error;
+    }
+  }
+
+  static async listDebateSupportDocuments(debateId: string): Promise<TeacherDebateSupportDocument[]> {
+    try {
+      return await api.get<TeacherDebateSupportDocument[]>(
+        `/api/teacher/debates/${debateId}/support-documents`
+      );
+    } catch (error) {
+      console.error('[TeacherService] List debate support documents failed:', error);
+      throw error;
+    }
+  }
+
+  static async uploadDebateSupportDocument(
+    debateId: string,
+    file: File
+  ): Promise<TeacherDebateSupportDocument> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      return await api.post<TeacherDebateSupportDocument>(
+        `/api/teacher/debates/${debateId}/support-documents`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+    } catch (error) {
+      console.error('[TeacherService] Upload debate support document failed:', error);
+      throw error;
+    }
+  }
+
+  static async deleteDebateSupportDocument(
+    debateId: string,
+    documentId: string
+  ): Promise<void> {
+    try {
+      await api.delete<void>(
+        `/api/teacher/debates/${debateId}/support-documents/${documentId}`
+      );
+    } catch (error) {
+      console.error('[TeacherService] Delete debate support document failed:', error);
       throw error;
     }
   }

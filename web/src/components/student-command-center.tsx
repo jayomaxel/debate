@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,13 +23,14 @@ import {
   Rocket,
   Shield,
   Brain,
-  ExternalLink,
+  Eye,
+  Download,
   Search,
   Loader2,
+  RefreshCw,
   Settings,
   Bot
 } from 'lucide-react';
-// import PreparationAssistant from '@/components/student/preparation-assistant';
 
 interface StudentStats {
   totalMatches: number;
@@ -39,6 +40,8 @@ interface StudentStats {
   currentStreak: number;
   bestStreak: number;
 }
+
+type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
 
 const formatDuration = (seconds?: number) => {
   const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
@@ -88,7 +91,7 @@ interface StudentCommandCenterProps {
   onViewReport?: (matchId: string) => void;
   onViewReplay?: (debateId: string) => void;
   onLogout?: () => void;
-  onNavigateToAnalytics?: () => void;
+  onNavigateToAnalytics?: (tab?: StudentAnalyticsTab) => void;
   onNavigateToPreparation?: () => void;
   defaultShowProfile?: boolean;
   defaultProfileTab?: 'info' | 'password' | 'ability';
@@ -111,7 +114,6 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   const { toast } = useToast();
   const [inputClassCode, setInputClassCode] = useState('');
   const [showProfile, setShowProfile] = useState(!!defaultShowProfile);
-  // Removed showPreparationAssistant as we now use navigation
   const [searchTerm, setSearchTerm] = useState('');
   // const [filterCategory, setFilterCategory] = useState<string>('all'); // 暂时移除分类筛选，后续可加回
   
@@ -120,6 +122,12 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   const [history, setHistory] = useState<DebateHistoryItem[]>([]);
   const [kbDocuments, setKbDocuments] = useState<KBDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbRefreshing, setKbRefreshing] = useState(false);
+  const [lastKbSyncAt, setLastKbSyncAt] = useState<string | null>(null);
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(null);
+  const [previewingDocumentId, setPreviewingDocumentId] = useState<string | null>(null);
+  const kbPollTimerRef = useRef<number | null>(null);
   
   const studentName = propStudentName || user?.name || '学生';
 
@@ -131,6 +139,72 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
     averageScore: analytics?.average_score || 0,
     currentStreak: 0, // 暂时没有连胜数据
     bestStreak: 0
+  };
+
+  const hasProcessingKbDocuments = (documents: KBDocument[]) =>
+    documents.some((doc) => ['pending', 'processing'].includes(String(doc.upload_status || '').toLowerCase()));
+
+  const loadKnowledgeBaseDocuments = async (mode: 'initial' | 'manual' | 'poll' = 'manual') => {
+    try {
+      if (mode === 'initial') setKbLoading(true);
+      if (mode === 'manual') setKbRefreshing(true);
+      const kbData = await StudentService.getKBDocuments(1, 100);
+      setKbDocuments(kbData?.documents || []);
+      setLastKbSyncAt(new Date().toISOString());
+    } catch (err: any) {
+      console.error('Failed to load knowledge base documents:', err);
+      if (mode !== 'poll') {
+        toast({
+          variant: "destructive",
+          title: "知识库加载失败",
+          description: err.message || '加载知识库文档失败',
+        });
+      }
+    } finally {
+      if (mode === 'initial') setKbLoading(false);
+      if (mode === 'manual') setKbRefreshing(false);
+    }
+  };
+
+  const handlePreviewDocument = async (doc: KBDocument) => {
+    const fileType = String(doc.file_type || '').toLowerCase();
+    if (!fileType.includes('pdf')) {
+      toast({
+        title: '暂不支持在线预览',
+        description: '当前文件类型请使用下载查看。',
+      });
+      return;
+    }
+    try {
+      setPreviewingDocumentId(doc.id);
+      const blob = await StudentService.getKBDocumentBlob(doc.id);
+      const url = window.URL.createObjectURL(blob as any);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 30000);
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "预览失败",
+        description: err.message || '打开知识库文档失败',
+      });
+    } finally {
+      setPreviewingDocumentId(null);
+    }
+  };
+
+  const handleDownloadDocument = async (doc: KBDocument) => {
+    try {
+      setDownloadingDocumentId(doc.id);
+      await StudentService.downloadKBDocument(doc);
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "下载失败",
+        description: err.message || '下载知识库文档失败',
+      });
+    } finally {
+      setDownloadingDocumentId(null);
+    }
   };
 
   // 加载数据
@@ -149,6 +223,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         setAnalytics(analyticsData);
         setHistory(historyData?.list || []);
         setKbDocuments(kbData?.documents || []);
+        setLastKbSyncAt(new Date().toISOString());
       } catch (err: any) {
         console.error('Failed to load student data:', err);
         toast({
@@ -162,6 +237,46 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
     };
 
     loadData();
+  }, []);
+
+  useEffect(() => {
+    if (kbPollTimerRef.current) {
+      window.clearInterval(kbPollTimerRef.current);
+      kbPollTimerRef.current = null;
+    }
+
+    if (!hasProcessingKbDocuments(kbDocuments)) {
+      return;
+    }
+
+    kbPollTimerRef.current = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadKnowledgeBaseDocuments('poll');
+      }
+    }, 8000);
+
+    return () => {
+      if (kbPollTimerRef.current) {
+        window.clearInterval(kbPollTimerRef.current);
+        kbPollTimerRef.current = null;
+      }
+    };
+  }, [kbDocuments]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => {
+      void loadKnowledgeBaseDocuments('poll');
+    };
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') refreshOnFocus();
+    };
+
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnVisible);
+    return () => {
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnVisible);
+    };
   }, []);
 
   const handleJoinClass = async () => {
@@ -383,6 +498,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
             history={history}
             limit={4}
             showAllButton={true}
+            onClickAll={() => onNavigateToAnalytics?.('history')}
             onSelect={(debateId) => onViewReport?.(debateId)}
             onReplay={(debateId) => onViewReplay?.(debateId)}
           />
@@ -391,12 +507,33 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         {/* 底部：课程知识库 */}
         <Card className="bg-white border-slate-200 shadow-sm">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-blue-600" />
-              课程知识库
-              <Badge variant="outline" className="ml-auto">
-                {kbDocuments.length} 篇文档
-              </Badge>
+            <CardTitle className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-blue-600" />
+                课程知识库
+                <Badge variant="outline">
+                  {kbDocuments.length} 篇文档
+                </Badge>
+              </div>
+              <div className="flex items-center gap-3 text-xs font-normal text-slate-500">
+                {lastKbSyncAt && (
+                  <span>最近同步：{new Date(lastKbSyncAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={kbRefreshing || kbLoading}
+                  onClick={() => loadKnowledgeBaseDocuments('manual')}
+                >
+                  {kbRefreshing || kbLoading ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 mr-1" />
+                  )}
+                  刷新
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -435,8 +572,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
                 return (
                   <div
                     key={doc.id}
-                    className="p-4 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer transition-colors"
-                    onClick={() => console.log('打开文档:', doc.filename)}
+                    className="p-4 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
                   >
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-2">
@@ -445,9 +581,29 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
                         </div>
                         <span className="text-xs text-slate-600">{fileTypeConfig.name}</span>
                       </div>
-                      <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                        {formatDate(doc.uploaded_at)}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                          {formatDate(doc.uploaded_at)}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className={
+                            ['pending', 'processing'].includes(String(doc.upload_status || '').toLowerCase())
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : String(doc.upload_status || '').toLowerCase() === 'failed'
+                              ? 'bg-red-50 text-red-700 border-red-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }
+                        >
+                          {String(doc.upload_status || '').toLowerCase() === 'pending'
+                            ? '待处理'
+                            : String(doc.upload_status || '').toLowerCase() === 'processing'
+                            ? '处理中'
+                            : String(doc.upload_status || '').toLowerCase() === 'failed'
+                            ? '处理失败'
+                            : '已完成'}
+                        </Badge>
+                      </div>
                     </div>
 
                     <h4 className="font-medium text-slate-900 mb-2 truncate" title={doc.filename}>
@@ -462,7 +618,36 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
                     
                     <div className="flex items-center justify-between text-xs text-slate-500 mt-4">
                       <span>📦 {formatFileSize(doc.file_size)}</span>
-                      <ExternalLink className="w-3 h-3" />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2 text-xs"
+                          disabled={previewingDocumentId === doc.id}
+                          onClick={() => handlePreviewDocument(doc)}
+                        >
+                          {previewingDocumentId === doc.id ? (
+                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          ) : (
+                            <Eye className="w-3 h-3 mr-1" />
+                          )}
+                          预览
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2 text-xs"
+                          disabled={downloadingDocumentId === doc.id}
+                          onClick={() => handleDownloadDocument(doc)}
+                        >
+                          {downloadingDocumentId === doc.id ? (
+                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          ) : (
+                            <Download className="w-3 h-3 mr-1" />
+                          )}
+                          下载
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 );

@@ -11,14 +11,14 @@ import {
   Volume2,
   Layers,
   FileText,
-  // Mail
+  Mail
 } from 'lucide-react';
 import ClassManagement from './admin/class-management';
 import ModelConfiguration from './admin/model-configuration';
 import AsrConfiguration from './admin/asr-configuration';
 import TtsConfiguration from './admin/tts-configuration';
 import VectorConfiguration from './admin/vector-configuration';
-// import EmailConfiguration from './admin/email-configuration';
+import EmailConfiguration from './admin/email-configuration';
 import CozeConfiguration from './admin/coze-configuration';
 import UserManagement from './admin/user-management';
 import DocumentManagement from './admin/document-management';
@@ -40,7 +40,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
     { id: 'asr' as TabType, label: 'ASR配置', icon: Mic },
     { id: 'tts' as TabType, label: 'TTS配置', icon: Volume2 },
     { id: 'vector' as TabType, label: '向量配置', icon: Layers },
-    // { id: 'email' as TabType, label: '邮件配置', icon: Mail },
+    { id: 'email' as TabType, label: '邮件配置', icon: Mail },
     { id: 'coze' as TabType, label: 'Coze配置', icon: Bot },
     { id: 'users' as TabType, label: '成员管理', icon: Users },
   ];
@@ -108,7 +108,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                 {activeTab === 'asr' && '配置语音识别模型参数'}
                 {activeTab === 'tts' && '配置语音合成模型参数'}
                 {activeTab === 'vector' && '配置向量嵌入模型参数'}
-                {/* {activeTab === 'email' && '配置系统邮件服务'} */}
+                {activeTab === 'email' && '配置系统邮件服务'}
                 {activeTab === 'knowledge' && '管理知识库文档与向量化'}
                 {activeTab === 'coze' && '配置Coze代理设置'}
                 {activeTab === 'users' && '按教师与学生分类管理系统成员'}
@@ -121,7 +121,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
             {activeTab === 'asr' && <AsrConfiguration />}
             {activeTab === 'tts' && <TtsConfiguration />}
             {activeTab === 'vector' && <VectorConfiguration />}
-            {/* {activeTab === 'email' && <EmailConfiguration />} */}
+            {activeTab === 'email' && <EmailConfiguration />}
             {activeTab === 'knowledge' && <DocumentManagement />}
             {activeTab === 'coze' && <CozeConfiguration />}
             {activeTab === 'users' && <UserManagement />}

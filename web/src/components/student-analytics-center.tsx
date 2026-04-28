@@ -34,14 +34,20 @@ interface StudentAnalyticsCenterProps {
   onBack?: () => void;
   onViewReport?: (debateId: string) => void;
   onViewReplay?: (debateId: string) => void;
+  defaultTab?: MenuTab;
 }
 
 type MenuTab = 'history' | 'growth' | 'comparison' | 'achievements';
 
-const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({ onBack, onViewReport, onViewReplay }) => {
+const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
+  onBack,
+  onViewReport,
+  onViewReplay,
+  defaultTab = 'history',
+}) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<MenuTab>('history');
+  const [activeTab, setActiveTab] = useState<MenuTab>(defaultTab);
   const [loading, setLoading] = useState(true);
   
   // 数据状态
@@ -61,6 +67,10 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({ onBack,
     const message = String(error?.message || error?.detail || '');
     return message.includes('未加入班级');
   };
+
+  useEffect(() => {
+    setActiveTab(defaultTab);
+  }, [defaultTab]);
 
   // 加载数据
   useEffect(() => {

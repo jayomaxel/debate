@@ -2,15 +2,18 @@
 学生知识库API路由
 提供学生访问知识库的功能，包括提问和查看对话历史
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
 import logging
 import json
+import os
+import uuid
 
 from database import get_db
+from models.kb_document import KBDocument
 from models.user import User
 from services.rag_service import RAGService
 from services.document_service import DocumentService
@@ -329,6 +332,7 @@ async def get_conversation_history(
     dependencies=[Depends(require_role(["student"]))]
 )
 async def list_documents(
+    response: Response,
     page: int = 1,
     page_size: int = 20,
     current_user: User = Depends(require_role(["student"])),
@@ -351,6 +355,10 @@ async def list_documents(
     - total_pages: 总页数
     """
     try:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
         # 验证分页参数
         if page < 1:
             raise HTTPException(
@@ -411,4 +419,58 @@ async def list_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取文档列表失败: {str(e)}"
+        )
+
+
+@router.get(
+    "/documents/{document_id}/download",
+    summary="下载知识库文档",
+    dependencies=[Depends(require_role(["student"]))],
+)
+async def download_document(
+    document_id: str,
+    current_user: User = Depends(require_role(["student"])),
+    db: Session = Depends(get_db),
+):
+    """下载学生可见的全局知识库文档。"""
+    try:
+        try:
+            document_uuid = uuid.UUID(str(document_id))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="文档ID格式错误",
+            )
+
+        document = db.query(KBDocument).filter(KBDocument.id == document_uuid).first()
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="文档不存在",
+            )
+
+        if not document.file_path or not os.path.exists(document.file_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="文档文件不存在",
+            )
+
+        logger.info(
+            "学生下载知识库文档: document=%s, user=%s",
+            document_id,
+            current_user.account,
+        )
+        return FileResponse(
+            path=document.file_path,
+            media_type=document.file_type or "application/octet-stream",
+            filename=document.filename,
+            headers={"Cache-Control": "no-store"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"下载知识库文档失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="下载知识库文档失败",
         )

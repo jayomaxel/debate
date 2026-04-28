@@ -2,7 +2,7 @@
 管理员知识库API路由
 提供知识库文档管理功能，包括文档上传、列表、删除等
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Response, status, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import logging
@@ -138,6 +138,7 @@ async def upload_document(
     dependencies=[Depends(require_role(["administrator"]))]
 )
 async def list_documents(
+    response: Response,
     page: int = 1,
     page_size: int = 20,
     current_user: User = Depends(require_role(["administrator"])),
@@ -160,6 +161,10 @@ async def list_documents(
     - total_pages: 总页数
     """
     try:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
         # 验证分页参数
         if page < 1:
             raise HTTPException(

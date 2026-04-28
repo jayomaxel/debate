@@ -5,7 +5,11 @@ import AIAvatar, { AIAvatar as AIAvatarType } from './ai-avatar';
 import DebateControls from './debate-controls';
 import DebateAudioControl from './debate-audio-control';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { useAuth } from '@/store/auth.context';
 import { useToast } from '@/hooks/use-toast';
@@ -51,6 +55,12 @@ interface AIDebater {
   stance?: string | null;
 }
 
+interface FlowSegment {
+  id: string;
+  title: string;
+  phase: string;
+}
+
 type WsPayload = Record<string, unknown>;
 
 const isPayload = (value: unknown): value is WsPayload =>
@@ -63,6 +73,18 @@ const toOptionalString = (value: unknown): string | null => {
 
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.map((item) => String(item)) : [];
+
+const toFlowSegments = (value: unknown): FlowSegment[] =>
+  Array.isArray(value)
+    ? value
+        .filter(isPayload)
+        .map((item) => ({
+          id: String(item.id || ''),
+          title: String(item.title || item.id || ''),
+          phase: String(item.phase || ''),
+        }))
+        .filter((item) => !!item.id)
+    : [];
 
 const toRoomParticipant = (value: unknown): RoomParticipant | null => {
   if (!isPayload(value) || !value.user_id || !value.name || !value.role) {
@@ -126,6 +148,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const [aiDebaters, setAiDebaters] = useState<AIDebater[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasActiveLiveTtsStream, setHasActiveLiveTtsStream] = useState(false);
   const [streamedSpeechEntryIds, setStreamedSpeechEntryIds] = useState<string[]>([]);
   const [assignedParticipants, setAssignedParticipants] = useState<Array<{
@@ -135,10 +159,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     role_reason?: string | null;
     overall_score?: number;
   }>>([]);
+  const [backendFlowSegments, setBackendFlowSegments] = useState<FlowSegment[]>([]);
   const [isProcessingReport, setIsProcessingReport] = useState(false);
 
   const recordingPermissionWaiters = useRef<Map<string, { resolve: (result: { allowed: boolean; message?: string }) => void; timeoutId: number }>>(new Map());
   const liveTtsPlayerRef = useRef<PcmStreamPlayer | null>(null);
+  const arenaRootRef = useRef<HTMLDivElement>(null);
   const ttsStreamStartCountRef = useRef<Map<string, number>>(new Map());
   const ttsStreamChunkCountRef = useRef<Map<string, number>>(new Map());
   const ttsStreamEndCountRef = useRef<Map<string, number>>(new Map());
@@ -265,6 +291,30 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     });
     liveTtsPlayerRef.current?.stop();
   }, [autoPlayEnabled, roomId]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === arenaRootRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const handleToggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await arenaRootRef.current?.requestFullscreen();
+    } catch (err: any) {
+      toast({
+        variant: 'destructive',
+        title: '全屏切换失败',
+        description: err?.message || '当前浏览器不允许进入全屏。',
+      });
+    }
+  };
 
   /**
    * 统计同一 speech_id 在前端收到的流式事件次数，便于排查是否存在重复推送或重复监听。
@@ -412,6 +462,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       if (data.ai_turn_status !== undefined) setAiTurnStatus(toOptionalString(data.ai_turn_status) || 'idle');
       if (data.ai_turn_segment_title !== undefined) setAiTurnSegmentTitle(toOptionalString(data.ai_turn_segment_title));
       if (data.ai_turn_speaker_role !== undefined) setAiTurnSpeakerRole(toOptionalString(data.ai_turn_speaker_role));
+      if (Array.isArray(data.flow_segments)) setBackendFlowSegments(toFlowSegments(data.flow_segments));
       if (Array.isArray(data.participants)) setParticipants(nextParticipants);
       if (Array.isArray(data.ai_debaters)) setAiDebaters(toAIDebaters(data.ai_debaters));
     };
@@ -521,6 +572,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       if (!autoPlayEnabledRef.current) {
         // 自动播放关闭时，整条流式 TTS 都应静默跳过，直到收到 end 事件再清理忽略标记。
         ignoredLiveTtsSpeechIdsRef.current.add(speechId);
+        sendSpeechPlaybackEvent({
+          status: 'failed',
+          speechId,
+          speakerRole: toOptionalString(data?.role),
+          source: 'stream',
+        });
         debugStreamEvent('tts_stream_start', speechId, {
           startCount,
           transcriptEntryId,
@@ -618,6 +675,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       if (speakerModeRef.current === 'free') setCurrentSpeakerRole(null);
     };
 
+    const handleSpeakerSelected = (data: WsPayload) => {
+      if (data.role !== undefined) {
+        setCurrentSpeakerRole(toOptionalString(data.role));
+      }
+    };
+
     // 监听错误
     const handleError = (data: WsPayload) => {
       console.error('WebSocket error:', data);
@@ -671,6 +734,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     on('permission_denied', handlePermissionDenied);
     on('mic_grabbed', handleMicGrabbed);
     on('mic_released', handleMicReleased);
+    on('speaker_selected', handleSpeakerSelected);
     on('debate_processing', handleDebateProcessing);
     on('debate_ended', handleDebateEnded);
     on('error', handleError);
@@ -693,6 +757,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       off('permission_denied', handlePermissionDenied);
       off('mic_grabbed', handleMicGrabbed);
       off('mic_released', handleMicReleased);
+      off('speaker_selected', handleSpeakerSelected);
       off('debate_processing', handleDebateProcessing);
       off('debate_ended', handleDebateEnded);
       off('error', handleError);
@@ -815,6 +880,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     }
   };
 
+  const handleSelectSpeaker = () => {
+    if (isConnected && currentUserRole) {
+      send('select_speaker', { role: currentUserRole });
+    }
+  };
+
   const handleEndDebate = () => {
     if (isConnected) {
       send('end_debate', {});
@@ -911,6 +982,13 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     : segmentTitle || undefined;
   const isDebater1 = currentUserRole === 'debater_1';
   const canStartDebate = isConnected && isDebater1 && currentPhase === 'waiting';
+  const canSelectCurrentUserSpeaker =
+    isConnected &&
+    speakerMode === 'choice' &&
+    !!currentUserRole &&
+    speakerOptions.some((role) => roleMatches(role, currentUserRole));
+  const isCurrentUserSelectedSpeaker =
+    !!currentUserRole && roleMatches(currentUserRole, currentSpeakerRole);
 
   const flowSegments = [
     { id: 'opening_positive_1', title: '立论阶段：正方一辩', phase: 'opening' },
@@ -929,10 +1007,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     { id: 'closing_negative_4', title: '总结陈词：反方四辩', phase: 'closing' },
     { id: 'closing_positive_4', title: '总结陈词：正方四辩', phase: 'closing' },
   ];
-  const lastSegmentId = flowSegments[flowSegments.length - 1]?.id;
+  const effectiveFlowSegments = backendFlowSegments.length > 0 ? backendFlowSegments : flowSegments;
+  const lastSegmentId = effectiveFlowSegments[effectiveFlowSegments.length - 1]?.id;
   const isLastSegment =
     (!!lastSegmentId && segmentId === lastSegmentId) ||
-    (typeof segmentIndex === 'number' && segmentIndex === flowSegments.length - 1);
+    (typeof segmentIndex === 'number' && segmentIndex === effectiveFlowSegments.length - 1);
 
   const hasDebater4Online = participants.some((p) => roleMatches('debater_4', p?.role));
   const canAdvanceSegment = isConnected && isDebater1 && currentPhase !== 'waiting' && currentPhase !== 'finished' && !isLastSegment;
@@ -949,7 +1028,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const humanStatusText = humanOnlineCount === 0 ? '等待加入' : humanOnlineCount === 4 ? '在线活跃' : `在线 ${humanOnlineCount}/4`;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 flex flex-col">
+    <div ref={arenaRootRef} className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 flex flex-col">
       {/* 错误提示 */}
       {error && (
         <div className="fixed top-4 right-4 z-50 max-w-md">
@@ -978,6 +1057,39 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
           </div>
         </div>
       )}
+
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent className="bg-slate-900 text-white border-slate-700">
+          <DialogHeader>
+            <DialogTitle>辩论设置</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 py-2">
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-800/70 p-4">
+              <div>
+                <Label htmlFor="debate-autoplay" className="text-sm font-medium text-white">
+                  AI 语音自动播放
+                </Label>
+                <p className="mt-1 text-xs text-slate-400">
+                  关闭后，新的 AI 流式语音会被跳过并释放播放等待。
+                </p>
+              </div>
+              <Switch
+                id="debate-autoplay"
+                checked={autoPlayEnabled}
+                onCheckedChange={setAutoPlayEnabled}
+              />
+            </div>
+            <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-4 text-sm text-slate-300">
+              <div className="flex items-center justify-between">
+                <span>流式播放状态</span>
+                <Badge className={hasActiveLiveTtsStream ? 'bg-emerald-600' : 'bg-slate-700'}>
+                  {hasActiveLiveTtsStream ? '播放中' : '空闲'}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 报告生成中遮罩层 */}
       {isProcessingReport && (
@@ -1028,8 +1140,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         onStartDebate={handleStartDebate}
         onAdvanceSegment={handleAdvanceSegment}
         onEndDebate={handleEndDebate}
-        onFullscreen={() => console.log('Fullscreen')}
-        onSettings={() => console.log('Settings')}
+        onFullscreen={handleToggleFullscreen}
+        onSettings={() => setIsSettingsOpen(true)}
+        isFullscreen={isFullscreen}
+        autoPlayEnabled={autoPlayEnabled}
+        onToggleAutoPlay={() => setAutoPlayEnabled((prev) => !prev)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -1058,12 +1173,24 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                   <span className="text-slate-400">当前环节：</span>
                   <span className="font-medium">{segmentTitle || phaseLabel(currentPhase)}</span>
                   {typeof segmentIndex === 'number' && (
-                    <span className="text-slate-500 ml-2">({segmentIndex + 1}/{flowSegments.length})</span>
+                    <span className="text-slate-500 ml-2">({segmentIndex + 1}/{effectiveFlowSegments.length})</span>
                   )}
                 </div>
+                {canSelectCurrentUserSpeaker && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={isCurrentUserSelectedSpeaker ? 'secondary' : 'default'}
+                    disabled={isCurrentUserSelectedSpeaker}
+                    onClick={handleSelectSpeaker}
+                    className="shrink-0"
+                  >
+                    {isCurrentUserSelectedSpeaker ? '已由我回答' : '选择我来回答'}
+                  </Button>
+                )}
               </div>
               <div className="mt-3 max-h-[120px] overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-2 pr-2 custom-scrollbar">
-                {flowSegments.map((seg, idx) => {
+                {effectiveFlowSegments.map((seg, idx) => {
                   const active = !!segmentId && seg.id === segmentId;
                   const done = typeof segmentIndex === 'number' && idx < segmentIndex;
                   return (

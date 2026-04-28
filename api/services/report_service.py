@@ -148,6 +148,11 @@ class ReportGenerator:
                 .scalars()
                 .all()
             )
+            speeches = [
+                speech
+                for speech in speeches
+                if str(getattr(speech, "content", "") or "").strip()
+            ]
 
             score_rows = (
                 db.execute(
@@ -860,4 +865,3 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"瀵煎嚭Excel澶辫触: {e}", exc_info=True)
             return None
-

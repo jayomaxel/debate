@@ -30,6 +30,7 @@ interface StudentOnboardingProps {
   onDebateStart?: () => void;
   onBackToLogin?: () => void;
   onMatchFound?: () => void;
+  onNavigateToAnalytics?: (tab: 'history' | 'growth') => void;
 }
 
 type DebateRole = NonNullable<Debate['role']>;
@@ -56,6 +57,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   onDebateStart,
   onBackToLogin,
   onMatchFound,
+  onNavigateToAnalytics,
 }) => {
   const { user } = useAuth();
   const [skills, setSkills] = useState(createEmptySkills);
@@ -469,6 +471,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                         variant="outline"
                         className="w-full justify-start border-slate-300"
                         disabled={!assessmentComplete}
+                        onClick={() => onNavigateToAnalytics?.('growth')}
                       >
                         <BrainCircuit className="w-4 h-4 mr-2" />
                         查看能力分析报告
@@ -476,6 +479,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                       <Button
                         variant="outline"
                         className="w-full justify-start border-slate-300"
+                        onClick={() => onNavigateToAnalytics?.('history')}
                       >
                         <Clock className="w-4 h-4 mr-2" />
                         查看历史辩论记录

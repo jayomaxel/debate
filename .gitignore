@@ -94,7 +94,10 @@ cpolar-stable-windows-amd64-setup/
 _codex_gitdir/
 _git_probe_*/
 _git_repaired_*/
+.git-meta*/
+git-meta-store/
 .cleanup-trash/
+write-test-codex.tmp
 *.patch
 
 # Local archives and binary source bundles

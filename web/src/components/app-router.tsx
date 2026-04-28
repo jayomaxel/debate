@@ -8,7 +8,6 @@ import DebateMatchResult from './debate-match-result';
 import DebateArena from './debate-arena';
 import EnhancedDebateAnalytics from './enhanced-debate-analytics';
 import StudentAnalyticsCenter from './student-analytics-center';
-import { DebateReportDetail } from './debate-report-detail';
 import DebateReportPage from './debate-report-page';
 import DebateReplayPage from './debate-replay-page';
 import PreparationAssistantPage from './student/preparation-assistant-page';
@@ -16,10 +15,12 @@ import StudentService from '@/services/student.service';
 import type { Debate } from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
 
+type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
+
 // 简单的路由管理组件
 const AppRouter: React.FC = () => {
   const { user } = useAuth();
-  const [currentPage, setCurrentPage] = useState<'login' | 'teacher' | 'student' | 'command-center' | 'match' | 'debate' | 'analytics' | 'admin' | 'student-analytics' | 'report-detail' | 'debate-report' | 'debate-replay' | 'preparation-assistant'>('login');
+  const [currentPage, setCurrentPage] = useState<'login' | 'teacher' | 'student' | 'command-center' | 'match' | 'debate' | 'analytics' | 'admin' | 'student-analytics' | 'debate-report' | 'debate-replay' | 'preparation-assistant'>('login');
   const [userType, setUserType] = useState<'student' | 'teacher' | 'administrator'>('student');
   const [currentDebateId, setCurrentDebateId] = useState<string | undefined>(undefined);
   const [joinedDebate, setJoinedDebate] = useState<Debate | null>(null);
@@ -29,6 +30,7 @@ const AppRouter: React.FC = () => {
   const [reportBackPage, setReportBackPage] = useState<'command-center' | 'student-analytics' | 'teacher'>('command-center');
   const [replayDebateId, setReplayDebateId] = useState<string | undefined>(undefined);
   const [replayBackPage, setReplayBackPage] = useState<'command-center' | 'student-analytics' | 'teacher'>('command-center');
+  const [studentAnalyticsTab, setStudentAnalyticsTab] = useState<StudentAnalyticsTab>('history');
 
   // 在实际项目中，这里会使用 React Router 或其他路由库
   // 现在用简单的状态管理来模拟路由
@@ -104,7 +106,10 @@ const AppRouter: React.FC = () => {
             setReplayDebateId(debateId);
             setCurrentPage('debate-replay');
           }}
-          onNavigateToAnalytics={() => setCurrentPage('student-analytics')}
+          onNavigateToAnalytics={(tab = 'history') => {
+            setStudentAnalyticsTab(tab);
+            setCurrentPage('student-analytics');
+          }}
           onNavigateToPreparation={() => setCurrentPage('preparation-assistant')}
           onLogout={() => {
             setStudentNeedsAssessment(false);
@@ -117,6 +122,10 @@ const AppRouter: React.FC = () => {
           initialDebate={joinedDebate}
           onBackToLogin={() => setCurrentPage('login')} 
           onMatchFound={() => setCurrentPage('match')} 
+          onNavigateToAnalytics={(tab) => {
+            setStudentAnalyticsTab(tab);
+            setCurrentPage('student-analytics');
+          }}
         />;
       case 'match':
         return <DebateMatchResult
@@ -145,6 +154,7 @@ const AppRouter: React.FC = () => {
         />;
       case 'student-analytics':
         return <StudentAnalyticsCenter
+          defaultTab={studentAnalyticsTab}
           onBack={() => setCurrentPage('command-center')}
           onViewReport={(debateId) => {
             setReportBackPage('student-analytics');
@@ -178,13 +188,6 @@ const AppRouter: React.FC = () => {
             onBack={() => setCurrentPage('command-center')}
           />
         );
-      case 'report-detail':
-        return reportDebateId ? (
-          <DebateReportDetail
-            debateId={reportDebateId}
-            onBack={() => setCurrentPage('student-analytics')}
-          />
-        ) : null;
       default:
         return <LoginPortal onLogin={async (role) => {
           setUserType(role);
