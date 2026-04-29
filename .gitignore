@@ -12,15 +12,7 @@ eggs/
 .eggs/
 lib/
 !web/src/lib/
-web/src/lib/**
-!web/src/lib/debate-transcript.ts
-!web/src/lib/debate-transcript.test.ts
-!web/src/lib/pcm-stream-player.ts
-!web/src/lib/pcm-stream-player.test.ts
-!web/src/lib/debate-description.ts
-!web/src/lib/debate-description.test.ts
-!web/src/lib/ability-profile.ts
-!web/src/lib/ability-profile.test.ts
+!web/src/lib/**
 lib64/
 parts/
 sdist/
