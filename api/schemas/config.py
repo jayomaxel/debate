@@ -97,7 +97,20 @@ class CozeConfigResponse(BaseModel):
                         },
                         "opening_negative_1": {
                             "prethinking_mode": "eager",
-                            "response_delay_sec": 3
+                            "response_delay_sec": 0
+                        },
+                        "questioning_1_ai2_ask": {
+                            "prethinking_mode": "eager",
+                            "response_delay_sec": 0
+                        },
+                        "questioning_3_ai3_ask": {
+                            "prethinking_mode": "eager",
+                            "response_delay_sec": 0
+                        },
+                        "questioning_2_neg_answer": {
+                            "prethinking_mode": "reactive",
+                            "response_delay_sec": 0,
+                            "thinking_timeout_sec": 8
                         }
                     }
                 },
@@ -134,10 +147,16 @@ class CozeConfigUpdate(BaseModel):
                     "ai_turns": {
                         "questioning_1_ai2_ask": {
                             "prethinking_mode": "eager",
-                            "response_delay_sec": 2
+                            "response_delay_sec": 0
+                        },
+                        "questioning_2_neg_answer": {
+                            "prethinking_mode": "reactive",
+                            "response_delay_sec": 0,
+                            "thinking_timeout_sec": 8
                         },
                         "free_debate": {
-                            "thinking_timeout_sec": 12
+                            "thinking_timeout_sec": 8,
+                            "response_delay_sec": 0
                         }
                     }
                 }

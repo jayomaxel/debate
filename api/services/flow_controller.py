@@ -30,6 +30,8 @@ logger = get_logger(__name__)
 class DebateFlowController:
     """辩论流程控制器"""
 
+    FAST_TOPIC_ONLY_WAIT_SECONDS = 1.5
+
     CONTEXT_REACTIVE_SEGMENT_IDS = {
         "questioning_1_ai2_ask",
         "questioning_2_neg_answer",
@@ -48,6 +50,7 @@ class DebateFlowController:
         # 存储AI草稿: {room_id: {"segment_id:speaker_role": draft}}
         self.ai_drafts: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.ai_draft_tasks: Dict[str, Dict[str, asyncio.Task]] = {}
+        self.free_debate_ai_last_speaker: Dict[str, str] = {}
 
     def initialize_flow(
         self, room_id: str, segments: Optional[List[Dict[str, Any]]] = None
@@ -451,6 +454,40 @@ class DebateFlowController:
             )
         )
 
+    def _is_topic_only_eager_turn(self, turn_plan: Dict[str, Any]) -> bool:
+        return (
+            str(turn_plan.get("prethinking_mode") or "") == "eager"
+            and str(turn_plan.get("speech_type") or "") in {"opening", "question"}
+        )
+
+    def _build_topic_only_fallback_text(
+        self,
+        *,
+        topic: str,
+        stance: str,
+        speech_type: str,
+        speaker_role: str,
+    ) -> str:
+        stance_text = "正方" if stance == "positive" else "反方"
+        opponent_text = "反方" if stance == "positive" else "正方"
+        role_label = str(speaker_role or "AI辩手").replace("ai_", "AI")
+        clean_topic = str(topic or "本辩题").strip() or "本辩题"
+
+        if speech_type == "question":
+            text = (
+                f"我是{stance_text}{role_label}。围绕“{clean_topic}”，请{opponent_text}说明："
+                f"你方核心判断依赖的关键前提是什么？如果这个前提在现实中并不稳定，"
+                f"你方结论还如何成立？"
+            )
+        else:
+            text = (
+                f"我是{stance_text}{role_label}。针对“{clean_topic}”，我方认为应坚持"
+                f"{stance_text}立场。第一，本题的判断不能只看表面收益，更要看长期影响；"
+                f"第二，制度安排必须兼顾公平、效率与可执行性；第三，对方立场容易低估"
+                f"现实约束带来的风险。因此，我方主张以更审慎、更可验证的标准来判断本题。"
+            )
+        return AIDebaterAgent.limit_reply_text(text, AIDebaterAgent.MAX_REPLY_CHARS)
+
     def _resolve_recent_speeches_limit(
         self, segment: Dict[str, Any], turn_plan: Dict[str, Any]
     ) -> int:
@@ -712,16 +749,11 @@ class DebateFlowController:
         segment: Dict[str, Any],
         speaker_role: str,
     ) -> None:
-        await self._clear_ai_turn_state_if_matches(
-            room_id,
-            segment_id=str(segment.get("id") or ""),
-            speaker_role=speaker_role,
-        )
         await room_manager.update_room_state(
             room_id,
-            turn_processing_status="idle",
-            turn_processing_kind=None,
-            turn_processing_error=None,
+            turn_processing_status="processing",
+            turn_processing_kind="llm",
+            turn_processing_error="missing_opponent_question",
             turn_speech_committed=False,
             turn_speech_user_id=None,
             turn_speech_role=None,
@@ -741,7 +773,6 @@ class DebateFlowController:
                 },
             },
         )
-        await self.advance_segment(room_id)
 
     def _resolve_ai_stance(
         self, room_state: Any, speaker_role: Optional[str]
@@ -818,6 +849,29 @@ class DebateFlowController:
             return
         await self._clear_ai_turn_state(room_id)
 
+    async def _cancel_active_ai_turn_for_advance(self, room_id: str) -> None:
+        task = self.ai_tasks.pop(room_id, None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=0.5)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                pass
+            except RuntimeError:
+                pass
+            except Exception:
+                pass
+        await self._clear_ai_turn_state(room_id)
+        await room_manager.update_room_state(
+            room_id,
+            turn_processing_status="idle",
+            turn_processing_kind=None,
+            turn_processing_error=None,
+            pending_advance_reason=None,
+        )
+
     async def _recover_failed_ai_turn(
         self,
         room_id: str,
@@ -827,7 +881,7 @@ class DebateFlowController:
         turn_processing_kind: Optional[str],
         error: Exception,
     ) -> None:
-        """Release the room when an AI turn fails before audio playback starts."""
+        """Keep a failed AI turn on its segment until the segment timer expires."""
         room_state = room_manager.get_room_state(room_id)
         if not room_state:
             return
@@ -843,15 +897,10 @@ class DebateFlowController:
             return
 
         error_message = str(error) or error.__class__.__name__
-        await self._clear_ai_turn_state_if_matches(
-            room_id,
-            segment_id=str(segment.get("id") or ""),
-            speaker_role=speaker_role,
-        )
         await room_manager.update_room_state(
             room_id,
-            turn_processing_status="idle",
-            turn_processing_kind=None,
+            turn_processing_status="processing",
+            turn_processing_kind=turn_processing_kind or "llm",
             turn_processing_error=error_message,
             turn_speech_committed=False,
             pending_advance_reason=None,
@@ -869,31 +918,6 @@ class DebateFlowController:
                 },
             },
         )
-
-        if room_state.current_phase == DebatePhase.FREE_DEBATE:
-            await room_manager.update_room_state(
-                room_id,
-                mic_owner_user_id=None,
-                mic_owner_role=None,
-                mic_expires_at=None,
-                current_speaker=None,
-                free_debate_last_side="ai",
-                free_debate_next_side="human",
-            )
-            await websocket_manager.broadcast_to_room(
-                room_id,
-                {
-                    "type": "mic_released",
-                    "data": {
-                        "reason": "ai_failed",
-                        "timestamp": self._now().isoformat(),
-                    },
-                },
-            )
-            return
-
-        if self._is_room_segment_active(room_id, segment):
-            await self.force_advance_segment(room_id, reason="host_advance")
 
     def _is_playback_gate_active(self, room_state: Optional[Any]) -> bool:
         if not room_state:
@@ -1224,21 +1248,43 @@ class DebateFlowController:
         if not candidate_roles:
             candidate_roles = ["ai_1", "ai_2", "ai_3", "ai_4"]
 
+        last_ai_role = str(
+            self.free_debate_ai_last_speaker.get(str(getattr(room_state, "room_id", "") or ""))
+            or ""
+        ).strip()
+        for speech in reversed(recent_speeches):
+            speech_role = str(getattr(speech, "speaker_role", "") or "").strip()
+            if speech_role in candidate_roles:
+                last_ai_role = speech_role
+                break
+
+        selectable_roles = [
+            role for role in candidate_roles if role != last_ai_role
+        ]
+        if not selectable_roles:
+            selectable_roles = list(candidate_roles)
+
         latest_indexes: Dict[str, int] = {}
+        speech_counts: Dict[str, int] = {role: 0 for role in candidate_roles}
         for index, speech in enumerate(recent_speeches):
             speech_role = str(getattr(speech, "speaker_role", "") or "").strip()
             if speech_role in candidate_roles:
                 latest_indexes[speech_role] = index
+                speech_counts[speech_role] = speech_counts.get(speech_role, 0) + 1
 
+        min_count = min(speech_counts.get(role, 0) for role in selectable_roles)
+        least_used_roles = [
+            role for role in selectable_roles if speech_counts.get(role, 0) == min_count
+        ]
         least_recent_index = min(
-            latest_indexes.get(role, -1) for role in candidate_roles
+            latest_indexes.get(role, -1) for role in least_used_roles
         )
         least_recent_roles = [
             role
-            for role in candidate_roles
+            for role in least_used_roles
             if latest_indexes.get(role, -1) == least_recent_index
         ]
-        return random.choice(least_recent_roles or candidate_roles)
+        return random.choice(least_recent_roles or selectable_roles)
 
     def _select_random_ai_speaker(self, speaker_options: List[str]) -> Optional[str]:
         candidates = [
@@ -2309,7 +2355,7 @@ class DebateFlowController:
         if not room_state:
             return False
 
-        if reason != "host_advance":
+        if reason not in {"host_advance", "timeout"}:
             turn_processing_status = getattr(
                 room_state, "turn_processing_status", "idle"
             )
@@ -2348,10 +2394,7 @@ class DebateFlowController:
                 )
                 return False
 
-        if room_id in self.ai_tasks:
-            task = self.ai_tasks.pop(room_id)
-            if task is not asyncio.current_task():
-                task.cancel()
+        await self._cancel_active_ai_turn_for_advance(room_id)
 
         if str(getattr(room_state, "playback_gate_status", "idle") or "idle") != "idle":
             await self._clear_playback_gate_state(room_id)
@@ -2720,6 +2763,7 @@ class DebateFlowController:
                 mic_expires_at=mic_expires_at,
                 current_speaker=speaker_role,
             )
+            self.free_debate_ai_last_speaker[room_id] = speaker_role
             await self._set_ai_turn_state(
                 room_id,
                 status="speaking",
@@ -3455,7 +3499,29 @@ class DebateFlowController:
         current_task = asyncio.current_task()
         if existing_task and existing_task is not current_task and not existing_task.done():
             try:
-                await existing_task
+                if self._is_topic_only_eager_turn(turn_plan):
+                    await asyncio.wait_for(
+                        asyncio.shield(existing_task),
+                        timeout=self.FAST_TOPIC_ONLY_WAIT_SECONDS,
+                    )
+                else:
+                    await existing_task
+            except asyncio.TimeoutError:
+                existing_task.cancel()
+                self._clear_ai_draft_task(
+                    room_id,
+                    segment_id=segment_id,
+                    speaker_role=speaker_role,
+                )
+                try:
+                    await asyncio.wait_for(existing_task, timeout=0.2)
+                except asyncio.CancelledError:
+                    pass
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    pass
+                pass
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -3519,11 +3585,29 @@ class DebateFlowController:
                     include_audio=False,
                     **generation_kwargs,
                 ),
-                timeout=self._coerce_nonnegative_float(
-                    turn_plan.get("thinking_timeout_sec"),
-                    20.0,
+                timeout=(
+                    self.FAST_TOPIC_ONLY_WAIT_SECONDS
+                    if self._is_topic_only_eager_turn(turn_plan)
+                    and self._is_room_segment_active(room_id, segment)
+                    else self._coerce_nonnegative_float(
+                        turn_plan.get("thinking_timeout_sec"),
+                        20.0,
+                    )
                 ),
             )
+        except asyncio.TimeoutError:
+            if not self._is_topic_only_eager_turn(turn_plan):
+                raise
+            result = {
+                "text": self._build_topic_only_fallback_text(
+                    topic=str(debate.topic or ""),
+                    stance=self._resolve_ai_stance(room_state, speaker_role),
+                    speech_type=str(turn_plan.get("speech_type") or "opening"),
+                    speaker_role=speaker_role,
+                ),
+                "voice_id": agent.get_voice_id(),
+                "error": "topic_only_fallback_timeout",
+            }
         except Exception as exc:
             draft["status"] = "failed"
             draft["error"] = str(exc)
@@ -4344,43 +4428,13 @@ class DebateFlowController:
             )
 
         if turn_processing_status == "processing":
-            if not pending_advance_reason:
-                await room_manager.update_room_state(
-                    room_id, pending_advance_reason="timeout"
-                )
-                await websocket_manager.broadcast_to_room(
-                    room_id,
-                    {
-                        "type": "advance_deferred",
-                        "data": {
-                            "reason": "timeout",
-                            "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                        },
-                    },
-                )
+            await self._cancel_active_ai_turn_for_advance(room_id)
+            await self.force_advance_segment(room_id, reason="timeout")
             return
 
         if turn_processing_status == "failed" and turn_processing_kind:
-            if not pending_advance_reason:
-                await room_manager.update_room_state(
-                    room_id, pending_advance_reason="timeout"
-                )
-            await websocket_manager.broadcast_to_room(
-                room_id,
-                {
-                    "type": "advance_blocked",
-                    "data": {
-                        "reason": "timeout",
-                        "processing_kind": turn_processing_kind,
-                        "processing_error": getattr(
-                            room_state,
-                            "turn_processing_error",
-                            None,
-                        ),
-                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                    },
-                },
-            )
+            await self._cancel_active_ai_turn_for_advance(room_id)
+            await self.force_advance_segment(room_id, reason="timeout")
             return
 
         await self.advance_segment(room_id)
@@ -4408,6 +4462,7 @@ class DebateFlowController:
         await self._cancel_ai_draft_tasks(room_id)
         self._clear_ai_draft(room_id)
         self._clear_ai_draft_task(room_id)
+        self.free_debate_ai_last_speaker.pop(room_id, None)
 
         if room_id in self.segments:
             del self.segments[room_id]

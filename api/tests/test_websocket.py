@@ -174,6 +174,7 @@ def _cleanup_flow_state(room_id):
     flow_controller.ai_drafts.pop(room_id, None)
     flow_controller.segments.pop(room_id, None)
     flow_controller.segment_index.pop(room_id, None)
+    flow_controller.free_debate_ai_last_speaker.pop(room_id, None)
 
 
 def _make_flow_test_speech(role, content, *, phase="free_debate", speaker_type=None):
@@ -264,6 +265,173 @@ def test_ai_response_turn_without_question_is_skippable():
     )
 
 
+def test_free_debate_ai_speaker_rotates_away_from_last_ai():
+    room_id = "test_room_free_debate_rotation_001"
+    room_state = RoomState(room_id=room_id, debate_id=str(uuid.uuid4()))
+    room_state.ai_debaters = [
+        {"id": "ai_1"},
+        {"id": "ai_2"},
+        {"id": "ai_3"},
+        {"id": "ai_4"},
+    ]
+
+    selected = flow_controller._select_free_debate_ai_speaker(
+        [
+            _make_flow_test_speech("ai_1", "上一位 AI 发言"),
+            _make_flow_test_speech("debater_1", "人类刚刚发言"),
+        ],
+        room_state,
+    )
+
+    assert selected in {"ai_2", "ai_3", "ai_4"}
+
+
+def test_ai_turn_plan_prefers_eager_questions_and_fast_responses():
+    room_state = RoomState(room_id="test_room_ai_plan_001", debate_id=str(uuid.uuid4()))
+
+    opening_plan = flow_controller.resolve_ai_turn_plan(
+        {
+            "id": "opening_negative_1",
+            "phase": DebatePhase.OPENING,
+            "mode": "fixed",
+            "speaker_roles": ["ai_1"],
+        },
+        room_state,
+        coze_parameters={},
+    )
+    question_plan = flow_controller.resolve_ai_turn_plan(
+        {
+            "id": "questioning_3_ai3_ask",
+            "phase": DebatePhase.QUESTIONING,
+            "mode": "fixed",
+            "speaker_roles": ["ai_3"],
+        },
+        room_state,
+        coze_parameters={},
+    )
+    answer_plan = flow_controller.resolve_ai_turn_plan(
+        {
+            "id": "questioning_2_neg_answer",
+            "phase": DebatePhase.QUESTIONING,
+            "mode": "choice",
+            "speaker_roles": ["ai_2", "ai_3"],
+        },
+        room_state,
+        coze_parameters={},
+    )
+
+    assert opening_plan["prethinking_mode"] == "eager"
+    assert opening_plan["response_delay_sec"] == 0
+    assert question_plan["prethinking_mode"] == "eager"
+    assert question_plan["response_delay_sec"] == 0
+    assert answer_plan["prethinking_mode"] == "reactive"
+    assert answer_plan["response_delay_sec"] == 0
+    assert answer_plan["thinking_timeout_sec"] <= 8
+
+
+def test_ai_question_without_opponent_arguments_uses_topic_based_prompt(monkeypatch):
+    captured = {}
+
+    async def _fake_call_agent(self, prompt, context=None, stream_callback=None):
+        captured["prompt"] = prompt
+        captured["context"] = context
+        return "请问你方如何证明这个核心前提在现实中始终成立？"
+
+    monkeypatch.setattr(AIDebaterAgent, "_call_agent", _fake_call_agent)
+
+    agent = AIDebaterAgent(position=2, db=SimpleNamespace())
+    result = asyncio.run(
+        agent.generate_question(
+            topic="人工智能是否应该全面进入课堂教学",
+            stance="negative",
+            context=[],
+            opponent_arguments=[],
+        )
+    )
+
+    assert result
+    assert "不需要等待对方先发言" in captured["prompt"]
+    assert "预判正方" in captured["prompt"]
+    assert "引用不存在的上一轮发言" in captured["prompt"]
+    assert "对方（正方）的主要论点" not in captured["prompt"]
+
+
+def test_topic_only_ai_turn_has_local_fallback_when_model_is_slow():
+    text = flow_controller._build_topic_only_fallback_text(
+        topic="人工智能是否应该全面进入课堂教学",
+        stance="negative",
+        speech_type="opening",
+        speaker_role="ai_1",
+    )
+
+    assert "人工智能是否应该全面进入课堂教学" in text
+    assert "反方" in text
+    assert len(text) <= AIDebaterAgent.MAX_REPLY_CHARS
+
+
+def test_ai_turn_missing_dependency_waits_until_segment_timeout():
+    room_id = "test_room_ai_missing_dependency_wait_001"
+    debate_id = str(uuid.uuid4())
+
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.QUESTIONING,
+        current_speaker="ai_2",
+        segment_index=0,
+        segment_id="questioning_2_neg_answer",
+        segment_title="AI回答",
+        turn_processing_status="processing",
+        turn_processing_kind="llm",
+        ai_turn_status="thinking",
+        ai_turn_segment_id="questioning_2_neg_answer",
+        ai_turn_speaker_role="ai_2",
+    )
+    room_manager.rooms[room_id] = room_state
+    flow_controller.segments[room_id] = [
+        {
+            "id": "questioning_2_neg_answer",
+            "title": "AI回答",
+            "phase": DebatePhase.QUESTIONING,
+            "duration": 1,
+            "mode": "fixed",
+            "speaker_roles": ["ai_2"],
+        },
+        {
+            "id": "questioning_3_ai3_ask",
+            "title": "AI提问",
+            "phase": DebatePhase.QUESTIONING,
+            "duration": 1,
+            "mode": "fixed",
+            "speaker_roles": ["ai_3"],
+        },
+    ]
+    flow_controller.segment_index[room_id] = 0
+
+    async def _run_missing_dependency():
+        try:
+            await flow_controller._skip_ai_turn_due_to_missing_dependency(
+                room_id,
+                segment=flow_controller.segments[room_id][0],
+                speaker_role="ai_2",
+            )
+            assert room_state.segment_id == "questioning_2_neg_answer"
+            assert room_state.turn_processing_status == "processing"
+            assert room_state.turn_processing_kind == "llm"
+            assert room_state.ai_turn_status == "thinking"
+
+            await flow_controller.handle_segment_timeout(room_id)
+        finally:
+            await flow_controller.cleanup_room(room_id)
+            room_manager.rooms.pop(room_id, None)
+
+    asyncio.run(_run_missing_dependency())
+
+    assert room_state.segment_id == "questioning_3_ai3_ask"
+    assert room_state.turn_processing_status == "idle"
+    assert room_state.ai_turn_status == "idle"
+
+
 def test_segment_timeout_forces_past_stuck_ai_thinking():
     room_id = "test_room_ai_timeout_force_advance_001"
     debate_id = str(uuid.uuid4())
@@ -323,7 +491,7 @@ def test_segment_timeout_forces_past_stuck_ai_thinking():
     assert task.cancelled()
 
 
-def test_failed_ai_turn_recovers_and_advances_segment():
+def test_failed_ai_turn_waits_until_segment_timeout_before_advance():
     room_id = "test_room_ai_generation_failure_recover_001"
     debate_id = str(uuid.uuid4())
 
@@ -371,6 +539,12 @@ def test_failed_ai_turn_recovers_and_advances_segment():
                 turn_processing_kind="llm",
                 error=TimeoutError(),
             )
+            assert room_state.segment_id == "opening_negative_1"
+            assert room_state.turn_processing_status == "processing"
+            assert room_state.turn_processing_kind == "llm"
+            assert room_state.ai_turn_status == "thinking"
+
+            await flow_controller.handle_segment_timeout(room_id)
         finally:
             await flow_controller.cleanup_room(room_id)
             room_manager.rooms.pop(room_id, None)

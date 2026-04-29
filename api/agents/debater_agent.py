@@ -375,20 +375,41 @@ class AIDebaterAgent:
         """
         stance_text = "正方" if stance == "positive" else "反方"
         opponent_stance = "反方" if stance == "positive" else "正方"
-        
-        prompt = f"""
+        cleaned_arguments = [
+            str(argument or "").strip()
+            for argument in opponent_arguments
+            if str(argument or "").strip()
+        ]
+
+        if cleaned_arguments:
+            prompt = f"""
 你是{stance_text}的{self.position}辩手，现在是盘问环节。
 
 辩题：{topic}
 
 对方（{opponent_stance}）的主要论点：
-{chr(10).join(f"- {arg}" for arg in opponent_arguments)}
+{chr(10).join(f"- {arg}" for arg in cleaned_arguments)}
 
 请提出一个尖锐的问题，要求：
 1. 针对对方论点的薄弱环节
 2. 问题要具体、明确
 3. 能够揭示对方逻辑漏洞或事实错误
 4. 控制在{self.MAX_REPLY_CHARS}字以内
+"""
+        else:
+            prompt = f"""
+你是{stance_text}的{self.position}辩手，现在是盘问环节。这个阶段由你主动提问，不需要等待对方先发言。
+
+辩题：{topic}
+
+请基于{stance_text}立场，预判{opponent_stance}在本辩题中最可能依赖的核心前提、价值判断或事实假设，提出一个尖锐的问题。
+
+要求：
+1. 不要说“对方刚才说过”或引用不存在的上一轮发言
+2. 问题要围绕辩题本身和双方立场冲突
+3. 问题必须具体、明确，能逼迫对方解释关键前提
+4. 只提出一个问题，不要展开成长篇论述
+5. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
