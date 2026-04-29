@@ -335,10 +335,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       return;
     }
 
-    const allowedExtensions = ['.pdf', '.docx'];
+    const allowedExtensions = ['.pdf'];
     const lowerName = file.name.toLowerCase();
     if (!allowedExtensions.some(ext => lowerName.endsWith(ext))) {
-      setError('仅支持上传 PDF 或 DOCX 支撑材料');
+      setError('仅支持上传 PDF 支撑材料');
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
@@ -887,7 +887,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           });
           setActiveTab('history');
           resetDebateEditor();
-          await refetchHistoryData();
+          void refetchHistoryData();
           return;
         }
 
@@ -930,7 +930,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         }
       }
 
-      await refetchHistoryData();
+      void refetchHistoryData();
       resetDebateEditor();
     } catch (err: any) {
       console.error('Failed to save debate:', err);
@@ -1005,7 +1005,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           });
           setActiveTab('history');
           resetDebateEditor();
-          await refetchHistoryData();
+          void refetchHistoryData();
           return;
         }
 
@@ -1055,7 +1055,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         }
       }
 
-      await refetchHistoryData();
+      void refetchHistoryData();
       resetDebateEditor();
     } catch (err: any) {
       console.error('Failed to save debate:', err);
@@ -1345,7 +1345,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         <input
                           ref={supportFileInputRef}
                           type='file'
-                          accept='.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                          accept='.pdf,application/pdf'
                           className='hidden'
                           onChange={handleSupportDocumentUpload}
                         />
@@ -1355,7 +1355,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                               支撑材料
                             </div>
                             <p className='text-xs text-slate-500'>
-                              支持 PDF / DOCX，单个文件不超过 10MB。文本知识点和上传材料会并行保留。
+                              支持 PDF，单个文件不超过 10MB。文本知识点和上传材料会并行保留。
                             </p>
                           </div>
                           {editingDebateId ? (

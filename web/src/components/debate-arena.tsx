@@ -268,7 +268,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
   const debateTopic = '辩论进行中';
   const currentUserId = user?.id || '';
-  const currentUserRole = participants.find((p) => p.user_id === currentUserId)?.role || null;
+  const currentUserRole =
+    participants.find((p) => p.user_id === currentUserId)?.role ||
+    assignedParticipants.find((p) => p.user_id === currentUserId)?.role ||
+    null;
 
   useEffect(() => {
     // 将会在 websocket 回调中使用到的动态值同步到 ref，避免因为依赖变化重复解绑/重绑事件。

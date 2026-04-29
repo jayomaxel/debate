@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import hashlib
 import json
+import random
 import time
 
 from services.room_manager import room_manager, DebatePhase
@@ -30,6 +31,7 @@ class DebateFlowController:
     """辩论流程控制器"""
 
     CONTEXT_REACTIVE_SEGMENT_IDS = {
+        "questioning_1_ai2_ask",
         "questioning_2_neg_answer",
         "questioning_3_ai3_ask",
         "questioning_4_neg_answer",
@@ -816,6 +818,83 @@ class DebateFlowController:
             return
         await self._clear_ai_turn_state(room_id)
 
+    async def _recover_failed_ai_turn(
+        self,
+        room_id: str,
+        segment: Dict[str, Any],
+        *,
+        speaker_role: str,
+        turn_processing_kind: Optional[str],
+        error: Exception,
+    ) -> None:
+        """Release the room when an AI turn fails before audio playback starts."""
+        room_state = room_manager.get_room_state(room_id)
+        if not room_state:
+            return
+
+        if self._is_playback_gate_active(room_state):
+            logger.warning(
+                "AI turn failed after playback gate started; leaving gate timeout "
+                "to release room (room_id=%s, segment_id=%s, error=%s)",
+                room_id,
+                segment.get("id"),
+                error,
+            )
+            return
+
+        error_message = str(error) or error.__class__.__name__
+        await self._clear_ai_turn_state_if_matches(
+            room_id,
+            segment_id=str(segment.get("id") or ""),
+            speaker_role=speaker_role,
+        )
+        await room_manager.update_room_state(
+            room_id,
+            turn_processing_status="idle",
+            turn_processing_kind=None,
+            turn_processing_error=error_message,
+            turn_speech_committed=False,
+            pending_advance_reason=None,
+        )
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "ai_turn_failed",
+                "data": {
+                    "segment_id": segment.get("id"),
+                    "speaker_role": speaker_role,
+                    "processing_kind": turn_processing_kind,
+                    "error": error_message,
+                    "timestamp": self._now().isoformat(),
+                },
+            },
+        )
+
+        if room_state.current_phase == DebatePhase.FREE_DEBATE:
+            await room_manager.update_room_state(
+                room_id,
+                mic_owner_user_id=None,
+                mic_owner_role=None,
+                mic_expires_at=None,
+                current_speaker=None,
+                free_debate_last_side="ai",
+                free_debate_next_side="human",
+            )
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "mic_released",
+                    "data": {
+                        "reason": "ai_failed",
+                        "timestamp": self._now().isoformat(),
+                    },
+                },
+            )
+            return
+
+        if self._is_room_segment_active(room_id, segment):
+            await self.force_advance_segment(room_id, reason="host_advance")
+
     def _is_playback_gate_active(self, room_state: Optional[Any]) -> bool:
         if not room_state:
             return False
@@ -910,7 +989,7 @@ class DebateFlowController:
             playback_gate_started_at=None,
             playback_gate_deadline_at=None,
             pending_post_playback_action=None,
-            flow_segments=self._serialize_segments(segments),
+            flow_segments=self._serialize_segments(self.get_segments(room_id)),
         )
 
     async def _start_playback_gate(
@@ -1015,7 +1094,7 @@ class DebateFlowController:
         if not self._matches_playback_gate(room_state, speech_id=speech_id):
             return False
 
-        if user_id is not None:
+        if user_id is not None and status not in {"completed", "skipped", "timeout"}:
             controller_user_id = str(
                 getattr(room_state, "playback_gate_controller_user_id", "") or ""
             ).strip()
@@ -1109,7 +1188,7 @@ class DebateFlowController:
             room_id,
             status="completed",
             speech_id=speech_id or None,
-            user_id=user_id,
+            user_id=None,
         )
 
     async def handle_speech_playback_failed(
@@ -1120,7 +1199,7 @@ class DebateFlowController:
             room_id,
             status="skipped",
             speech_id=speech_id or None,
-            user_id=user_id,
+            user_id=None,
         )
 
     def _build_free_debate_segment(self) -> Dict[str, Any]:
@@ -1151,11 +1230,53 @@ class DebateFlowController:
             if speech_role in candidate_roles:
                 latest_indexes[speech_role] = index
 
-        ranked_roles = sorted(
-            candidate_roles,
-            key=lambda role: (latest_indexes.get(role, -1), candidate_roles.index(role)),
+        least_recent_index = min(
+            latest_indexes.get(role, -1) for role in candidate_roles
         )
-        return ranked_roles[0] if ranked_roles else "ai_1"
+        least_recent_roles = [
+            role
+            for role in candidate_roles
+            if latest_indexes.get(role, -1) == least_recent_index
+        ]
+        return random.choice(least_recent_roles or candidate_roles)
+
+    def _select_random_ai_speaker(self, speaker_options: List[str]) -> Optional[str]:
+        candidates = [
+            str(role or "").strip()
+            for role in speaker_options
+            if str(role or "").strip().startswith("ai_")
+        ]
+        return random.choice(candidates) if candidates else None
+
+    async def schedule_free_debate_ai_turn(
+        self,
+        room_id: str,
+        *,
+        min_delay_sec: float = 0.8,
+        max_delay_sec: float = 2.8,
+    ) -> None:
+        async def delayed_trigger() -> None:
+            try:
+                delay = random.uniform(min_delay_sec, max_delay_sec)
+                await asyncio.sleep(max(0.0, delay))
+                room_state = room_manager.get_room_state(room_id)
+                if not room_state:
+                    return
+                if getattr(room_state, "current_phase", None) != DebatePhase.FREE_DEBATE:
+                    return
+                if getattr(room_state, "mic_owner_user_id", None) or getattr(room_state, "mic_owner_role", None):
+                    return
+                await room_manager.update_room_state(
+                    room_id,
+                    free_debate_next_side="ai",
+                )
+                await self.trigger_free_debate_ai_turn(room_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Failed to schedule free debate AI turn: %s", exc, exc_info=True)
+
+        asyncio.create_task(delayed_trigger())
 
     def _can_prepare_or_release_free_debate_ai(self, room_state: Optional[Any]) -> bool:
         if not room_state:
@@ -1523,6 +1644,7 @@ class DebateFlowController:
         if normalized_target and normalized_target == normalized_current:
             return True
         dependency_ready_sources = {
+            "questioning_1_ai2_ask": {"opening_positive_1"},
             "questioning_2_neg_answer": {"questioning_2_pos2_ask"},
             "questioning_3_ai3_ask": {"questioning_2_neg_answer"},
             "questioning_4_neg_answer": {"questioning_4_pos3_ask"},
@@ -2064,6 +2186,11 @@ class DebateFlowController:
         if room_state.current_phase == DebatePhase.FREE_DEBATE:
             return role in (room_state.speaker_options or [])
 
+        if room_state.speaker_mode == "choice":
+            if role not in (room_state.speaker_options or []):
+                return False
+            return not room_state.current_speaker or room_state.current_speaker == role
+
         if role in (room_state.speaker_options or []):
             return True
 
@@ -2077,6 +2204,12 @@ class DebateFlowController:
             return False
 
         if speaker_role not in (room_state.speaker_options or []):
+            return False
+        if (
+            getattr(room_state, "speaker_mode", None) == "choice"
+            and room_state.current_speaker
+            and room_state.current_speaker != speaker_role
+        ):
             return False
         if getattr(room_state, "turn_speech_committed", False):
             return False
@@ -2333,8 +2466,12 @@ class DebateFlowController:
 
         current_speaker = None
         speaker_options = list(segment.get("speaker_roles") or [])
-        if segment.get("mode") in ("fixed", "choice") and speaker_options:
+        if segment.get("mode") == "fixed" and speaker_options:
             current_speaker = speaker_options[0]
+        elif segment.get("mode") == "choice" and speaker_options:
+            all_ai_options = all(str(role or "").startswith("ai_") for role in speaker_options)
+            if all_ai_options:
+                current_speaker = self._select_random_ai_speaker(speaker_options)
 
         await room_manager.update_room_state(
             room_id,
@@ -2436,6 +2573,15 @@ class DebateFlowController:
         ):
             self.ai_tasks[room_id] = asyncio.create_task(
                 self._run_ai_turn(room_id, segment)
+            )
+        elif (
+            segment.get("phase") == DebatePhase.FREE_DEBATE
+            and str(segment.get("mode")) == "free"
+        ):
+            await self.schedule_free_debate_ai_turn(
+                room_id,
+                min_delay_sec=2.0,
+                max_delay_sec=6.0,
             )
 
         await self._sync_upcoming_ai_prethinking(room_id)
@@ -3773,6 +3919,7 @@ class DebateFlowController:
     async def run_ai_turn(self, room_id: str, segment: Dict[str, Any]) -> None:
         conversion_ok = False
         turn_processing_kind = "llm"
+        speaker_role = ""
         try:
             await asyncio.sleep(0.3)
             room_state = room_manager.get_room_state(room_id)
@@ -3969,13 +4116,12 @@ class DebateFlowController:
             return
         except Exception as e:
             try:
-                await self._clear_ai_turn_state(room_id)
-                await room_manager.update_room_state(
+                await self._recover_failed_ai_turn(
                     room_id,
-                    turn_processing_status="failed",
+                    segment,
+                    speaker_role=speaker_role,
                     turn_processing_kind=turn_processing_kind,
-                    turn_processing_error=str(e),
-                    turn_speech_committed=False,
+                    error=e,
                 )
             except Exception:
                 pass
@@ -4061,7 +4207,7 @@ class DebateFlowController:
                             last_side = getattr(room_state, "free_debate_last_side", None)
                             should_trigger_ai = False
                             if expired_owner_role.startswith("debater_"):
-                                next_side = "ai"
+                                next_side = "human"
                                 last_side = "human"
                                 should_trigger_ai = True
                             elif expired_owner_role.startswith("ai_"):
@@ -4093,9 +4239,7 @@ class DebateFlowController:
                                 },
                             )
                             if should_trigger_ai:
-                                asyncio.create_task(
-                                    self.trigger_free_debate_ai_turn(room_id)
-                                )
+                                await self.schedule_free_debate_ai_turn(room_id)
                     segments = (
                         self.segments.get(room_id) or self._build_default_segments()
                     )
@@ -4200,27 +4344,6 @@ class DebateFlowController:
             )
 
         if turn_processing_status == "processing":
-            if (
-                turn_processing_kind == "llm"
-                and str(getattr(room_state, "current_speaker", "") or "").startswith("ai_")
-            ):
-                logger.warning(
-                    "AI turn timed out while thinking; forcing segment advance "
-                    "(room_id=%s, segment_id=%s)",
-                    room_id,
-                    getattr(room_state, "segment_id", None),
-                )
-                await room_manager.update_room_state(
-                    room_id,
-                    turn_processing_status="idle",
-                    turn_processing_kind=None,
-                    turn_processing_error=None,
-                    pending_advance_reason=None,
-                )
-                return await self.force_advance_segment(
-                    room_id,
-                    reason="host_advance",
-                )
             if not pending_advance_reason:
                 await room_manager.update_room_state(
                     room_id, pending_advance_reason="timeout"

@@ -323,6 +323,65 @@ def test_segment_timeout_forces_past_stuck_ai_thinking():
     assert task.cancelled()
 
 
+def test_failed_ai_turn_recovers_and_advances_segment():
+    room_id = "test_room_ai_generation_failure_recover_001"
+    debate_id = str(uuid.uuid4())
+
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        current_speaker="ai_1",
+        segment_index=0,
+        segment_id="opening_negative_1",
+        segment_title="AI立论",
+        turn_processing_status="processing",
+        turn_processing_kind="llm",
+        ai_turn_status="thinking",
+        ai_turn_segment_id="opening_negative_1",
+        ai_turn_speaker_role="ai_1",
+    )
+    room_manager.rooms[room_id] = room_state
+    flow_controller.segments[room_id] = [
+        {
+            "id": "opening_negative_1",
+            "title": "AI立论",
+            "phase": DebatePhase.OPENING,
+            "duration": 1,
+            "mode": "fixed",
+            "speaker_roles": ["ai_1"],
+        },
+        {
+            "id": "opening_positive_2",
+            "title": "正方二辩",
+            "phase": DebatePhase.OPENING,
+            "duration": 1,
+            "mode": "fixed",
+            "speaker_roles": ["debater_2"],
+        },
+    ]
+    flow_controller.segment_index[room_id] = 0
+
+    async def _run_recovery():
+        try:
+            await flow_controller._recover_failed_ai_turn(
+                room_id,
+                flow_controller.segments[room_id][0],
+                speaker_role="ai_1",
+                turn_processing_kind="llm",
+                error=TimeoutError(),
+            )
+        finally:
+            await flow_controller.cleanup_room(room_id)
+            room_manager.rooms.pop(room_id, None)
+
+    asyncio.run(_run_recovery())
+
+    assert room_state.segment_id == "opening_positive_2"
+    assert room_state.turn_processing_status == "idle"
+    assert room_state.ai_turn_status == "idle"
+
+
 def test_prepare_ai_draft_does_not_commit_speech_before_release(monkeypatch):
     from services import flow_controller as fc
 

@@ -119,42 +119,52 @@ class KnowledgeBase:
             
             logger.info(f"Document saved: {file_path}")
             
-            # 鎻愬彇鏂囨湰鍐呭
-            content = await self.extract_text(file_path, file_type)
-            
             # 鍒涘缓鏂囨。璁板綍
             document = Document(
                 debate_id=debate_id,
                 filename=filename,
                 file_path=file_path,
                 file_type=file_type,
-                content=content,
+                content=None,
                 embedding_status="pending"
             )
             
             self.db.add(document)
             self.db.commit()
             self.db.refresh(document)
-            
-            # 寮傛鐢熸垚鍚戦噺锛堟爣璁颁负processing锛?
-            document.embedding_status = "processing"
-            self.db.commit()
-            
-            # 鐢熸垚骞跺瓨鍌ㄥ悜閲?
-            try:
-                await self.generate_and_store_embeddings(document)
-                document.embedding_status = "completed"
-            except Exception as e:
-                logger.error(f"Failed to generate embeddings: {e}", exc_info=True)
-                document.embedding_status = "failed"
-            
-            self.db.commit()
-            
             return document
             
         except Exception as e:
             logger.error(f"Failed to upload document: {e}", exc_info=True)
             raise
+
+    async def process_document(self, document_id: str) -> None:
+        """
+        Extract text and generate embeddings for an uploaded support document.
+        """
+        document = self.db.query(Document).filter(Document.id == document_id).first()
+        if not document:
+            logger.warning(f"Document {document_id} not found for processing")
+            return
+
+        try:
+            document.embedding_status = "processing"
+            self.db.commit()
+
+            content = await self.extract_text(document.file_path, document.file_type)
+            document.content = content
+            self.db.commit()
+
+            await self.generate_and_store_embeddings(document)
+            document.embedding_status = "completed"
+            self.db.commit()
+        except Exception as e:
+            logger.error(f"Failed to process document {document_id}: {e}", exc_info=True)
+            self.db.rollback()
+            latest = self.db.query(Document).filter(Document.id == document_id).first()
+            if latest:
+                latest.embedding_status = "failed"
+                self.db.commit()
     
     async def extract_text(self, file_path: str, file_type: str) -> str:
         """
@@ -534,4 +544,3 @@ class KnowledgeBase:
         except Exception as e:
             logger.error(f"Failed to get document: {e}", exc_info=True)
             return None
-

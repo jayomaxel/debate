@@ -75,15 +75,9 @@ def _resolve_support_file_type(file: UploadFile) -> str:
     content_type = (file.content_type or "").lower()
     if content_type == "application/pdf" or filename.endswith(".pdf"):
         return "application/pdf"
-    if (
-        content_type
-        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        or filename.endswith(".docx")
-    ):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="仅支持 PDF 或 DOCX 支撑材料",
+        detail="教师端支撑材料仅支持 PDF 文件",
     )
 
 
@@ -416,7 +410,7 @@ async def upload_debate_support_document(
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    """上传某场辩论绑定的 PDF/DOCX 支撑材料"""
+    """上传某场辩论绑定的 PDF 支撑材料"""
     _ensure_teacher_can_modify_debate(db, current_user, debate_id)
     file_type = _resolve_support_file_type(file)
     file_data = await file.read()

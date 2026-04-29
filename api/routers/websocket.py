@@ -361,6 +361,24 @@ async def handle_speech_message(
             )
             return
     else:
+        if (
+            room_state.speaker_mode == "choice"
+            and not room_state.current_speaker
+            and user_role in (room_state.speaker_options or [])
+        ):
+            selected = await flow_controller.set_current_speaker(room_id, user_role)
+            if selected:
+                room_state = room_manager.get_room_state(room_id) or room_state
+                await websocket_manager.broadcast_to_room(
+                    room_id,
+                    {
+                        "type": "speaker_selected",
+                        "data": {
+                            "role": user_role,
+                            "timestamp": now.isoformat(),
+                        },
+                    },
+                )
         if room_state.current_speaker != user_role:
             await websocket_manager.send_to_user(
                 user_id,
@@ -511,21 +529,6 @@ async def handle_grab_mic_message(
 
     now = (datetime.utcnow() + timedelta(hours=8))
     if (
-        getattr(room_state, "free_debate_next_side", "human") == "ai"
-        and str(user_role).startswith("debater_")
-    ):
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "permission_denied",
-                "data": {
-                    "message": "抢麦失败：当前轮到反方AI发言，请等待AI发言结束后再抢麦",
-                    "timestamp": now.isoformat(),
-                },
-            },
-        )
-        return
-    if (
         room_state.mic_expires_at
         and now < room_state.mic_expires_at
         and (room_state.mic_owner_user_id or room_state.mic_owner_role)
@@ -556,6 +559,7 @@ async def handle_grab_mic_message(
         mic_expires_at=mic_expires_at,
         current_speaker=user_role,
         free_debate_last_side="human",
+        free_debate_next_side="human",
     )
 
     # 广播抢麦成功
@@ -685,6 +689,26 @@ async def handle_request_recording_message(
         return
 
     current_speaker = getattr(room_state, "current_speaker", None)
+    if (
+        room_state.speaker_mode == "choice"
+        and not current_speaker
+        and user_role in (room_state.speaker_options or [])
+    ):
+        selected = await flow_controller.set_current_speaker(room_id, user_role)
+        if selected:
+            room_state = room_manager.get_room_state(room_id) or room_state
+            current_speaker = getattr(room_state, "current_speaker", None)
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "speaker_selected",
+                    "data": {
+                        "role": user_role,
+                        "timestamp": now.isoformat(),
+                    },
+                },
+            )
+
     if not current_speaker:
         await websocket_manager.send_to_user(
             user_id,
@@ -1456,7 +1480,7 @@ async def handle_end_turn_message(
             mic_expires_at=None,
             current_speaker=None,
             free_debate_last_side="human",
-            free_debate_next_side="ai",
+            free_debate_next_side="human",
         )
         await websocket_manager.broadcast_to_room(
             room_id,
@@ -1465,8 +1489,7 @@ async def handle_end_turn_message(
                 "data": {"reason": "end_turn", "timestamp": now.isoformat()},
             },
         )
-        if str(user_role).startswith("debater_"):
-            asyncio.create_task(flow_controller.trigger_free_debate_ai_turn(room_id))
+        await flow_controller.schedule_free_debate_ai_turn(room_id)
         return
     if room_state.current_speaker != user_role:
         await websocket_manager.send_to_user(
@@ -1510,7 +1533,15 @@ async def handle_end_turn_message(
             },
         )
         return
-    if not getattr(room_state, "turn_speech_committed", False):
+    can_end_without_committed_speech = (
+        room_state.speaker_mode in {"fixed", "choice"}
+        and room_state.current_speaker == user_role
+        and len(getattr(room_state, "speaker_options", []) or []) >= 1
+    )
+    if (
+        not getattr(room_state, "turn_speech_committed", False)
+        and not can_end_without_committed_speech
+    ):
         await websocket_manager.send_to_user(
             user_id,
             {

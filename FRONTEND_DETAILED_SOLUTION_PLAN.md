@@ -338,13 +338,13 @@ onNavigateToAnalytics?: (tab: 'history' | 'growth') => void;
 
 ## 4.5 教师端辩论设置“支撑知识点”文件上传
 
-**状态：🟡 部分完成**
+**状态：✅ 已完成**
 
 完成标注：
 
 - ~~`TeacherDashboard` 新增支撑材料状态、隐藏文件输入框、上传/刷新/删除交互~~
 - ~~“支撑知识点”区域扩展为“文本知识点 + 支撑材料上传区 + 文件列表”~~
-- ~~未保存草稿时显示“请先保存草稿后再上传支撑材料”，并提供“先保存草稿”按钮~~
+- ~~未保存草稿时也开放上传按钮，选择文件后自动创建草稿并继续上传~~
 - ~~新建草稿保存后不再清空表单，保留编辑态并设置 `editingDebateId` / `editingDebateStatus`~~
 - ~~编辑已有辩论时调用 `TeacherService.listDebateSupportDocuments(debateId)` 加载材料列表~~
 - ~~`teacher.service.ts` 新增 `TeacherDebateSupportDocument` 和列表/上传/删除接口~~
@@ -352,9 +352,9 @@ onNavigateToAnalytics?: (tab: 'history' | 'growth') => void;
 - ~~教师支撑材料接口增加辩论归属权限校验，并校验文档属于当前辩论~~
 - ~~复用现有 `Document` 模型与 `KnowledgeBase` 服务，不新增数据库迁移~~
 
-暂未完成：
+可选项：
 
-- [ ] 将 `KnowledgeBase.upload_document()` 拆成“保存记录 + 后台处理”两步，目前仍复用现有同步处理流程。
+- ~~将 `KnowledgeBase.upload_document()` 拆成“保存记录 + 后台处理”两步，教师上传接口使用 `BackgroundTasks` 异步处理文档。~~
 - [ ] 下载接口属于可选项，本轮暂未新增。
 
 ### 当前问题
@@ -392,17 +392,16 @@ onNavigateToAnalytics?: (tab: 'history' | 'growth') => void;
 - 后端已经有提取文本、生成 embedding、按 `debate_id` 查询的基础逻辑
 - 可以避免和管理员知识库 `kb_documents` 混淆
 
-#### 推荐交互：先保存草稿，再上传文件
+#### 推荐交互：上传时自动保存草稿
 
 因为上传文件必须绑定到 `debate_id`，而新建辩论在未保存前还没有真实主键，所以推荐采用：
 
 1. 教师先填写基础信息
-2. 先点“保存草稿”
-3. 草稿创建成功后，页面保持在当前编辑态
-4. 这时才解锁“上传支撑材料”
+2. “上传支撑材料”按钮始终可见
+3. 如果当前还没有 `debate_id`，选择文件后自动创建草稿
+4. 草稿创建成功后，页面保持在当前编辑态，并继续上传刚才选择的文件
 
-这是第一阶段最稳的做法。  
-不推荐第一版就做“未保存状态下先传临时文件”，因为那会引入临时表、垃圾文件回收、草稿放弃清理等一整套额外复杂度。
+这样既避免临时文件和临时表，也不要求教师理解“先保存草稿再上传”的内部约束。
 
 ### 涉及文件
 
@@ -456,13 +455,14 @@ const supportFileInputRef = useRef<HTMLInputElement>(null);
 
 #### 4.5.3 未保存草稿时的交互
 
-如果当前没有 `editingDebateId`，上传区不要直接可用，而应显示：
+如果当前没有 `editingDebateId`，上传按钮仍然可用。教师选择文件后：
 
-- 一个 `Alert`
-- 提示“请先保存草稿后再上传支撑材料”
-- 一个快捷按钮：`先保存草稿`
+- 先校验班级、主题、文件类型和文件大小
+- 自动调用草稿创建接口，生成真实 `debate_id`
+- 保持当前页面编辑态并设置 `editingDebateId` / `editingDebateStatus`
+- 继续把刚才选择的文件上传到该草稿
 
-这个按钮可以直接调用现有 `handleSubmit('draft')`。
+未满足草稿创建条件时，只提示缺少班级或主题，不隐藏上传入口。
 
 #### 4.5.4 新建草稿后的行为必须调整
 
@@ -584,7 +584,7 @@ def ensure_teacher_can_access_debate(db: Session, current_user: User, debate_id:
 
 #### 4.5.10 复用 `KnowledgeBase`，但建议拆分上传流程
 
-当前 `KnowledgeBase.upload_document()` 会做：
+调整前 `KnowledgeBase.upload_document()` 会做：
 
 1. 保存文件
 2. 提取文本
@@ -674,7 +674,8 @@ def ensure_teacher_can_access_debate(db: Session, current_user: User, debate_id:
 
 ### 验收标准
 
-- 教师在“新建辩论”页保存草稿后，上传区解锁
+- 教师在“新建辩论”页可以直接点击上传材料
+- 未保存时选择文件会自动创建草稿，并继续上传文件
 - 教师可以上传 PDF / DOCX 文件
 - 上传后能看到文件列表和状态
 - 教师刷新后再次编辑该草稿，仍能看到已上传文件

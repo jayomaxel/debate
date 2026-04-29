@@ -286,6 +286,7 @@ export interface DebateReport {
   }>;
   statistics: Record<string, unknown>;
   winner: string;
+  summary?: string;
 }
 
 // 知识库

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     OPENAI_MODEL_NAME: str = os.getenv("OPENAI_MODEL_NAME", "gpt-4")
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
     OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "2000"))
+    ENABLE_LLM_ROLE_ASSIGNMENT: bool = os.getenv(
+        "ENABLE_LLM_ROLE_ASSIGNMENT", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     ASR_API_KEY: Optional[str] = os.getenv("ASR_API_KEY", None)
     ASR_BASE_URL: str = os.getenv("ASR_BASE_URL", "https://dashscope.aliyuncs.com/api/v1")

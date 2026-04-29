@@ -541,6 +541,61 @@ class JudgeAgent:
     }}
 }}
 """
+        def build_fallback_report(reason: str) -> Dict:
+            speech_scores = []
+            side_counts = {"positive": 0, "negative": 0}
+            for msg in context:
+                speech_id = str(msg.get("speech_id") or "").strip()
+                content = str(msg.get("content") or "").strip()
+                role = str(msg.get("speaker_role") or "").strip()
+                if not speech_id or not content:
+                    continue
+                length_bonus = min(10, max(0, len(content) // 80))
+                base = min(88, 68 + length_bonus)
+                scores = {
+                    "logic_score": base + 2,
+                    "argument_score": base + 1,
+                    "response_score": base,
+                    "persuasion_score": base + 1,
+                    "teamwork_score": base,
+                    "overall_score": base + 1,
+                    "feedback": "Fallback scoring based on completed speech content.",
+                }
+                speech_scores.append(
+                    {"speech_id": speech_id, "scores": scores, "violations": []}
+                )
+                side = "negative" if role.startswith("ai_") else "positive"
+                side_counts[side] += 1
+
+            if side_counts["positive"] > side_counts["negative"]:
+                winner = "positive"
+            elif side_counts["negative"] > side_counts["positive"]:
+                winner = "negative"
+            else:
+                winner = "draw"
+
+            side_scores = {
+                "logical_thinking": 72,
+                "argument_quality": 72,
+                "reaction_speed": 70,
+                "persuasion": 72,
+                "teamwork": 72,
+                "total_score": 72,
+            }
+            return {
+                "speech_scores": speech_scores,
+                "global_report": {
+                    "winner": winner,
+                    "winning_reason": reason,
+                    "scores": {
+                        "positive": dict(side_scores),
+                        "negative": dict(side_scores),
+                    },
+                    "overall_comment": "Report generated with deterministic fallback scoring because the judge model did not return valid JSON.",
+                    "suggestions": "Review the transcript and judge model configuration if detailed AI comments are required.",
+                },
+            }
+
         try:
             self._coze_context = context
             try:
@@ -560,16 +615,6 @@ class JudgeAgent:
             
         except Exception as e:
             logger.error(f"批量评分失败: {e}", exc_info=True)
-            return {
-                "speech_scores": [],
-                "global_report": {
-                    "winner": "draw",
-                    "winning_reason": "评分系统暂时不可用",
-                    "scores": {
-                        "positive": {"total_score": 0},
-                        "negative": {"total_score": 0}
-                    }
-                }
-            }
+            return build_fallback_report("Judge model unavailable or returned invalid JSON.")
 
 

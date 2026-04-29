@@ -362,10 +362,13 @@ class DebateService:
                 }
             )
 
-        try:
-            role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
-        except Exception as e:
-            logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
+        if settings.ENABLE_LLM_ROLE_ASSIGNMENT:
+            try:
+                role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
+            except Exception as e:
+                logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
+                role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
+        else:
             role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
 
         for student_id in selected_student_ids:

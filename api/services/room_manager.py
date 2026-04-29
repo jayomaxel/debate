@@ -6,6 +6,7 @@
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
+import asyncio
 import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -620,15 +621,16 @@ class DebateRoomManager:
             },
         )
 
-        # 自动进行评分和报告生成（现在是同步等待，因为前端需要等待结果）
         if debate_uuid:
-            try:
-                await self._auto_score_and_generate_report(db, debate_uuid)
-            except Exception as e:
-                logger.error(f"自动评分和报告生成失败: {e}", exc_info=True)
-                # 不影响辩论结束流程，继续执行
+            asyncio.create_task(
+                self._auto_score_and_generate_report_background(room_id, debate_uuid)
+            )
+        else:
+            await self._broadcast_debate_ended(room_id)
 
-        # 广播辩论结束
+        return True
+
+    async def _broadcast_debate_ended(self, room_id: str) -> None:
         await websocket_manager.broadcast_to_room(
             room_id,
             {
@@ -640,7 +642,25 @@ class DebateRoomManager:
             },
         )
 
-        return True
+    async def _auto_score_and_generate_report_background(
+        self,
+        room_id: str,
+        debate_id: uuid.UUID,
+    ) -> None:
+        import database as db_module
+
+        db = None
+        try:
+            if db_module.SessionLocal is None:
+                db_module.init_engine()
+            db = db_module.SessionLocal()
+            await self._auto_score_and_generate_report(db, debate_id)
+        except Exception as e:
+            logger.error(f"自动评分和报告生成失败: {e}", exc_info=True)
+        finally:
+            if db is not None:
+                db.close()
+            await self._broadcast_debate_ended(room_id)
 
     async def _auto_score_and_generate_report(self, db: Session, debate_id: uuid.UUID) -> None:
         """
