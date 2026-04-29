@@ -85,22 +85,22 @@ class CozeConfig(Base):
             "questioning_2_neg_answer": {
                 "prethinking_mode": "reactive",
                 "response_delay_sec": 0,
-                "thinking_timeout_sec": 8,
+                "thinking_timeout_sec": 15,
                 "draft_ttl_sec": 45,
             },
             "questioning_4_neg_answer": {
                 "prethinking_mode": "reactive",
                 "response_delay_sec": 0,
-                "thinking_timeout_sec": 8,
+                "thinking_timeout_sec": 15,
                 "draft_ttl_sec": 45,
             },
             "questioning_neg_summary": {
                 "prethinking_mode": "reactive",
                 "response_delay_sec": 0,
-                "thinking_timeout_sec": 10,
+                "thinking_timeout_sec": 15,
             },
             "free_debate": {
-                "thinking_timeout_sec": 8,
+                "thinking_timeout_sec": 15,
                 "response_delay_sec": 0,
             },
         }

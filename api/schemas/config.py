@@ -110,7 +110,7 @@ class CozeConfigResponse(BaseModel):
                         "questioning_2_neg_answer": {
                             "prethinking_mode": "reactive",
                             "response_delay_sec": 0,
-                            "thinking_timeout_sec": 8
+                            "thinking_timeout_sec": 15
                         }
                     }
                 },
@@ -152,10 +152,10 @@ class CozeConfigUpdate(BaseModel):
                         "questioning_2_neg_answer": {
                             "prethinking_mode": "reactive",
                             "response_delay_sec": 0,
-                            "thinking_timeout_sec": 8
+                            "thinking_timeout_sec": 15
                         },
                         "free_debate": {
-                            "thinking_timeout_sec": 8,
+                            "thinking_timeout_sec": 15,
                             "response_delay_sec": 0
                         }
                     }

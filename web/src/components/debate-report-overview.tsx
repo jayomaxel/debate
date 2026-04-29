@@ -77,6 +77,13 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         responseScore: participant?.final_score?.response_score || 0,
         persuasionScore: participant?.final_score?.persuasion_score || 0,
         teamworkScore: participant?.final_score?.teamwork_score || 0
+      },
+      aiMetrics: {
+        logicScore: resolvedAiStats?.avg_logic_score || 0,
+        argumentScore: resolvedAiStats?.avg_argument_score || 0,
+        responseScore: resolvedAiStats?.avg_response_score || 0,
+        persuasionScore: resolvedAiStats?.avg_persuasion_score || 0,
+        teamworkScore: resolvedAiStats?.avg_teamwork_score || 0
       }
     };
   }, [report, user?.id]);

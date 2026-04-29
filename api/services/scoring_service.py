@@ -10,7 +10,7 @@ from datetime import datetime
 
 from models.speech import Speech
 from models.score import Score
-from models.debate import DebateParticipation
+from models.debate import Debate, DebateParticipation
 from agents.judge_agent import JudgeAgent, ScoreBreakdown, Violation
 
 logger = get_logger(__name__)
@@ -36,6 +36,203 @@ class ScoringService:
     # 关键词加分配置
     KEYWORD_BONUS_PER_WORD = 2.0  # 每个关键词加2分
     MAX_KEYWORD_BONUS = 10.0      # 最多加10分
+
+    LOGIC_MARKERS = [
+        "首先", "其次", "再次", "最后", "因为", "所以", "因此", "如果", "那么",
+        "可见", "综上", "一方面", "另一方面", "前提", "结论", "逻辑",
+    ]
+    EVIDENCE_MARKERS = [
+        "数据", "研究", "调查", "统计", "案例", "事实", "例如", "比如", "证明",
+        "显示", "表明", "报告", "实验", "现实", "政策", "成本", "效率",
+    ]
+    RESPONSE_MARKERS = [
+        "对方", "反方", "正方", "质疑", "反驳", "回应", "回答", "漏洞", "问题",
+        "忽略", "不能说明", "并不等于", "为什么", "如何", "是否",
+    ]
+    ETHICS_MARKERS = [
+        "伦理", "公平", "隐私", "安全", "责任", "透明", "偏见", "风险", "治理",
+        "监管", "社会", "人文", "价值", "边界",
+    ]
+    AI_TERMS = [
+        "AI", "人工智能", "算法", "模型", "大模型", "AIGC", "NLP", "自然语言",
+        "机器学习", "深度学习", "数据", "算力", "人机协作", "智能体",
+    ]
+
+    @staticmethod
+    def _clamp_score(value: float) -> float:
+        return round(max(0.0, min(100.0, float(value))), 2)
+
+    @staticmethod
+    def _marker_count(content: str, markers: List[str]) -> int:
+        return sum(1 for marker in markers if marker and marker in content)
+
+    @staticmethod
+    def _topic_relevance(content: str, topic: str) -> float:
+        topic = (topic or "").strip()
+        content = content or ""
+        if not topic or not content:
+            return 0.0
+
+        terms = set()
+        for raw in topic.replace("，", " ").replace("。", " ").replace("、", " ").split():
+            raw = raw.strip()
+            if len(raw) >= 2:
+                terms.add(raw)
+        for i in range(max(0, len(topic) - 1)):
+            term = topic[i : i + 2]
+            if term.strip():
+                terms.add(term)
+
+        hits = sum(1 for term in terms if term in content)
+        return min(12.0, hits * 1.5)
+
+    @staticmethod
+    def _speech_stance(speaker_type: str) -> str:
+        # Product rule: human is always affirmative, AI is always negative.
+        return "positive" if str(speaker_type) == "human" else "negative"
+
+    @staticmethod
+    def _phase_label(phase: str) -> str:
+        return {
+            "opening": "立论",
+            "questioning": "盘问",
+            "free_debate": "自由辩论",
+            "closing": "总结陈词",
+        }.get(str(phase), str(phase or "发言"))
+
+    @staticmethod
+    def _local_score_speech(speech: Speech, topic: str) -> Dict:
+        content = str(getattr(speech, "content", "") or "").strip()
+        phase = str(getattr(speech, "phase", "") or "")
+        length = len(content)
+
+        if not content:
+            base_scores = {
+                "logic_score": 0.0,
+                "argument_score": 0.0,
+                "response_score": 0.0,
+                "persuasion_score": 0.0,
+                "teamwork_score": 0.0,
+                "overall_score": 0.0,
+                "feedback": "未检测到有效发言内容，无法形成评分。",
+            }
+            return {"speech_id": str(speech.id), "scores": base_scores, "violations": []}
+
+        length_bonus = min(12.0, length / 45.0)
+        topic_bonus = ScoringService._topic_relevance(content, topic)
+        logic_hits = ScoringService._marker_count(content, ScoringService.LOGIC_MARKERS)
+        evidence_hits = ScoringService._marker_count(content, ScoringService.EVIDENCE_MARKERS)
+        response_hits = ScoringService._marker_count(content, ScoringService.RESPONSE_MARKERS)
+        ethics_hits = ScoringService._marker_count(content, ScoringService.ETHICS_MARKERS)
+        ai_hits = ScoringService._marker_count(content, ScoringService.AI_TERMS)
+
+        logic_score = 58 + length_bonus + topic_bonus + min(16, logic_hits * 4)
+        argument_score = 56 + length_bonus + topic_bonus + min(14, evidence_hits * 3) + min(10, ai_hits * 2)
+        response_score = 56 + min(10, length_bonus) + min(22, response_hits * 4)
+        persuasion_score = 58 + min(12, length_bonus) + min(10, logic_hits * 2) + min(8, content.count("！") + content.count("？") + content.count("?"))
+        teamwork_score = 58 + min(10, length_bonus) + min(18, ethics_hits * 4) + min(8, ai_hits * 1.5)
+
+        if phase == "questioning":
+            response_score += 8
+            logic_score += 3
+        elif phase == "free_debate":
+            response_score += 6
+            persuasion_score += 3
+        elif phase == "closing":
+            logic_score += 6
+            persuasion_score += 4
+        elif phase == "opening":
+            argument_score += 5
+            logic_score += 4
+
+        scores = {
+            "logic_score": ScoringService._clamp_score(logic_score),
+            "argument_score": ScoringService._clamp_score(argument_score),
+            "response_score": ScoringService._clamp_score(response_score),
+            "persuasion_score": ScoringService._clamp_score(persuasion_score),
+            "teamwork_score": ScoringService._clamp_score(teamwork_score),
+        }
+        overall = (
+            scores["logic_score"] * 0.24
+            + scores["argument_score"] * 0.24
+            + scores["response_score"] * 0.22
+            + scores["persuasion_score"] * 0.18
+            + scores["teamwork_score"] * 0.12
+        )
+        scores["overall_score"] = ScoringService._clamp_score(overall)
+
+        stance_label = "正方" if ScoringService._speech_stance(str(speech.speaker_type)) == "positive" else "反方"
+        phase_label = ScoringService._phase_label(phase)
+        feedback_bits = []
+        if topic_bonus:
+            feedback_bits.append("能围绕辩题展开")
+        if logic_hits:
+            feedback_bits.append("论证结构较清楚")
+        if evidence_hits:
+            feedback_bits.append("有事实或案例支撑")
+        if response_hits:
+            feedback_bits.append("回应了对方观点")
+        if not feedback_bits:
+            feedback_bits.append("观点已形成，但论据和回应还可以更具体")
+        scores["feedback"] = f"{stance_label}{phase_label}发言：" + "，".join(feedback_bits) + "。"
+
+        return {"speech_id": str(speech.id), "scores": scores, "violations": []}
+
+    @staticmethod
+    def _build_global_report_from_scores(topic: str, speech_score_items: List[Dict], speech_map: Dict[str, Speech]) -> Dict:
+        side_values: Dict[str, Dict[str, List[float]]] = {
+            "positive": {"logic_score": [], "argument_score": [], "response_score": [], "persuasion_score": [], "teamwork_score": [], "overall_score": []},
+            "negative": {"logic_score": [], "argument_score": [], "response_score": [], "persuasion_score": [], "teamwork_score": [], "overall_score": []},
+        }
+
+        for item in speech_score_items:
+            if not isinstance(item, dict):
+                continue
+            speech = speech_map.get(str(item.get("speech_id") or ""))
+            scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
+            if not speech or not scores:
+                continue
+            side = ScoringService._speech_stance(str(speech.speaker_type))
+            for key in side_values[side]:
+                side_values[side][key].append(float(scores.get(key, 0) or 0))
+
+        def avg(side: str, key: str) -> float:
+            values = [v for v in side_values[side][key] if v > 0]
+            return round(sum(values) / len(values), 2) if values else 0.0
+
+        def side_report(side: str) -> Dict[str, float]:
+            return {
+                "logical_thinking": avg(side, "logic_score"),
+                "argument_quality": avg(side, "argument_score"),
+                "reaction_speed": avg(side, "response_score"),
+                "persuasion": avg(side, "persuasion_score"),
+                "teamwork": avg(side, "teamwork_score"),
+                "total_score": avg(side, "overall_score"),
+            }
+
+        positive = side_report("positive")
+        negative = side_report("negative")
+        if positive["total_score"] > negative["total_score"]:
+            winner = "positive"
+            reason = "正方整体得分更高，主要来自发言内容与辩题关联、论证结构和回应质量。"
+        elif negative["total_score"] > positive["total_score"]:
+            winner = "negative"
+            reason = "反方整体得分更高，主要来自发言内容与辩题关联、论证结构和回应质量。"
+        else:
+            winner = "draw"
+            reason = "双方综合得分接近，胜负不明显。"
+
+        return {
+            "winner": winner,
+            "winning_reason": reason,
+            "scores": {"positive": positive, "negative": negative},
+            "overall_comment": f"本报告基于辩题“{topic}”及正反方完整发言，从逻辑、论据、回应、表达和科技伦理素养五个维度评分。",
+            "suggestions": [
+                "正方需要继续加强论据的事实支撑和对反方质疑的直接回应。",
+                "反方需要保持反驳的针对性，并把论点和辩题核心概念绑定得更紧。",
+                "双方在总结环节应明确回扣辩题，压缩重复表达，突出最强论据。",
+            ],
+        }
     
     @staticmethod
     async def score_speech(
@@ -165,42 +362,16 @@ class ScoringService:
             全场评分报告
         """
         try:
-            # 1. 调用裁判AI进行批量评分
-            judge = JudgeAgent(db)
-            result = await judge.batch_evaluate_debate(context)
-            
-            speech_scores = result.get("speech_scores", [])
-            global_report = result.get("global_report", {})
-            
-            # 建立speech_id到speech对象的映射
+            # 1. 使用本地确定性规则快速生成每条发言评分，避免外部模型慢或无响应导致报告为空。
+            debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one_or_none()
+            topic = str(debate.topic) if debate else ""
             speech_map = {str(s.id): s for s in speeches}
-            scored_speech_ids = {
-                str(item.get("speech_id") or "")
-                for item in speech_scores
-                if isinstance(item, dict)
-            }
-            for speech in speeches:
-                speech_id = str(speech.id)
-                if speech_id in scored_speech_ids:
-                    continue
-                content_length = len(str(getattr(speech, "content", "") or ""))
-                base_score = min(88.0, 68.0 + min(10.0, content_length // 80))
-                speech_scores.append(
-                    {
-                        "speech_id": speech_id,
-                        "scores": {
-                            "logic_score": base_score + 2.0,
-                            "argument_score": base_score + 1.0,
-                            "response_score": base_score,
-                            "persuasion_score": base_score + 1.0,
-                            "teamwork_score": base_score,
-                            "overall_score": base_score + 1.0,
-                            "feedback": "Fallback scoring based on completed speech content.",
-                        },
-                        "violations": [],
-                    }
-                )
-            
+            speech_scores = [
+                ScoringService._local_score_speech(speech, topic)
+                for speech in speeches
+                if str(getattr(speech, "content", "") or "").strip()
+            ]
+
             # 2. 处理每条发言的评分
             for item in speech_scores:
                 speech_id = item.get("speech_id")
@@ -228,10 +399,20 @@ class ScoringService:
                     ai_participation = db.execute(
                         select(DebateParticipation).where(
                             DebateParticipation.debate_id == debate_id,
-                            DebateParticipation.role == mapped_role
+                            DebateParticipation.role == mapped_role,
+                            DebateParticipation.user_id == None,
                         )
                     ).scalar_one_or_none()
                     
+                    if not ai_participation:
+                        ai_participation = db.execute(
+                            select(DebateParticipation).where(
+                                DebateParticipation.debate_id == debate_id,
+                                DebateParticipation.role == mapped_role,
+                                DebateParticipation.stance == "negative",
+                            )
+                        ).scalar_one_or_none()
+
                     if not ai_participation:
                         ai_participation = DebateParticipation(
                             debate_id=debate_id,
@@ -253,16 +434,20 @@ class ScoringService:
                         participation_id = str(participation.id)
                 
                 if not participation_id:
-                    continue
+                    role = str(speech.speaker_role or "debater_1")
+                    if not role.startswith("debater_"):
+                        role = "debater_1"
+                    participation = DebateParticipation(
+                        debate_id=debate_id,
+                        user_id=speech.speaker_id,
+                        role=role,
+                        stance="positive",
+                    )
+                    db.add(participation)
+                    db.flush()
+                    participation_id = str(participation.id)
                 
                 # 检查是否已存在评分
-                existing_score = db.execute(
-                    select(Score).where(Score.speech_id == speech.id)
-                ).scalar_one_or_none()
-                
-                if existing_score:
-                    continue
-
                 # 计算关键词加分
                 keyword_bonus = ScoringService.calculate_keyword_bonus(speech.content)
                 
@@ -274,6 +459,7 @@ class ScoringService:
                 
                 # 最终分
                 final_score = max(0, min(100, base_score + keyword_bonus - violation_penalty))
+                scores_data["overall_score"] = final_score
                 
                 # 构造反馈
                 feedback = scores_data.get("feedback", "")
@@ -284,6 +470,21 @@ class ScoringService:
                     feedback += f"\n[违规扣分: -{violation_penalty}分]\n违规详情:\n{violation_text}"
                 
                 # 保存评分
+                existing_score = db.execute(
+                    select(Score).where(Score.speech_id == speech.id)
+                ).scalar_one_or_none()
+
+                if existing_score:
+                    existing_score.participation_id = participation_id
+                    existing_score.logic_score = float(scores_data.get("logic_score", 70))
+                    existing_score.argument_score = float(scores_data.get("argument_score", 70))
+                    existing_score.response_score = float(scores_data.get("response_score", 70))
+                    existing_score.persuasion_score = float(scores_data.get("persuasion_score", 70))
+                    existing_score.teamwork_score = float(scores_data.get("teamwork_score", 70))
+                    existing_score.overall_score = final_score
+                    existing_score.feedback = feedback
+                    continue
+
                 new_score = Score(
                     participation_id=participation_id,
                     speech_id=str(speech.id),
@@ -297,32 +498,11 @@ class ScoringService:
                 )
                 db.add(new_score)
             
-            if not isinstance(global_report, dict):
-                global_report = {}
-            scores_report = global_report.get("scores")
-            if not isinstance(scores_report, dict):
-                global_report["scores"] = {
-                    "positive": {
-                        "logical_thinking": 72,
-                        "argument_quality": 72,
-                        "reaction_speed": 70,
-                        "persuasion": 72,
-                        "teamwork": 72,
-                        "total_score": 72,
-                    },
-                    "negative": {
-                        "logical_thinking": 72,
-                        "argument_quality": 72,
-                        "reaction_speed": 70,
-                        "persuasion": 72,
-                        "teamwork": 72,
-                        "total_score": 72,
-                    },
-                }
-            global_report.setdefault("winner", "draw")
-            global_report.setdefault("winning_reason", "Scores generated from debate transcript.")
-            global_report.setdefault("overall_comment", "Debate report generated from completed speeches.")
-            global_report.setdefault("suggestions", "Review key claims, rebuttals, and evidence use for improvement.")
+            global_report = ScoringService._build_global_report_from_scores(
+                topic=topic,
+                speech_score_items=speech_scores,
+                speech_map=speech_map,
+            )
 
             db.commit()
             return global_report
@@ -345,7 +525,14 @@ class ScoringService:
         """
         keyword_count = 0
         
-        for keyword in ScoringService.POSITIVE_KEYWORDS:
+        keywords = (
+            list(ScoringService.POSITIVE_KEYWORDS)
+            + ScoringService.LOGIC_MARKERS
+            + ScoringService.EVIDENCE_MARKERS
+            + ScoringService.AI_TERMS
+        )
+
+        for keyword in keywords:
             if keyword in speech_content:
                 keyword_count += 1
         

@@ -873,6 +873,7 @@ async def handle_audio_message(
 
         audio_base64 = data.get("audio_data")
         audio_format = data.get("audio_format", "webm")
+        client_transcript = str(data.get("client_transcript") or "").strip()
         if not audio_base64:
             logger.warning(f"No audio data in message from user {user_id}")
             if asr_turn_still_current():
@@ -970,6 +971,17 @@ async def handle_audio_message(
         transcription_result = await voice_processor.transcribe_audio(
             audio_data, audio_format=audio_format, language="zh", db=db
         )
+        if (
+            isinstance(transcription_result, dict)
+            and "error" in transcription_result
+            and client_transcript
+        ):
+            logger.warning("ASR failed, using browser speech recognition fallback text.")
+            transcription_result = {
+                "text": client_transcript,
+                "duration": int(duration or 0),
+                "fallback_source": "browser_speech_recognition",
+            }
         if isinstance(transcription_result, dict) and "error" in transcription_result:
             logger.error(f"ASR failed: {transcription_result['error']}")
             if asr_turn_still_current():
@@ -1019,6 +1031,8 @@ async def handle_audio_message(
             return
 
         text, asr_duration = _extract_transcription_text_and_duration(transcription_result)
+        if not text and client_transcript:
+            text = client_transcript
         if not text:
             logger.warning(f"Empty transcription result for user {user_id}")
             if asr_turn_still_current():
@@ -1498,56 +1512,6 @@ async def handle_end_turn_message(
                 "type": "permission_denied",
                 "data": {
                     "message": f"无法结束发言：当前轮到【{room_state.current_speaker}】发言，您是【{user_role}】",
-                    "timestamp": now.isoformat(),
-                },
-            },
-        )
-        return
-    if getattr(room_state, "turn_processing_status", "idle") == "processing":
-        if not getattr(room_state, "pending_advance_reason", None):
-            await room_manager.update_room_state(
-                room_id, pending_advance_reason="end_turn"
-            )
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "error",
-                "data": {
-                    "message": "语音处理中，处理成功后会自动结束发言",
-                    "timestamp": now.isoformat(),
-                },
-            },
-        )
-        return
-    if getattr(room_state, "turn_processing_status", "idle") == "failed" and getattr(
-        room_state, "turn_processing_kind", None
-    ):
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "error",
-                "data": {
-                    "message": f"语音处理失败，请重试：{getattr(room_state, 'turn_processing_error', '') or ''}",
-                    "timestamp": now.isoformat(),
-                },
-            },
-        )
-        return
-    can_end_without_committed_speech = (
-        room_state.speaker_mode in {"fixed", "choice"}
-        and room_state.current_speaker == user_role
-        and len(getattr(room_state, "speaker_options", []) or []) >= 1
-    )
-    if (
-        not getattr(room_state, "turn_speech_committed", False)
-        and not can_end_without_committed_speech
-    ):
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "error",
-                "data": {
-                    "message": "尚未收到有效发言，无法结束回合",
                     "timestamp": now.isoformat(),
                 },
             },

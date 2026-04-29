@@ -722,6 +722,17 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 注册事件监听器
     audioPlaybackDebug('DebateArena', '开始注册房间 websocket 监听', { roomId });
+    const handleAudioProcessed = (data: WsPayload) => {
+      const text = toOptionalString(data?.text);
+      if (!text) return;
+      handleSpeech({
+        ...data,
+        content: text,
+        transcription_status: 'completed',
+        is_audio: true,
+      });
+    };
+
     on('state_update', handleStateUpdate);
     on('user_joined', handleUserJoined);
     on('user_left', handleUserLeft);
@@ -734,6 +745,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     on('tts_stream_chunk', handleTtsStreamChunk);
     on('tts_stream_end', handleTtsStreamEnd);
     on('recording_permission', handleRecordingPermission);
+    on('audio_processed', handleAudioProcessed);
     on('permission_denied', handlePermissionDenied);
     on('mic_grabbed', handleMicGrabbed);
     on('mic_released', handleMicReleased);
@@ -753,6 +765,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       off('timer_update', handleTimerUpdate);
       off('subtitle', handleSubtitle);
       off('recording_permission', handleRecordingPermission);
+      off('audio_processed', handleAudioProcessed);
       off('speech', handleSpeech);
       off('tts_stream_start', handleTtsStreamStart);
       off('tts_stream_chunk', handleTtsStreamChunk);
@@ -797,7 +810,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     }
   };
 
-  const handleSendAudio = (audioBlob: Blob) => {
+  const handleSendAudio = (audioBlob: Blob, clientTranscript?: string) => {
     if (isConnected) {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -817,7 +830,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                   : mime.includes('m4a') || mime.includes('x-m4a')
                     ? 'm4a'
                     : 'webm';
-        send('audio', { audio_data: raw, audio_format: format });
+        send('audio', {
+          audio_data: raw,
+          audio_format: format,
+          client_transcript: clientTranscript?.trim() || undefined,
+        });
       };
       reader.readAsDataURL(audioBlob);
     }

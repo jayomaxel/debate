@@ -31,6 +31,7 @@ class DebateFlowController:
     """辩论流程控制器"""
 
     FAST_TOPIC_ONLY_WAIT_SECONDS = 1.5
+    REACTIVE_FALLBACK_WAIT_SECONDS = 15.0
 
     CONTEXT_REACTIVE_SEGMENT_IDS = {
         "questioning_1_ai2_ask",
@@ -460,6 +461,20 @@ class DebateFlowController:
             and str(turn_plan.get("speech_type") or "") in {"opening", "question"}
         )
 
+    def _is_reactive_fallback_turn(self, turn_plan: Dict[str, Any]) -> bool:
+        return str(turn_plan.get("speech_type") or "") in {"response", "free_debate"}
+
+    def _resolve_ai_generation_timeout(self, turn_plan: Dict[str, Any]) -> float:
+        if self._is_topic_only_eager_turn(turn_plan):
+            return self.FAST_TOPIC_ONLY_WAIT_SECONDS
+        configured = self._coerce_nonnegative_float(
+            turn_plan.get("thinking_timeout_sec"),
+            20.0,
+        )
+        if self._is_reactive_fallback_turn(turn_plan):
+            return min(self.REACTIVE_FALLBACK_WAIT_SECONDS, configured or self.REACTIVE_FALLBACK_WAIT_SECONDS)
+        return configured
+
     def _build_topic_only_fallback_text(
         self,
         *,
@@ -474,11 +489,24 @@ class DebateFlowController:
         clean_topic = str(topic or "本辩题").strip() or "本辩题"
 
         if speech_type == "question":
-            text = (
-                f"我是{stance_text}{role_label}。围绕“{clean_topic}”，请{opponent_text}说明："
-                f"你方核心判断依赖的关键前提是什么？如果这个前提在现实中并不稳定，"
-                f"你方结论还如何成立？"
-            )
+            if str(speaker_role or "") == "ai_2":
+                text = (
+                    f"我是{stance_text}{role_label}。围绕“{clean_topic}”，请{opponent_text}说明："
+                    f"你方核心判断依赖的可验证证据是什么？如果这些证据只支持局部情形，"
+                    f"为什么还能推出你方的普遍结论？"
+                )
+            elif str(speaker_role or "") == "ai_3":
+                text = (
+                    f"我是{stance_text}{role_label}。延续前一轮交锋，请{opponent_text}进一步说明："
+                    f"即使你方前提部分成立，结论在边界、代价和例外情形下是否仍然成立？"
+                    f"如果这些条件无法稳定满足，你方方案如何避免逻辑跳跃？"
+                )
+            else:
+                text = (
+                    f"我是{stance_text}{role_label}。围绕“{clean_topic}”，请{opponent_text}说明："
+                    f"你方核心判断依赖的关键前提是什么？如果这个前提在现实中并不稳定，"
+                    f"你方结论还如何成立？"
+                )
         else:
             text = (
                 f"我是{stance_text}{role_label}。针对“{clean_topic}”，我方认为应坚持"
@@ -486,6 +514,51 @@ class DebateFlowController:
                 f"第二，制度安排必须兼顾公平、效率与可执行性；第三，对方立场容易低估"
                 f"现实约束带来的风险。因此，我方主张以更审慎、更可验证的标准来判断本题。"
             )
+        return AIDebaterAgent.limit_reply_text(text, AIDebaterAgent.MAX_REPLY_CHARS)
+
+    def _build_reactive_fallback_text(
+        self,
+        *,
+        topic: str,
+        stance: str,
+        speech_type: str,
+        generation_kwargs: Dict[str, Any],
+        recent_speeches: List[Speech],
+    ) -> str:
+        stance_text = "正方" if stance == "positive" else "反方"
+        clean_topic = str(topic or "本辩题").strip() or "本辩题"
+        if speech_type == "response":
+            question = str(generation_kwargs.get("question") or "").strip()
+            if not question:
+                question = "请你方解释自身立场中最关键的前提是否成立"
+            text = (
+                f"针对这个问题，我方回应如下：{question}。"
+                f"第一，{stance_text}并不回避问题核心，但判断“{clean_topic}”必须看条件、范围和代价；"
+                f"第二，对方问题默认了一个并不必然成立的前提，因此不能直接推出其结论；"
+                f"第三，我方更强调可验证的事实与可执行的方案，所以我方立场仍然成立。"
+            )
+        else:
+            latest_human = next(
+                (
+                    str(getattr(speech, "content", "") or "").strip()
+                    for speech in reversed(recent_speeches)
+                    if self._speaker_side(getattr(speech, "speaker_role", None)) == "positive"
+                    and str(getattr(speech, "content", "") or "").strip()
+                ),
+                "",
+            )
+            if latest_human:
+                text = (
+                    f"我方回应刚才的观点：{latest_human}。这个说法忽略了“{clean_topic}”中的关键约束。"
+                    f"如果只强调理想收益，却不说明成本、边界和执行条件，结论就不够稳固。"
+                    f"因此，我方坚持反方立场，请正方进一步说明其方案如何落地。"
+                )
+            else:
+                text = (
+                    f"围绕“{clean_topic}”，我方补充一点：评价这个问题不能只看单一好处，"
+                    f"还要看风险、成本和可执行性。若这些条件无法被证明稳定成立，"
+                    f"正方结论就缺少足够支撑。"
+                )
         return AIDebaterAgent.limit_reply_text(text, AIDebaterAgent.MAX_REPLY_CHARS)
 
     def _resolve_recent_speeches_limit(
@@ -1520,7 +1593,10 @@ class DebateFlowController:
             if self._speaker_side(getattr(speech, "speaker_role", None)) == speaker_side
         ]
 
-        kwargs: Dict[str, Any] = {}
+        kwargs: Dict[str, Any] = {
+            "segment_id": normalized_segment_id,
+            "speaker_role": speaker_role,
+        }
         if normalized_segment_id == "questioning_neg_summary":
             questioning_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
@@ -1551,6 +1627,27 @@ class DebateFlowController:
                 for speech in question_inputs[-3:]
                 if str(getattr(speech, "content", "") or "").strip()
             ]
+            previous_question_roles = {"ai_2", "ai_3", "debater_2", "debater_3"}
+            previous_question_speeches = [
+                speech
+                for speech in recent_speeches
+                if str(getattr(speech, "phase", "") or "") == str(DebatePhase.QUESTIONING.value)
+                and str(getattr(speech, "speaker_role", "") or "") in previous_question_roles
+                and str(getattr(speech, "speaker_role", "") or "") != str(speaker_role or "")
+                and (
+                    "？" in str(getattr(speech, "content", "") or "")
+                    or "?" in str(getattr(speech, "content", "") or "")
+                )
+            ]
+            kwargs["previous_questions"] = [
+                str(getattr(speech, "content", "") or "").strip()
+                for speech in previous_question_speeches[-3:]
+                if str(getattr(speech, "content", "") or "").strip()
+            ]
+            if normalized_segment_id == "questioning_1_ai2_ask" or speaker_role == "ai_2":
+                kwargs["question_focus"] = "definition_and_evidence"
+            elif normalized_segment_id == "questioning_3_ai3_ask" or speaker_role == "ai_3":
+                kwargs["question_focus"] = "logic_followup_and_boundary"
         elif speech_type == "response":
             dependency_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
@@ -2355,7 +2452,7 @@ class DebateFlowController:
         if not room_state:
             return False
 
-        if reason not in {"host_advance", "timeout"}:
+        if reason not in {"host_advance", "timeout", "end_turn"}:
             turn_processing_status = getattr(
                 room_state, "turn_processing_status", "idle"
             )
@@ -3496,17 +3593,25 @@ class DebateFlowController:
             segment_id=segment_id,
             speaker_role=speaker_role,
         )
+        generation_kwargs = self._build_generation_kwargs(
+            turn_plan,
+            recent_speeches,
+            speaker_role,
+            segment_id=segment_id,
+        )
         current_task = asyncio.current_task()
+        fallback_due_to_wait_timeout = False
         if existing_task and existing_task is not current_task and not existing_task.done():
             try:
-                if self._is_topic_only_eager_turn(turn_plan):
+                if self._is_topic_only_eager_turn(turn_plan) or self._is_reactive_fallback_turn(turn_plan):
                     await asyncio.wait_for(
                         asyncio.shield(existing_task),
-                        timeout=self.FAST_TOPIC_ONLY_WAIT_SECONDS,
+                        timeout=self._resolve_ai_generation_timeout(turn_plan),
                     )
                 else:
                     await existing_task
             except asyncio.TimeoutError:
+                fallback_due_to_wait_timeout = True
                 existing_task.cancel()
                 self._clear_ai_draft_task(
                     room_id,
@@ -3569,13 +3674,12 @@ class DebateFlowController:
         except Exception:
             configured_audio_format = "mp3"
 
-        generation_kwargs = self._build_generation_kwargs(
-            turn_plan,
-            recent_speeches,
-            speaker_role,
-            segment_id=segment_id,
-        )
         try:
+            if fallback_due_to_wait_timeout and (
+                self._is_topic_only_eager_turn(turn_plan)
+                or self._is_reactive_fallback_turn(turn_plan)
+            ):
+                raise asyncio.TimeoutError()
             result = await asyncio.wait_for(
                 agent.generate_speech_with_audio(
                     speech_type=str(turn_plan.get("speech_type") or "free_debate"),
@@ -3585,28 +3689,32 @@ class DebateFlowController:
                     include_audio=False,
                     **generation_kwargs,
                 ),
-                timeout=(
-                    self.FAST_TOPIC_ONLY_WAIT_SECONDS
-                    if self._is_topic_only_eager_turn(turn_plan)
-                    and self._is_room_segment_active(room_id, segment)
-                    else self._coerce_nonnegative_float(
-                        turn_plan.get("thinking_timeout_sec"),
-                        20.0,
-                    )
-                ),
+                timeout=self._resolve_ai_generation_timeout(turn_plan),
             )
         except asyncio.TimeoutError:
-            if not self._is_topic_only_eager_turn(turn_plan):
-                raise
-            result = {
-                "text": self._build_topic_only_fallback_text(
+            if self._is_topic_only_eager_turn(turn_plan):
+                fallback_text = self._build_topic_only_fallback_text(
                     topic=str(debate.topic or ""),
                     stance=self._resolve_ai_stance(room_state, speaker_role),
                     speech_type=str(turn_plan.get("speech_type") or "opening"),
                     speaker_role=speaker_role,
-                ),
+                )
+                fallback_error = "topic_only_fallback_timeout"
+            elif self._is_reactive_fallback_turn(turn_plan):
+                fallback_text = self._build_reactive_fallback_text(
+                    topic=str(debate.topic or ""),
+                    stance=self._resolve_ai_stance(room_state, speaker_role),
+                    speech_type=str(turn_plan.get("speech_type") or "response"),
+                    generation_kwargs=generation_kwargs,
+                    recent_speeches=recent_speeches,
+                )
+                fallback_error = "reactive_fallback_timeout"
+            else:
+                raise
+            result = {
+                "text": fallback_text,
                 "voice_id": agent.get_voice_id(),
-                "error": "topic_only_fallback_timeout",
+                "error": fallback_error,
             }
         except Exception as exc:
             draft["status"] = "failed"

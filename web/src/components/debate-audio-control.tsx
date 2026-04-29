@@ -22,7 +22,7 @@ interface DebateAudioControlProps {
   onToggleMic?: () => void;
   onToggleVideo?: () => void;
   onRequestStartRecording?: () => Promise<boolean>;
-  onSendAudio?: (audioBlob: Blob) => void;
+  onSendAudio?: (audioBlob: Blob, clientTranscript?: string) => void;
   onGrabMic?: () => void;
   onEndTurn?: () => void;
 }
@@ -42,15 +42,63 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
+  const clientTranscriptRef = useRef('');
+
+  const startClientSpeechRecognition = () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      clientTranscriptRef.current = '';
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'zh-CN';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      clientTranscriptRef.current = '';
+      recognition.onresult = (event: any) => {
+        let text = '';
+        for (let i = 0; i < event.results.length; i += 1) {
+          text += event.results[i]?.[0]?.transcript || '';
+        }
+        clientTranscriptRef.current = text.trim();
+      };
+      recognition.onerror = () => {
+        // 浏览器语音识别只是服务端ASR的兜底，不阻断正常录音。
+      };
+      recognition.start();
+      speechRecognitionRef.current = recognition;
+    } catch {
+      speechRecognitionRef.current = null;
+    }
+  };
+
+  const stopClientSpeechRecognition = () => {
+    try {
+      speechRecognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    } finally {
+      speechRecognitionRef.current = null;
+    }
+    return clientTranscriptRef.current.trim();
+  };
 
   // 开始语音录制
   const handleStartRecording = async () => {
     try {
       setRecordingError(null);
+      if (!AudioRecorder.isSupported()) {
+        setRecordingError('当前浏览器不支持麦克风录音，请使用 Chrome、Edge 或 Safari 的较新版本。');
+        return;
+      }
       if (!audioRecorderRef.current) {
         audioRecorderRef.current = new AudioRecorder({ mimeType: 'audio/wav', sampleRate: 16000 });
       }
       await audioRecorderRef.current.startRecording();
+      startClientSpeechRecognition();
       setIsRecording(true);
     } catch (err: any) {
       console.error('Failed to start recording:', err);
@@ -64,12 +112,18 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       if (!audioRecorderRef.current) {
         return;
       }
+      const clientTranscript = stopClientSpeechRecognition();
       const audioBlob = await audioRecorderRef.current.stopRecording();
       setIsRecording(false);
+      if (!audioBlob || audioBlob.size < 1024) {
+        setRecordingError('录音内容太短或没有检测到声音，请重新录制后再发送。');
+        return;
+      }
       
       // 发送音频
-      onSendAudio?.(audioBlob);
+      onSendAudio?.(audioBlob, clientTranscript);
     } catch (err: any) {
+      stopClientSpeechRecognition();
       console.error('Failed to stop recording:', err);
       setRecordingError(err.message || '录音失败');
       setIsRecording(false);

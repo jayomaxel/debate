@@ -28,6 +28,13 @@ interface DebateResult {
     persuasionScore: number;
     teamworkScore: number;
   };
+  aiMetrics?: {
+    logicScore: number;
+    argumentScore: number;
+    responseScore: number;
+    persuasionScore: number;
+    teamworkScore: number;
+  };
 }
 
 interface DebateResultDisplayProps {
@@ -200,20 +207,20 @@ const DebateResultDisplay: React.FC<DebateResultDisplayProps> = ({
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-600">逻辑建构力</span>
-                  <span className={`font-medium ${getScoreColor(result.keyMetrics.logicScore, false)}`}>
-                    {result.keyMetrics.logicScore + 5}
+                  <span className={`font-medium ${getScoreColor(result.aiMetrics?.logicScore || 0, false)}`}>
+                    {result.aiMetrics?.logicScore || 0}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-600">AI核心知识运用</span>
-                  <span className={`font-medium ${getScoreColor(result.keyMetrics.argumentScore, false)}`}>
-                    {result.keyMetrics.argumentScore + 8}
+                  <span className={`font-medium ${getScoreColor(result.aiMetrics?.argumentScore || 0, false)}`}>
+                    {result.aiMetrics?.argumentScore || 0}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-600">批判性思维</span>
-                  <span className={`font-medium ${getScoreColor(result.keyMetrics.responseScore, false)}`}>
-                    {result.keyMetrics.responseScore + 3}
+                  <span className={`font-medium ${getScoreColor(result.aiMetrics?.responseScore || 0, false)}`}>
+                    {result.aiMetrics?.responseScore || 0}
                   </span>
                 </div>
               </div>

@@ -359,6 +359,10 @@ class AIDebaterAgent:
         stance: str,
         context: List[Dict],
         opponent_arguments: List[str],
+        segment_id: Optional[str] = None,
+        speaker_role: Optional[str] = None,
+        previous_questions: Optional[List[str]] = None,
+        question_focus: Optional[str] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """
@@ -375,41 +379,76 @@ class AIDebaterAgent:
         """
         stance_text = "正方" if stance == "positive" else "反方"
         opponent_stance = "反方" if stance == "positive" else "正方"
+        normalized_role = str(speaker_role or "").strip()
+        normalized_segment = str(segment_id or "").strip()
+        normalized_focus = str(question_focus or "").strip()
         cleaned_arguments = [
             str(argument or "").strip()
             for argument in opponent_arguments
             if str(argument or "").strip()
         ]
+        cleaned_previous_questions = [
+            str(question or "").strip()
+            for question in (previous_questions or [])
+            if str(question or "").strip()
+        ][-3:]
+
+        if normalized_focus == "definition_and_evidence" or normalized_role == "ai_2":
+            focus_instruction = (
+                "本轮你是反方二辩提问，问题角度必须集中在正方立论的定义、事实依据、"
+                "核心前提或证据可靠性上。不要追问执行后果或价值收束，那是后续三辩的任务。"
+            )
+        elif normalized_focus == "logic_followup_and_boundary" or normalized_role == "ai_3":
+            focus_instruction = (
+                "本轮你是反方三辩提问，必须基于前一轮交锋继续追问。问题角度应集中在"
+                "逻辑后果、适用边界、执行代价、例外情形或对方未回答点上。"
+                "不得复述二辩已经问过的定义、证据或核心前提问题。"
+            )
+        else:
+            focus_instruction = "问题要有清晰切入点，避免和前面已经出现的问题重复。"
+
+        previous_question_block = ""
+        if cleaned_previous_questions:
+            previous_question_block = (
+                "\n\n前面已经出现过的问题或追问，禁止重复这些问法：\n"
+                + "\n".join(f"- {question}" for question in cleaned_previous_questions)
+            )
 
         if cleaned_arguments:
             prompt = f"""
 你是{stance_text}的{self.position}辩手，现在是盘问环节。
 
 辩题：{topic}
+阶段：{normalized_segment or "盘问提问"}
 
 对方（{opponent_stance}）的主要论点：
 {chr(10).join(f"- {arg}" for arg in cleaned_arguments)}
+{previous_question_block}
 
 请提出一个尖锐的问题，要求：
-1. 针对对方论点的薄弱环节
+1. {focus_instruction}
 2. 问题要具体、明确
 3. 能够揭示对方逻辑漏洞或事实错误
-4. 控制在{self.MAX_REPLY_CHARS}字以内
+4. 只提出一个问题，不要展开成长篇论述
+5. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         else:
             prompt = f"""
 你是{stance_text}的{self.position}辩手，现在是盘问环节。这个阶段由你主动提问，不需要等待对方先发言。
 
 辩题：{topic}
+阶段：{normalized_segment or "盘问提问"}
+{previous_question_block}
 
 请基于{stance_text}立场，预判{opponent_stance}在本辩题中最可能依赖的核心前提、价值判断或事实假设，提出一个尖锐的问题。
 
 要求：
-1. 不要说“对方刚才说过”或引用不存在的上一轮发言
-2. 问题要围绕辩题本身和双方立场冲突
-3. 问题必须具体、明确，能逼迫对方解释关键前提
-4. 只提出一个问题，不要展开成长篇论述
-5. 控制在{self.MAX_REPLY_CHARS}字以内
+1. {focus_instruction}
+2. 不要说“对方刚才说过”或引用不存在的上一轮发言
+3. 问题要围绕辩题本身和双方立场冲突
+4. 问题必须具体、明确，能逼迫对方解释关键前提
+5. 只提出一个问题，不要展开成长篇论述
+6. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
@@ -619,6 +658,10 @@ class AIDebaterAgent:
                     stance,
                     context,
                     kwargs.get("opponent_arguments", []),
+                    segment_id=kwargs.get("segment_id"),
+                    speaker_role=kwargs.get("speaker_role"),
+                    previous_questions=kwargs.get("previous_questions", []),
+                    question_focus=kwargs.get("question_focus"),
                     stream_callback=stream_callback,
                 )
             elif speech_type == "response":

@@ -190,7 +190,7 @@ def _make_flow_test_speech(role, content, *, phase="free_debate", speaker_type=N
     )
 
 
-def test_force_advance_waits_for_voice_processing():
+def test_end_turn_force_advance_bypasses_voice_processing():
     room_id = "test_room_turn_gate_001"
     debate_id = str(uuid.uuid4())
 
@@ -227,21 +227,9 @@ def test_force_advance_waits_for_voice_processing():
     room_state.turn_processing_kind = "asr"
     ok = asyncio.run(flow_controller.force_advance_segment(room_id, reason="end_turn"))
     assert ok is True
-    assert room_state.segment_id == "s1"
-    assert room_state.pending_advance_reason == "end_turn"
-
-    room_state.turn_processing_status = "failed"
-    room_state.turn_processing_kind = "asr"
-    room_state.turn_processing_error = "ASR失败"
-    ok = asyncio.run(flow_controller.force_advance_segment(room_id, reason="end_turn"))
-    assert ok is False
-    assert room_state.segment_id == "s1"
-
-    ok = asyncio.run(
-        flow_controller.force_advance_segment(room_id, reason="host_advance")
-    )
-    assert ok is True
     assert room_state.segment_id == "s2"
+    assert room_state.pending_advance_reason is None
+    assert room_state.turn_processing_status == "idle"
 
     asyncio.run(flow_controller.cleanup_room(room_id))
     room_manager.rooms.pop(room_id, None)
@@ -326,7 +314,7 @@ def test_ai_turn_plan_prefers_eager_questions_and_fast_responses():
     assert question_plan["response_delay_sec"] == 0
     assert answer_plan["prethinking_mode"] == "reactive"
     assert answer_plan["response_delay_sec"] == 0
-    assert answer_plan["thinking_timeout_sec"] <= 8
+    assert answer_plan["thinking_timeout_sec"] <= 15
 
 
 def test_ai_question_without_opponent_arguments_uses_topic_based_prompt(monkeypatch):
@@ -367,6 +355,34 @@ def test_topic_only_ai_turn_has_local_fallback_when_model_is_slow():
     assert "人工智能是否应该全面进入课堂教学" in text
     assert "反方" in text
     assert len(text) <= AIDebaterAgent.MAX_REPLY_CHARS
+
+
+def test_reactive_ai_fallback_uses_question_or_recent_free_debate_context():
+    answer_text = flow_controller._build_reactive_fallback_text(
+        topic="人工智能是否应该全面进入课堂教学",
+        stance="negative",
+        speech_type="response",
+        generation_kwargs={"question": "请问你方如何证明不会削弱学生独立思考？"},
+        recent_speeches=[],
+    )
+    free_text = flow_controller._build_reactive_fallback_text(
+        topic="人工智能是否应该全面进入课堂教学",
+        stance="negative",
+        speech_type="free_debate",
+        generation_kwargs={},
+        recent_speeches=[
+            _make_flow_test_speech(
+                "debater_2",
+                "AI进入课堂能显著提高效率",
+                phase="free_debate",
+            )
+        ],
+    )
+
+    assert "不会削弱学生独立思考" in answer_text
+    assert "AI进入课堂能显著提高效率" in free_text
+    assert len(answer_text) <= AIDebaterAgent.MAX_REPLY_CHARS
+    assert len(free_text) <= AIDebaterAgent.MAX_REPLY_CHARS
 
 
 def test_ai_turn_missing_dependency_waits_until_segment_timeout():
