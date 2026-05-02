@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useEffect, useRef, useState } from 'react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -13,9 +13,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import { formatErrorMessage } from '@/lib/error-handler';
+import { shouldRenderAbilityPortrait } from '@/lib/ability-profile';
+import type { UserInfo } from '@/lib/token-manager';
+import { useAuth } from '@/store/auth.context';
+import AuthService, { type DefaultAvatarOption } from '@/services/auth.service';
+import StudentService, {
+  type AssessmentResult,
+  type GrowthTrendItem,
+  type StudentAnalytics,
+} from '@/services/student.service';
+import SkillsRadar, {
+  DEFAULT_SKILLS_EMPTY_STATE_MESSAGE,
+  createEmptySkills,
+  mergeAssessmentIntoSkills,
+} from './skills-radar';
 import {
   Activity,
+  Camera,
   GraduationCap,
   Key,
   Loader2,
@@ -23,29 +40,16 @@ import {
   Phone,
   Save,
   ShieldCheck,
+  Trash2,
   TrendingUp,
+  Upload,
   User,
   Users,
 } from 'lucide-react';
-import AuthService from '@/services/auth.service';
-import StudentService from '@/services/student.service';
-import { formatErrorMessage } from '@/lib/error-handler';
-import type { UserInfo } from '@/lib/token-manager';
-import type {
-  AssessmentResult,
-  GrowthTrendItem,
-  StudentAnalytics,
-} from '@/services/student.service';
-import { shouldRenderAbilityPortrait } from '@/lib/ability-profile';
-import SkillsRadar, {
-  DEFAULT_SKILLS_EMPTY_STATE_MESSAGE,
-  createEmptySkills,
-  mergeAssessmentIntoSkills,
-} from './skills-radar';
 
 interface UserProfileProps {
   user: UserInfo;
-  onUpdate?: () => void;
+  onUpdate?: (user?: UserInfo) => void;
   initialTab?: 'info' | 'password' | 'ability';
 }
 
@@ -57,19 +61,25 @@ interface ClassOption {
   student_count: number;
 }
 
+const buildFallbackText = (name?: string) => (name || '?').trim().slice(0, 2).toUpperCase();
+
 const UserProfile: React.FC<UserProfileProps> = ({
   user,
   onUpdate,
   initialTab = 'info',
 }) => {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'info' | 'password' | 'ability'>(
-    initialTab
-  );
+  const { updateUser } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [activeTab, setActiveTab] = useState<'info' | 'password' | 'ability'>(initialTab);
   const [loading, setLoading] = useState(false);
   const [classesLoading, setClassesLoading] = useState(false);
   const [abilityLoading, setAbilityLoading] = useState(false);
+  const [avatarLoading, setAvatarLoading] = useState(false);
+  const [defaultAvatarsLoading, setDefaultAvatarsLoading] = useState(false);
   const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [defaultAvatars, setDefaultAvatars] = useState<DefaultAvatarOption[]>([]);
+  const [currentUser, setCurrentUser] = useState<UserInfo>(user);
   const [profileForm, setProfileForm] = useState({
     name: user.name || '',
     email: user.email || '',
@@ -85,11 +95,11 @@ const UserProfile: React.FC<UserProfileProps> = ({
   const [lockedClassId, setLockedClassId] = useState(user.class_id || '');
   const [analytics, setAnalytics] = useState<StudentAnalytics | null>(null);
   const [growthTrend, setGrowthTrend] = useState<GrowthTrendItem[]>([]);
-  const [assessmentResult, setAssessmentResult] =
-    useState<AssessmentResult | null>(null);
+  const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [skills, setSkills] = useState(createEmptySkills);
 
-  const isStudent = user.user_type === 'student';
+  const isStudent = currentUser.user_type === 'student';
+  const isAdmin = currentUser.user_type === 'administrator';
   const hasLockedClass = isStudent && Boolean(lockedClassId);
   const completedDebates = analytics?.completed_debates ?? 0;
   const averageScore = analytics?.average_score ?? 0;
@@ -100,11 +110,24 @@ const UserProfile: React.FC<UserProfileProps> = ({
   });
 
   useEffect(() => {
+    setCurrentUser(user);
+    setProfileForm({
+      name: user.name || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      student_id: user.student_id || '',
+      class_id: user.class_id || '',
+    });
+    setLockedClassId(user.class_id || '');
+  }, [user]);
+
+  useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
 
   useEffect(() => {
     void loadProfile();
+    void loadDefaultAvatars();
 
     if (isStudent) {
       void loadClasses();
@@ -112,22 +135,40 @@ const UserProfile: React.FC<UserProfileProps> = ({
     }
   }, [isStudent]);
 
+  const syncUser = (nextUser: UserInfo) => {
+    setCurrentUser(nextUser);
+    updateUser(nextUser);
+    setProfileForm((prev) => ({
+      ...prev,
+      name: nextUser.name || '',
+      email: nextUser.email || '',
+      phone: nextUser.phone || '',
+      student_id: nextUser.student_id || '',
+      class_id: nextUser.class_id || '',
+    }));
+  };
+
   const loadProfile = async () => {
     try {
       const profile = await AuthService.getProfile();
-      setProfileForm({
-        name: profile.name || '',
-        email: profile.email || '',
-        phone: profile.phone || '',
-        student_id: profile.student_id || '',
-        class_id: profile.class_id || '',
-      });
-
+      syncUser(profile);
       if (isStudent) {
         setLockedClassId(profile.class_id || '');
       }
     } catch (error) {
       console.error('Failed to load profile:', error);
+    }
+  };
+
+  const loadDefaultAvatars = async () => {
+    try {
+      setDefaultAvatarsLoading(true);
+      const avatars = await AuthService.getDefaultAvatars();
+      setDefaultAvatars(avatars);
+    } catch (error) {
+      console.error('Failed to load default avatars:', error);
+    } finally {
+      setDefaultAvatarsLoading(false);
     }
   };
 
@@ -176,7 +217,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
 
     try {
       setLoading(true);
-      await AuthService.updateProfile({
+      const nextUser = await AuthService.updateProfile({
         name: profileForm.name,
         email: profileForm.email || undefined,
         phone: profileForm.phone || undefined,
@@ -184,17 +225,17 @@ const UserProfile: React.FC<UserProfileProps> = ({
         class_id: isStudent ? profileForm.class_id || undefined : undefined,
       });
 
-      if (isStudent && profileForm.class_id) {
-        setLockedClassId(profileForm.class_id);
+      if (isStudent && nextUser.class_id) {
+        setLockedClassId(nextUser.class_id);
       }
 
+      syncUser(nextUser);
       toast({
         variant: 'success',
         title: '保存成功',
-        description: '个人信息已更新',
+        description: '个人信息已更新。',
       });
-
-      onUpdate?.();
+      onUpdate?.(nextUser);
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -213,7 +254,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
       toast({
         variant: 'destructive',
         title: '密码不一致',
-        description: '两次输入的新密码不一致',
+        description: '两次输入的新密码不一致。',
       });
       return;
     }
@@ -222,7 +263,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
       toast({
         variant: 'destructive',
         title: '密码过短',
-        description: '新密码长度至少为 6 位',
+        description: '新密码长度至少为 6 位。',
       });
       return;
     }
@@ -243,7 +284,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
       toast({
         variant: 'success',
         title: '修改成功',
-        description: '密码已更新',
+        description: '密码已更新。',
       });
     } catch (error) {
       toast({
@@ -255,6 +296,185 @@ const UserProfile: React.FC<UserProfileProps> = ({
       setLoading(false);
     }
   };
+
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      setAvatarLoading(true);
+      const nextUser = await AuthService.uploadAvatar(file);
+      syncUser(nextUser);
+      toast({
+        variant: 'success',
+        title: '头像上传成功',
+        description: '已切换为自定义头像。',
+      });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '头像上传失败',
+        description: formatErrorMessage(error),
+      });
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
+  const handleSelectDefaultAvatar = async (avatarDefaultKey: string) => {
+    try {
+      setAvatarLoading(true);
+      const nextUser = await AuthService.selectDefaultAvatar(avatarDefaultKey);
+      syncUser(nextUser);
+      toast({
+        variant: 'success',
+        title: '默认头像已更新',
+        description: '已应用新的默认头像。',
+      });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '头像切换失败',
+        description: formatErrorMessage(error),
+      });
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
+  const handleClearAvatar = async () => {
+    try {
+      setAvatarLoading(true);
+      const nextUser = await AuthService.clearAvatar();
+      syncUser(nextUser);
+      toast({
+        variant: 'success',
+        title: '头像已清除',
+        description: '当前将使用姓名首字母占位。',
+      });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '清除失败',
+        description: formatErrorMessage(error),
+      });
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
+  const renderAvatarSection = () => (
+    <Card className="border-slate-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Camera className="h-5 w-5 text-blue-600" />
+          头像设置
+        </CardTitle>
+        <CardDescription>
+          学生、教师和管理员都可以上传自定义头像，或从 AI 设计的极简色块头像中直接选择。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="flex flex-col gap-6 rounded-2xl border border-slate-200 bg-slate-50 p-5 md:flex-row md:items-center">
+          <Avatar className="h-24 w-24 border-4 border-white shadow-lg">
+            <AvatarImage src={currentUser.avatar || currentUser.avatar_url || undefined} alt={currentUser.name} />
+            <AvatarFallback className="bg-slate-900 text-lg font-semibold text-white">
+              {buildFallbackText(currentUser.name)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">
+                {currentUser.avatar_mode === 'custom'
+                  ? '自定义头像'
+                  : currentUser.avatar_mode === 'default'
+                    ? '默认头像'
+                    : '未设置头像'}
+              </Badge>
+              {currentUser.avatar_default_key && (
+                <Badge variant="secondary">{currentUser.avatar_default_key}</Badge>
+              )}
+            </div>
+            <p className="text-sm text-slate-600">
+              推荐上传 512 x 512 以内的 PNG、JPG 或 WebP 图片，系统会自动压缩后存入数据库。
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={handleAvatarUpload}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={avatarLoading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {avatarLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="mr-2 h-4 w-4" />
+                )}
+                上传头像
+              </Button>
+              <Button type="button" variant="ghost" disabled={avatarLoading} onClick={handleClearAvatar}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                清除头像
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">默认头像库</h3>
+              <p className="text-xs text-slate-500">五款极简色块头像，可一键切换。</p>
+            </div>
+            {defaultAvatarsLoading && <Loader2 className="h-4 w-4 animate-spin text-slate-500" />}
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            {defaultAvatars.map((avatarOption) => {
+              const active =
+                currentUser.avatar_default_key === avatarOption.key &&
+                currentUser.avatar_mode === 'default';
+              return (
+                <button
+                  key={avatarOption.key}
+                  type="button"
+                  disabled={avatarLoading}
+                  onClick={() => handleSelectDefaultAvatar(avatarOption.key)}
+                  className={`rounded-2xl border p-3 text-left transition ${
+                    active
+                      ? 'border-blue-500 bg-blue-50 shadow-sm'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <Avatar className="mb-3 h-16 w-16 border border-white shadow">
+                    <AvatarImage src={avatarOption.avatar_url} alt={avatarOption.label} />
+                    <AvatarFallback>{avatarOption.label.slice(0, 2)}</AvatarFallback>
+                  </Avatar>
+                  <div className="text-sm font-medium text-slate-900">{avatarOption.label}</div>
+                  <div className="mt-2 flex gap-1">
+                    {avatarOption.palette.map((color) => (
+                      <span
+                        key={color}
+                        className="h-3 w-3 rounded-full border border-white/70 shadow-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   const renderAbilitySummary = () => {
     if (abilityLoading) {
@@ -271,7 +491,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm text-slate-600">
             {abilityProfileVisible
-              ? '以下画像基于系统记录的真实辩论表现生成，仅用于展示。'
+              ? '以下画像基于系统记录的真实辩论表现生成，用于展示近期成长状态。'
               : DEFAULT_SKILLS_EMPTY_STATE_MESSAGE}
           </div>
           <Badge variant="outline">
@@ -290,21 +510,17 @@ const UserProfile: React.FC<UserProfileProps> = ({
               <TrendingUp className="h-5 w-5 text-blue-600" />
               能力成长概览
             </CardTitle>
-            <CardDescription>展示最近 7 场辩论的成长趋势与统计摘要</CardDescription>
+            <CardDescription>展示最近 7 场辩论的成长趋势与统计摘要。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="rounded-lg bg-blue-50 p-4">
                 <div className="text-sm font-medium text-blue-900">综合评分</div>
-                <div className="mt-2 text-2xl font-bold text-blue-600">
-                  {averageScore}
-                </div>
+                <div className="mt-2 text-2xl font-bold text-blue-600">{averageScore}</div>
               </div>
               <div className="rounded-lg bg-emerald-50 p-4">
                 <div className="text-sm font-medium text-emerald-900">已完成辩论</div>
-                <div className="mt-2 text-2xl font-bold text-emerald-600">
-                  {completedDebates}
-                </div>
+                <div className="mt-2 text-2xl font-bold text-emerald-600">{completedDebates}</div>
               </div>
             </div>
 
@@ -315,10 +531,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
             ) : (
               <div className="space-y-3">
                 {growthTrend.map((item) => (
-                  <div
-                    key={item.debate_id}
-                    className="rounded-lg border border-slate-200 p-4"
-                  >
+                  <div key={item.debate_id} className="rounded-lg border border-slate-200 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <div className="font-medium text-slate-900">{item.topic}</div>
@@ -346,26 +559,24 @@ const UserProfile: React.FC<UserProfileProps> = ({
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
+    <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-center gap-3">
         {isStudent ? (
           <GraduationCap className="h-8 w-8 text-blue-600" />
         ) : (
-          <ShieldCheck className="h-8 w-8 text-blue-600" />
+          <ShieldCheck className={`h-8 w-8 ${isAdmin ? 'text-amber-600' : 'text-blue-600'}`} />
         )}
         <div>
           <h1 className="text-3xl font-bold text-slate-900">个人中心</h1>
           <p className="text-slate-600">
-            {isStudent ? '学生' : '教师'} - {user.name}
+            {isStudent ? '学生' : isAdmin ? '管理员' : '教师'} - {currentUser.name}
           </p>
         </div>
       </div>
 
       <Tabs
         value={activeTab}
-        onValueChange={(value) =>
-          setActiveTab(value as 'info' | 'password' | 'ability')
-        }
+        onValueChange={(value) => setActiveTab(value as 'info' | 'password' | 'ability')}
         className="w-full"
       >
         <TabsList className={`mb-8 grid w-full ${isStudent ? 'grid-cols-3' : 'grid-cols-2'}`}>
@@ -385,20 +596,22 @@ const UserProfile: React.FC<UserProfileProps> = ({
           )}
         </TabsList>
 
-        <TabsContent value="info">
+        <TabsContent value="info" className="space-y-6">
+          {renderAvatarSection()}
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <User className="h-5 w-5" />
                 基本资料
               </CardTitle>
-              <CardDescription>查看和编辑您的个人信息</CardDescription>
+              <CardDescription>查看和编辑您的账户信息。</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleProfileUpdate} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="account">账号</Label>
-                  <Input id="account" value={user.account} disabled className="bg-slate-50" />
+                  <Input id="account" value={currentUser.account} disabled className="bg-slate-50" />
                 </div>
 
                 <div className="space-y-2">
@@ -427,7 +640,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                       setProfileForm((prev) => ({ ...prev, email: event.target.value }))
                     }
                     disabled={loading}
-                    placeholder={isStudent ? '学生邮箱可选填' : '请输入邮箱'}
+                    placeholder={isStudent ? '学生邮箱可选填写' : '请输入邮箱'}
                   />
                 </div>
 
@@ -455,10 +668,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                         id="student_id"
                         value={profileForm.student_id}
                         onChange={(event) =>
-                          setProfileForm((prev) => ({
-                            ...prev,
-                            student_id: event.target.value,
-                          }))
+                          setProfileForm((prev) => ({ ...prev, student_id: event.target.value }))
                         }
                         disabled={loading}
                         placeholder="请输入学号"
@@ -508,11 +718,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                   </>
                 )}
 
-                <Button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                  disabled={loading}
-                >
+                <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={loading}>
                   {loading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -537,7 +743,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                 <Key className="h-5 w-5" />
                 安全设置
               </CardTitle>
-              <CardDescription>定期修改密码以保护账户安全</CardDescription>
+              <CardDescription>定期修改密码以保护账户安全。</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handlePasswordChange} className="space-y-4">
@@ -548,10 +754,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                     type="password"
                     value={passwordForm.old_password}
                     onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        old_password: event.target.value,
-                      }))
+                      setPasswordForm((prev) => ({ ...prev, old_password: event.target.value }))
                     }
                     disabled={loading}
                     required
@@ -567,10 +770,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                     type="password"
                     value={passwordForm.new_password}
                     onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        new_password: event.target.value,
-                      }))
+                      setPasswordForm((prev) => ({ ...prev, new_password: event.target.value }))
                     }
                     disabled={loading}
                     required
@@ -585,10 +785,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                     type="password"
                     value={passwordForm.confirm_password}
                     onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        confirm_password: event.target.value,
-                      }))
+                      setPasswordForm((prev) => ({ ...prev, confirm_password: event.target.value }))
                     }
                     disabled={loading}
                     required
@@ -596,11 +793,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
                   />
                 </div>
 
-                <Button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                  disabled={loading}
-                >
+                <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={loading}>
                   {loading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

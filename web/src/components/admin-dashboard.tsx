@@ -13,6 +13,7 @@ import {
   FileText,
   Mail
 } from 'lucide-react';
+import { useAuth } from '@/store/auth.context';
 import ClassManagement from './admin/class-management';
 import ModelConfiguration from './admin/model-configuration';
 import AsrConfiguration from './admin/asr-configuration';
@@ -22,14 +23,16 @@ import EmailConfiguration from './admin/email-configuration';
 import CozeConfiguration from './admin/coze-configuration';
 import UserManagement from './admin/user-management';
 import DocumentManagement from './admin/document-management';
+import UserProfile from './user-profile';
 
 interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-type TabType = 'classes' | 'models' | 'asr' | 'tts' | 'vector' | 'email' | 'coze' | 'users' | 'knowledge';
+type TabType = 'classes' | 'models' | 'asr' | 'tts' | 'vector' | 'email' | 'coze' | 'users' | 'knowledge' | 'profile';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('classes');
 
   const menuItems = [
@@ -43,6 +46,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
     { id: 'email' as TabType, label: '邮件配置', icon: Mail },
     { id: 'coze' as TabType, label: 'Coze配置', icon: Bot },
     { id: 'users' as TabType, label: '成员管理', icon: Users },
+    { id: 'profile' as TabType, label: '个人中心', icon: Shield },
   ];
 
   return (
@@ -112,6 +116,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                 {activeTab === 'knowledge' && '管理知识库文档与向量化'}
                 {activeTab === 'coze' && '配置Coze代理设置'}
                 {activeTab === 'users' && '按教师与学生分类管理系统成员'}
+                {activeTab === 'profile' && '维护管理员自己的资料、密码与头像设置'}
               </p>
             </div>
 
@@ -125,6 +130,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
             {activeTab === 'knowledge' && <DocumentManagement />}
             {activeTab === 'coze' && <CozeConfiguration />}
             {activeTab === 'users' && <UserManagement />}
+            {activeTab === 'profile' && user && <UserProfile user={user} />}
           </div>
         </div>
       </div>

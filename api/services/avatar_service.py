@@ -2,7 +2,6 @@
 Avatar service for default avatar metadata and custom avatar storage.
 """
 import base64
-import imghdr
 import io
 import uuid
 from pathlib import Path
@@ -13,7 +12,7 @@ from sqlalchemy.orm import Session
 from config import BASE_DIR, settings
 from models.user import User
 
-DEFAULT_AVATAR_DIR = BASE_DIR / settings.UPLOAD_DIR / "defaults" / "avatars"
+DEFAULT_AVATAR_DIR = BASE_DIR / "assets" / "default_avatars"
 MAX_AVATAR_BYTES = settings.AVATAR_MAX_UPLOAD_SIZE
 ALLOWED_IMAGE_TYPES = {
     "png": "image/png",
@@ -24,31 +23,31 @@ DEFAULT_AVATAR_SPECS = [
     {
         "key": "minimal-block-01",
         "label": "海盐方格",
-        "filename": "default-avatar-01.png",
+        "filename": "default-avatar-01.svg",
         "palette": ["#F4EFE6", "#2E4057", "#D96C54", "#F0C66E"],
     },
     {
         "key": "minimal-block-02",
         "label": "松石拼片",
-        "filename": "default-avatar-02.png",
+        "filename": "default-avatar-02.svg",
         "palette": ["#EFF7F6", "#4F6D7A", "#56A3A6", "#C0D6DF"],
     },
     {
         "key": "minimal-block-03",
         "label": "日曜矩阵",
-        "filename": "default-avatar-03.png",
+        "filename": "default-avatar-03.svg",
         "palette": ["#F7F3E9", "#264653", "#E76F51", "#E9C46A"],
     },
     {
         "key": "minimal-block-04",
         "label": "雾蓝叠片",
-        "filename": "default-avatar-04.png",
+        "filename": "default-avatar-04.svg",
         "palette": ["#F8FAFC", "#3A506B", "#5BC0BE", "#CDE7F0"],
     },
     {
         "key": "minimal-block-05",
         "label": "暖棕几何",
-        "filename": "default-avatar-05.png",
+        "filename": "default-avatar-05.svg",
         "palette": ["#FAF7F2", "#5C4B51", "#C17767", "#E6C79C"],
     },
 ]
@@ -59,28 +58,30 @@ def _base64_data_uri(mime_type: str, data: bytes) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def _normalize_public_path(path: Path) -> str:
-    relative = path.relative_to(BASE_DIR / settings.UPLOAD_DIR).as_posix()
-    return f"/uploads/{relative}"
-
-
 class AvatarService:
     @staticmethod
     def ensure_default_avatar_dir() -> None:
         DEFAULT_AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
+    def _default_avatar_data_uri(filename: str) -> str:
+        image_path = DEFAULT_AVATAR_DIR / filename
+        if not image_path.exists():
+            raise ValueError(f"默认头像资源缺失: {filename}")
+        mime_type = "image/svg+xml" if image_path.suffix.lower() == ".svg" else "image/png"
+        return _base64_data_uri(mime_type, image_path.read_bytes())
+
+    @staticmethod
     def get_default_avatar_specs() -> List[Dict[str, Any]]:
         AvatarService.ensure_default_avatar_dir()
         specs: List[Dict[str, Any]] = []
         for item in DEFAULT_AVATAR_SPECS:
-            image_path = DEFAULT_AVATAR_DIR / item["filename"]
             specs.append(
                 {
                     "key": item["key"],
                     "label": item["label"],
                     "palette": item["palette"],
-                    "avatar_url": _normalize_public_path(image_path),
+                    "avatar_url": AvatarService._default_avatar_data_uri(item["filename"]),
                 }
             )
         return specs
@@ -104,9 +105,13 @@ class AvatarService:
 
     @staticmethod
     def _detect_image_type(content: bytes) -> str:
-        image_type = imghdr.what(None, h=content)
-        if image_type == "jpg":
+        image_type: Optional[str] = None
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            image_type = "png"
+        elif content.startswith(b"\xff\xd8\xff"):
             image_type = "jpeg"
+        elif len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            image_type = "webp"
         if image_type not in ALLOWED_IMAGE_TYPES:
             raise ValueError("仅支持 PNG、JPEG 或 WebP 头像")
         return image_type

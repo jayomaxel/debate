@@ -5,6 +5,7 @@ export interface TokenData {
   refresh_token: string;
   token_type?: string;
   expires_in?: number;
+  user?: UserInfo;
 }
 
 export interface UserInfo {
@@ -159,6 +160,9 @@ class TokenManager {
     });
     const tokenData = unwrapResponseData<TokenData>(response.data);
     this.setTokens(tokenData);
+    if (tokenData.user) {
+      this.setUserInfo(tokenData.user);
+    }
     return tokenData;
   }
 }
