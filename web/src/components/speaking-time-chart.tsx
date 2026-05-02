@@ -14,6 +14,7 @@ import {
 
 interface SpeakingData {
   name: string;
+  role?: string | null;
   time: number; // 秒
   percentage: number;
   isAI?: boolean;
@@ -26,6 +27,29 @@ interface SpeakingTimeChartProps {
   title?: string;
   showComparison?: boolean;
 }
+
+const mojibakePattern =
+  /[�]|[鑾娉瀛鐧鏇鏁鎴銆锛璇杈鑽閭鏌鐝涓閿楠寮鐢鏂鍥澶浣鈥俓歕篜凪]|[\uE000-\uF8FF]/;
+
+const getRoleNumber = (role?: string | null) => {
+  const match = String(role || '').match(/(?:debater|ai)_(\d+)/);
+  return match?.[1];
+};
+
+const getDisplayName = (item: SpeakingData) => {
+  const roleNumber = getRoleNumber(item.role);
+
+  if (item.isAI) {
+    return roleNumber ? `AI辩手${roleNumber}` : 'AI辩手';
+  }
+
+  const name = String(item.name || '').trim();
+  if (name && !mojibakePattern.test(name)) {
+    return name;
+  }
+
+  return roleNumber ? `辩手${roleNumber}` : '辩手';
+};
 
 const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
   data,
@@ -153,7 +177,7 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
                   style={{ backgroundColor: item.color }}
                 />
                 <span className="font-medium text-slate-700">
-                  {item.name}
+                  {getDisplayName(item)}
                 </span>
                 {item.isAI && (
                   <Badge className="bg-purple-100 text-purple-700 border-purple-300 text-xs">
@@ -266,7 +290,7 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
                       <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center">
                         {index + 1}
                       </div>
-                      <span className="text-sm font-medium text-slate-700">{item.name}</span>
+                      <span className="text-sm font-medium text-slate-700">{getDisplayName(item)}</span>
                       {item.isAI && (
                         <Badge className="bg-purple-100 text-purple-700 border-purple-300 text-xs">
                           AI

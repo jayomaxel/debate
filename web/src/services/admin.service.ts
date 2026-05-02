@@ -131,7 +131,8 @@ export interface EmailConfig {
   smtp_host: string;
   smtp_port: number;
   smtp_user: string;
-  smtp_password: string;
+  smtp_password_configured: boolean;
+  smtp_password_masked?: string | null;
   from_email: string;
   auto_send_enabled: boolean;
   created_at: string;

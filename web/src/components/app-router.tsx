@@ -14,6 +14,7 @@ import PreparationAssistantPage from './student/preparation-assistant-page';
 import StudentService from '@/services/student.service';
 import type { Debate } from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
+import { debateDebug } from '@/lib/utils';
 
 type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
 
@@ -65,7 +66,7 @@ const AppRouter: React.FC = () => {
         return <TeacherDashboard 
           onLogout={() => setCurrentPage('login')} 
           onNavigate={(page, debateId) => {
-            console.log(`Navigate to ${page} with debateId ${debateId}`);
+            debateDebug('AppRouter', `Navigate to ${page}`, { debateId });
             if (page === 'debate-report') {
               setReportBackPage('teacher');
               setReportDebateId(debateId);
@@ -89,14 +90,14 @@ const AppRouter: React.FC = () => {
           defaultShowProfile={studentNeedsAssessment}
           defaultProfileTab={studentProfileTab}
           onJoinClass={(debate) => {
-            console.log('加入课堂:', debate.invitation_code);
+            debateDebug('AppRouter', '加入课堂', { invitationCode: debate.invitation_code });
             setJoinedDebate(debate);
             setCurrentDebateId(debate.id);
             setCurrentPage('student');
           }}
           onToWaitingRoom={() => setCurrentPage('student')}
           onViewReport={(matchId) => {
-            console.log('查看报告:', matchId);
+            debateDebug('AppRouter', '查看报告', { matchId });
             setReportBackPage('command-center');
             setReportDebateId(matchId);
             setCurrentPage('debate-report');
@@ -137,7 +138,7 @@ const AppRouter: React.FC = () => {
             }
             setCurrentPage('debate');
           }}
-          onCountdownEnd={() => console.log('倒计时结束')}
+          onCountdownEnd={() => debateDebug('AppRouter', '倒计时结束')}
         />;
       case 'debate':
         return <DebateArena 

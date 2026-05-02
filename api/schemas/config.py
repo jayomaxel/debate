@@ -269,12 +269,13 @@ class VectorConfigUpdate(BaseModel):
 
 
 class EmailConfigResponse(BaseModel):
-    """邮件配置响应"""
+    """邮件配置响应（安全版本，不包含明文密码）"""
     id: str
     smtp_host: str
     smtp_port: int
     smtp_user: str
-    smtp_password: str
+    smtp_password_configured: bool
+    smtp_password_masked: Optional[str] = None
     from_email: str
     auto_send_enabled: bool
     created_at: datetime

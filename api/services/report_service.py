@@ -1,6 +1,6 @@
-﻿"""
-鎶ュ憡鐢熸垚鏈嶅姟
-璐熻矗鐢熸垚杈╄鎶ュ憡銆佸鍑篜DF/Excel
+"""
+报告生成服务
+负责生成辩论报告、导出PDF/Excel
 """
 import asyncio
 import json
@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 
 class Report:
-    """鎶ュ憡鏁版嵁缁撴瀯"""
+    """报告数据结构"""
     
     def __init__(
         self,
@@ -87,29 +87,29 @@ class ReportGenerator:
         student_id: str
     ) -> Optional[Report]:
         """
-        鐢熸垚瀛︾敓鎶ュ憡
+        生成学生报告
         
         Args:
-            db: 鏁版嵁搴撲細璇?
-            debate_id: 杈╄ID
-            student_id: 瀛︾敓ID
+            db: 数据库会话
+            debate_id: 辩论ID
+            student_id: 学生ID
             
         Returns:
-            鎶ュ憡瀵硅薄
+            报告对象
         """
         try:
-            # 鑾峰彇杈╄淇℃伅
+            # 获取辩论信息
             debate = db.execute(
                 select(Debate).where(Debate.id == debate_id)
             ).scalar_one_or_none()
             
             if not debate:
-                logger.error(f"杈╄涓嶅瓨鍦? {debate_id}")
+                logger.error(f"辩论不存在: {debate_id}")
                 return None
             
             viewer = db.execute(select(User).where(User.id == student_id)).scalar_one_or_none()
             if not viewer:
-                logger.error(f"鐢ㄦ埛涓嶅瓨鍦? user_id={student_id}")
+                logger.error(f"用户不存在: user_id={student_id}")
                 return None
 
             if viewer.user_type == "student":
@@ -121,7 +121,7 @@ class ReportGenerator:
                 ).scalar_one_or_none()
 
                 if not participation:
-                    logger.error(f"瀛︾敓鏈弬涓庤杈╄: student_id={student_id}")
+                    logger.error(f"学生未参与该辩论: student_id={student_id}")
                     return None
 
             all_participations = (
@@ -143,7 +143,10 @@ class ReportGenerator:
 
             speeches: List[Speech] = (
                 db.execute(
-                    select(Speech).where(Speech.debate_id == debate_id).order_by(Speech.timestamp)
+                    select(Speech)
+                    .where(Speech.debate_id == debate_id)
+                    .where(Speech.is_valid_for_scoring.is_(True))
+                    .order_by(Speech.timestamp)
                 )
                 .scalars()
                 .all()
@@ -159,6 +162,7 @@ class ReportGenerator:
                     select(Score, Speech)
                     .join(Speech, Score.speech_id == Speech.id)
                     .where(Speech.debate_id == debate_id)
+                    .where(Speech.is_valid_for_scoring.is_(True))
                 )
                 .all()
             )
@@ -171,7 +175,7 @@ class ReportGenerator:
                 if role.startswith("ai_"):
                     parts = role.split("_", 1)
                     if len(parts) == 2 and parts[1].isdigit():
-                        return f"AI杈╂墜{parts[1]}"
+                        return f"AI辩手{parts[1]}"
                 return "AI"
 
             def _ai_role_to_mapped_debater_role(speaker_role: str) -> Optional[str]:
@@ -242,7 +246,7 @@ class ReportGenerator:
                 participants.append(
                     {
                         "user_id": user_id_str,
-                        "name": user.name if user else "鏈煡鐢ㄦ埛",
+                        "name": user.name if user else "未知用户",
                         "role": role,
                         "stance": stance,
                         "is_ai": False,
@@ -280,7 +284,7 @@ class ReportGenerator:
 
                 if speaker_type == "human" and sp.speaker_id:
                     speaker_name = participant_name_by_human_id.get(str(sp.speaker_id)) or (
-                        user_by_id.get(str(sp.speaker_id)).name if user_by_id.get(str(sp.speaker_id)) else "鏈煡鐢ㄦ埛"
+                        user_by_id.get(str(sp.speaker_id)).name if user_by_id.get(str(sp.speaker_id)) else "未知用户"
                     )
                     p = participation_by_user_id.get(str(sp.speaker_id))
                     if p:
@@ -322,10 +326,10 @@ class ReportGenerator:
                     }
                 )
             
-            # 鑾峰彇杈╄缁熻
+            # 获取辩论统计
             statistics = ScoringService.get_debate_statistics(db, debate_id)
             
-            # 濡傛灉鏈夊叏灞€璇勫垎鎶ュ憡锛岃鐩栫粺璁℃暟鎹?
+            # 如果有全局评分报告，覆盖统计数据
             if debate.report:
                 report_data = debate.report
                 statistics["winner"] = report_data.get("winner", statistics.get("winner"))
@@ -334,12 +338,12 @@ class ReportGenerator:
                 statistics["overall_comment"] = report_data.get("overall_comment")
                 statistics["suggestions"] = report_data.get("suggestions")
             
-            # 璁＄畻鎸佺画鏃堕棿
+            # 计算持续时间
             duration = 0
             if debate.start_time and debate.end_time:
                 duration = int((debate.end_time - debate.start_time).total_seconds() / 60)
             
-            # 鍒涘缓鎶ュ憡
+            # 创建报告
             report = Report(
                 debate_id=str(debate.id),
                 topic=debate.topic,
@@ -352,12 +356,12 @@ class ReportGenerator:
                 winner=statistics.get("winner", "unknown")
             )
             
-            logger.info(f"瀛︾敓鎶ュ憡鐢熸垚鎴愬姛: debate_id={debate_id}, student_id={student_id}")
+            logger.info(f"学生报告生成成功: debate_id={debate_id}, student_id={student_id}")
             
             return report
         
         except Exception as e:
-            logger.error(f"鐢熸垚瀛︾敓鎶ュ憡澶辫触: {e}", exc_info=True)
+            logger.error(f"生成学生报告失败: {e}", exc_info=True)
             return None
     
     @staticmethod
@@ -366,17 +370,17 @@ class ReportGenerator:
         class_id: str
     ) -> Optional[Dict]:
         """
-        鐢熸垚鐝骇鎶ュ憡
+        生成班级报告
         
         Args:
-            db: 鏁版嵁搴撲細璇?
-            class_id: 鐝骇ID
+            db: 数据库会话
+            class_id: 班级ID
             
         Returns:
-            鐝骇鎶ュ憡鏁版嵁
+            班级报告数据
         """
         try:
-            # 鑾峰彇鐝骇鐨勬墍鏈夎京璁?
+            # 获取班级的所有辩论
             debates = db.execute(
                 select(Debate).where(
                     Debate.class_id == class_id,
@@ -384,7 +388,7 @@ class ReportGenerator:
                 )
             ).scalars().all()
             
-            # 鑾峰彇鐝骇鐨勬墍鏈夊鐢?
+            # 获取班级的所有学生
             students = db.execute(
                 select(User).where(
                     User.class_id == class_id,
@@ -392,18 +396,18 @@ class ReportGenerator:
                 )
             ).scalars().all()
             
-            # 缁熻姣忎釜瀛︾敓鐨勬暟鎹?
+            # 统计每个学生的数据
             student_stats = []
             
             for student in students:
-                # 鑾峰彇瀛︾敓鍙備笌鐨勮京璁?
+                # 获取学生参与的辩论
                 participations = db.execute(
                     select(DebateParticipation).where(
                         DebateParticipation.user_id == student.id
                     )
                 ).scalars().all()
                 
-                # 璁＄畻骞冲潎鍒?
+                # 计算平均分
                 total_score = 0
                 score_count = 0
                 
@@ -416,7 +420,7 @@ class ReportGenerator:
                 
                 avg_score = total_score / score_count if score_count > 0 else 0
                 
-                # 缁熻鍙戣█娆℃暟
+                # 统计发言次数
                 speech_count = db.execute(
                     select(Speech).where(Speech.speaker_id == student.id)
                 ).scalars().all()
@@ -430,7 +434,7 @@ class ReportGenerator:
                     "avg_score": round(avg_score, 2)
                 })
             
-            # 鐝骇鏁翠綋缁熻
+            # 班级整体统计
             class_stats = {
                 "total_students": len(students),
                 "total_debates": len(debates),
@@ -455,7 +459,7 @@ class ReportGenerator:
                         2
                     )
             
-            logger.info(f"鐝骇鎶ュ憡鐢熸垚鎴愬姛: class_id={class_id}")
+            logger.info(f"班级报告生成成功: class_id={class_id}")
             
             return {
                 "class_id": class_id,
@@ -465,7 +469,7 @@ class ReportGenerator:
             }
         
         except Exception as e:
-            logger.error(f"鐢熸垚鐝骇鎶ュ憡澶辫触: {e}", exc_info=True)
+            logger.error(f"生成班级报告失败: {e}", exc_info=True)
             return None
     
     @staticmethod
@@ -517,18 +521,18 @@ class ReportGenerator:
         start = report.start_time
         end = report.end_time
         return (
-            "浣犳槸杈╄瑁佸垽AI锛岃鍩轰簬鈥滃璇濇秷鎭褰曗€濈敓鎴愪竴浠藉彲鐩存帴鐢ㄤ簬鏁欏澶嶇洏鐨勩€婅京璁哄畬鏁存姤鍛娿€嬨€俓n"
-            "杈撳嚭瑕佹眰锛歕n"
-            "1) 鍙緭鍑?Markdown 姝ｆ枃锛屼笉瑕佷唬鐮佸潡鍖呰９锛屼笉瑕侀澶栬В閲娿€俓n"
-            "2) 鎶ュ憡闇€鍖呭惈锛氭瑙?杈╅/鏃堕棿/鑳滆礋)銆佸弻鏂规牳蹇冭鐐规彁鐐笺€佸叧閿洖鍚?杞姌鐐广€侀€昏緫寤烘瀯鍔涘垎鏋愩€丄I鏍稿績鐭ヨ瘑杩愮敤璇勪及銆佹壒鍒ゆ€ф€濈淮琛ㄧ幇銆佽瑷€琛ㄨ揪鍔涚偣璇勩€丄I浼︾悊涓庣鎶€绱犲吇浣撶幇銆侀€愪釜杈╂墜鐨勪紭缂虹偣涓庢敼杩涘缓璁€佸叏灞€寤鸿銆俓n"
-            "3) 鍦ㄨ瘎浠锋瘡浣嶈京鎵嬫椂锛岃寮曠敤鍏朵娇鐢ㄧ殑AI璇剧▼鏈锛堝鎯呮劅璁＄畻銆丯LP銆丄IGC銆丄I浼︾悊绛夛級锛屽鏈浣跨敤鐨勫噯纭€у拰娣卞害缁欏嚭鍏蜂綋璇勪环銆俓n"
-            "4) 鑻ユ秷鎭噷甯︽湁姣忔鍙戣█鐨勮瘎鍒嗕笌鐞嗙敱锛岃鍦ㄢ€滆缁嗗垎鏋愨€濋噷鎸夊彂瑷€搴忓彿寮曠敤骞舵暣鍚堛€俓n"
-            "5) 璇█锛氫腑鏂囷紝琛屾枃瀹㈣銆佸彲鎿嶄綔銆俓n\n"
+            "你是辩论裁判AI，请基于“对话消息记录”生成一份可直接用于教学复盘的《辩论完整报告》。\n"
+            "输出要求：\n"
+            "1) 只输出 Markdown 正文，不要代码块包裹，不要额外解释。\n"
+            "2) 报告需包含：概览（辩题/时间/胜负）、双方核心论点提炼、关键回合与转折点、逻辑建构力分析、AI核心知识运用评估、批判性思维表现、语言表达力点评、AI伦理与科技素养体现、逐个辩手的优缺点与改进建议、全局建议。\n"
+            "3) 在评价每位辩手时，请引用其使用的AI课程术语（如情感计算、NLP、AIGC、AI伦理等），并对术语使用的准确性和深度给出具体评价。\n"
+            "4) 若消息里带有每段发言的评分与理由，请在“详细分析”里按发言序号引用并整合。\n"
+            "5) 语言：中文，行文客观、可操作。\n\n"
             f"辩题：{topic}\n"
-            f"寮€濮嬫椂闂达細{start}\n"
+            f"开始时间：{start}\n"
             f"结束时间：{end}\n"
             f"时长：{duration}分钟\n"
-            f"褰撳墠缁熻鑳滆€咃細{winner}\n"
+            f"当前统计胜者：{winner}\n"
         )
 
     @staticmethod
@@ -562,14 +566,14 @@ class ReportGenerator:
             )
             return (text or "").strip()
         except Exception as e:
-            logger.error(f"鐢熸垚Coze Markdown鎶ュ憡澶辫触: {e}", exc_info=True)
+            logger.error(f"生成Coze Markdown报告失败: {e}", exc_info=True)
             return ""
 
     @staticmethod
     def _markdown_to_pdf_bytes(markdown_text: str, *, title: str) -> bytes:
         """
-        浣跨敤WeasyPrint灏哅arkdown杞崲涓篜DF锛堝凡寮冪敤锛屼繚鐣欑敤浜庡吋瀹癸級
-        寤鸿浣跨敤 _markdown_to_pdf_bytes_weasyprint
+        使用WeasyPrint将Markdown转换为PDF（已弃用，保留用于兼容）
+        建议使用 _markdown_to_pdf_bytes_weasyprint
         """
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         styles = getSampleStyleSheet()
@@ -611,7 +615,7 @@ class ReportGenerator:
         story = [Paragraph(title, title_style), Spacer(1, 4 * mm)]
         text = (markdown_text or "").strip()
         if not text:
-            text = "鎶ュ憡鍐呭涓虹┖"
+            text = "报告内容为空"
         story.append(XPreformatted(text, mono_style))
         story.append(Spacer(1, 2 * mm))
         doc.build(story)
@@ -627,29 +631,29 @@ class ReportGenerator:
         duration: int = None
     ) -> bytes:
         """
-        浣跨敤WeasyPrint灏哅arkdown杞崲涓洪珮璐ㄩ噺PDF
+        使用WeasyPrint将Markdown转换为高质量PDF
         
         Args:
-            markdown_text: Markdown鏂囨湰
-            title: PDF鏍囬
-            debate_topic: 杈╅
-            start_time: 寮€濮嬫椂闂?
-            end_time: 缁撴潫鏃堕棿
-            duration: 鎸佺画鏃堕棿锛堝垎閽燂級
+            markdown_text: Markdown文本
+            title: PDF标题
+            debate_topic: 辩题
+            start_time: 开始时间
+            end_time: 结束时间
+            duration: 持续时间（分钟）
             
         Returns:
-            PDF瀛楄妭娴?
+            PDF字节流
         """
         try:
             meta_info = {
-                "杈╅": debate_topic,
+                "辩题": debate_topic,
             }
             if start_time:
                 meta_info["开始时间"] = start_time
             if end_time:
-                meta_info["缁撴潫鏃堕棿"] = end_time
+                meta_info["结束时间"] = end_time
             if duration is not None:
-                meta_info["鎸佺画鏃堕棿"] = f"{duration} 鍒嗛挓"
+                meta_info["持续时间"] = f"{duration} 分钟"
 
             pdf_bytes = await markdown_to_pdf(
                 markdown_text=markdown_text,
@@ -659,14 +663,14 @@ class ReportGenerator:
             )
             return pdf_bytes
         except RuntimeError as e:
-            logger.error(f"WeasyPrint 涓嶅彲鐢紝鍥為€€鍒?ReportLab: {e}", exc_info=True)
+            logger.error(f"WeasyPrint 不可用，回退到 ReportLab: {e}", exc_info=True)
             return await asyncio.to_thread(
                 ReportGenerator._markdown_to_pdf_bytes,
                 markdown_text,
                 title=title
             )
         except Exception as e:
-            logger.error(f"WeasyPrint 杞崲PDF澶辫触锛屽洖閫€鍒?ReportLab: {e}", exc_info=True)
+            logger.error(f"WeasyPrint 转换PDF失败，回退到 ReportLab: {e}", exc_info=True)
             return await asyncio.to_thread(
                 ReportGenerator._markdown_to_pdf_bytes,
                 markdown_text,
@@ -684,19 +688,19 @@ class ReportGenerator:
         duration: int = None
     ) -> Optional[bytes]:
         """
-        寮傛瀵煎嚭杈╄鎶ュ憡涓篜DF锛堜娇鐢╓easyPrint锛?
+        异步导出辩论报告为PDF（使用WeasyPrint）
 
         Args:
-            db: 鏁版嵁搴撲細璇?
-            debate_id: 杈╄ID
-            debate_topic: 杈╅
-            content_str: 杈╄鍐呭
-            start_time: 寮€濮嬫椂闂?
-            end_time: 缁撴潫鏃堕棿
-            duration: 鎸佺画鏃堕棿锛堝垎閽燂級
+            db: 数据库会话
+            debate_id: 辩论ID
+            debate_topic: 辩题
+            content_str: 辩论内容
+            start_time: 开始时间
+            end_time: 结束时间
+            duration: 持续时间（分钟）
 
         Returns:
-            PDF瀛楄妭娴?
+            PDF字节流
         """
         try:
             markdown_text = await ReportGenerator.generate_markdown_report_async(
@@ -716,7 +720,7 @@ class ReportGenerator:
             )
 
         except Exception as e:
-            logger.error(f"瀵煎嚭PDF澶辫触: {e}", exc_info=True)
+            logger.error(f"导出PDF失败: {e}", exc_info=True)
             return None
 
     @staticmethod
@@ -748,12 +752,12 @@ class ReportGenerator:
                 logger.warning("报告 JSON 解析失败，使用原始文本")
 
             if not markdown_text:
-                logger.error("鐢熸垚鐨凪arkdown鎶ュ憡涓虹┖")
+                logger.error("生成的Markdown报告为空")
                 return None
 
             return markdown_text
         except Exception as e:
-            logger.error(f"鐢熸垚Markdown鎶ュ憡澶辫触: {e}", exc_info=True)
+            logger.error(f"生成Markdown报告失败: {e}", exc_info=True)
             return None
 
     @staticmethod
@@ -767,27 +771,27 @@ class ReportGenerator:
         try:
             return await ReportGenerator._markdown_to_pdf_bytes_weasyprint(
                 markdown_text=markdown_text,
-                title=f"杈╄鎶ュ憡 - {debate_topic}",
+                title=f"辩论报告 - {debate_topic}",
                 debate_topic=debate_topic,
                 start_time=start_time,
                 end_time=end_time,
                 duration=duration,
             )
         except Exception as e:
-            logger.error(f"娓叉煋PDF澶辫触: {e}", exc_info=True)
+            logger.error(f"渲染PDF失败: {e}", exc_info=True)
             return None
 
     
     @staticmethod
     def export_to_excel(report: Report) -> Optional[bytes]:
         """
-        瀵煎嚭涓篍xcel
+        导出为Excel
         
         Args:
-            report: 鎶ュ憡瀵硅薄
+            report: 报告对象
             
         Returns:
-            Excel鏂囦欢瀛楄妭娴?
+            Excel文件字节流
         """
         try:
             workbook = Workbook()
@@ -863,5 +867,5 @@ class ReportGenerator:
             return output.getvalue()
         
         except Exception as e:
-            logger.error(f"瀵煎嚭Excel澶辫触: {e}", exc_info=True)
+            logger.error(f"导出Excel失败: {e}", exc_info=True)
             return None

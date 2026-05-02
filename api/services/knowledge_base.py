@@ -1,6 +1,6 @@
-﻿"""
-鐭ヨ瘑搴撶鐞嗘湇鍔?
-澶勭悊鏂囨。涓婁紶銆佹枃鏈彁鍙栥€佸悜閲忕敓鎴愬拰妫€绱?
+"""
+知识库管理服务
+处理文档上传、文本提取、向量生成和检索
 """
 import os
 import json
@@ -21,14 +21,14 @@ logger = get_logger(__name__)
 
 
 class KnowledgeBase:
-    """鐭ヨ瘑搴撶鐞嗙被"""
+    """知识库管理类"""
     
     def __init__(self, db: Session):
         """
-        鍒濆鍖栫煡璇嗗簱
+        初始化知识库
         
         Args:
-            db: 鏁版嵁搴撲細璇?
+            db: 数据库会话
         """
         self.db = db
         self.upload_dir = os.getenv("UPLOAD_DIR", "uploads/documents")
@@ -83,43 +83,43 @@ class KnowledgeBase:
         debate_id: str
     ) -> Document:
         """
-        涓婁紶鏂囨。
+        上传文档
         
         Args:
-            file_data: 鏂囦欢鏁版嵁
-            filename: 鏂囦欢鍚?
-            file_type: 鏂囦欢绫诲瀷锛坅pplication/pdf 鎴?application/vnd.openxmlformats-officedocument.wordprocessingml.document锛?
-            debate_id: 杈╄ID
+            file_data: 文件数据
+            filename: 文件名
+            file_type: 文件类型（application/pdf 或 application/vnd.openxmlformats-officedocument.wordprocessingml.document）
+            debate_id: 辩论ID
             
         Returns:
-            Document瀵硅薄
+            Document对象
         """
         try:
-            # 楠岃瘉鏂囦欢绫诲瀷
+            # 验证文件类型
             allowed_types = [
                 "application/pdf",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             ]
             if file_type not in allowed_types:
-                raise ValueError(f"涓嶆敮鎸佺殑鏂囦欢绫诲瀷: {file_type}")
+                raise ValueError(f"不支持的文件类型: {file_type}")
             
-            # 楠岃瘉鏂囦欢澶у皬锛堟渶澶?0MB锛?
+            # 验证文件大小（最大10MB）
             max_size = 10 * 1024 * 1024
             if len(file_data) > max_size:
                 raise ValueError("文件大小超过限制（最大10MB）")
             
-            # 鐢熸垚鏂囦欢璺緞
+            # 生成文件路径
             timestamp = datetime.utcnow().timestamp()
             safe_filename = f"{debate_id}_{timestamp}_{filename}"
             file_path = os.path.join(self.upload_dir, safe_filename)
             
-            # 淇濆瓨鏂囦欢
+            # 保存文件
             with open(file_path, 'wb') as f:
                 f.write(file_data)
             
             logger.info(f"Document saved: {file_path}")
             
-            # 鍒涘缓鏂囨。璁板綍
+            # 创建文档记录
             document = Document(
                 debate_id=debate_id,
                 filename=filename,
@@ -168,14 +168,14 @@ class KnowledgeBase:
     
     async def extract_text(self, file_path: str, file_type: str) -> str:
         """
-        浠庢枃浠朵腑鎻愬彇鏂囨湰鍐呭
+        从文件中提取文本内容
         
         Args:
-            file_path: 鏂囦欢璺緞
-            file_type: 鏂囦欢绫诲瀷
+            file_path: 文件路径
+            file_type: 文件类型
             
         Returns:
-            鎻愬彇鐨勬枃鏈唴瀹?
+            提取的文本内容
         """
         try:
             if file_type == "application/pdf":
@@ -189,7 +189,7 @@ class KnowledgeBase:
             raise
     
     async def _extract_text_from_pdf(self, file_path: str) -> str:
-        """浠嶱DF鏂囦欢鎻愬彇鏂囨湰"""
+        """从PDF文件提取文本"""
         try:
             text_content = []
             
@@ -212,7 +212,7 @@ class KnowledgeBase:
             raise
     
     async def _extract_text_from_docx(self, file_path: str) -> str:
-        """浠嶹ord鏂囨。鎻愬彇鏂囨湰"""
+        """从Word文档提取文本"""
         try:
             doc = docx.Document(file_path)
             
@@ -232,23 +232,23 @@ class KnowledgeBase:
     
     async def generate_embeddings(self, text: str) -> List[float]:
         """
-        鐢熸垚鏂囨湰鐨勮涔夊悜閲?
+        生成文本的语义向量
         
         Args:
-            text: 鏂囨湰鍐呭
+            text: 文本内容
             
         Returns:
-            鍚戦噺鍒楄〃
+            向量列表
         """
         try:
-            # 鑾峰彇OpenAI閰嶇疆
+            # 获取OpenAI配置
             config_service = ConfigService(self.db)
             model_config = await config_service.get_model_config()
             
             if not model_config or not model_config.api_key:
                 raise ValueError("OpenAI API key not configured")
             
-            # 鍒嗗潡澶勭悊闀挎枃鏈紙OpenAI embeddings API闄愬埗8191 tokens锛?
+            # 分块处理长文本（OpenAI embeddings API限制8191 tokens）
             chunks = self._split_text_into_chunks(text, max_length=8000)
             
             all_embeddings = []
@@ -276,7 +276,7 @@ class KnowledgeBase:
                         logger.error(error_msg)
                         raise Exception(error_msg)
             
-            # 濡傛灉鏈夊涓猚hunk锛岃繑鍥炵涓€涓紙鎴栧彲浠ヨ绠楀钩鍧囧€硷級
+            # 如果有多个chunk，返回第一个（也可以计算平均值）
             return all_embeddings[0] if all_embeddings else []
             
         except Exception as e:
@@ -285,14 +285,14 @@ class KnowledgeBase:
     
     def _split_text_into_chunks(self, text: str, max_length: int = 8000) -> List[str]:
         """
-        灏嗛暱鏂囨湰鍒嗗壊鎴愬涓潡
+        将长文本分割成多个块
         
         Args:
-            text: 鏂囨湰鍐呭
-            max_length: 姣忓潡鐨勬渶澶ч暱搴?
+            text: 文本内容
+            max_length: 每块的最大长度
             
         Returns:
-            鏂囨湰鍧楀垪琛?
+            文本块列表
         """
         if len(text) <= max_length:
             return [text]
@@ -300,7 +300,7 @@ class KnowledgeBase:
         chunks = []
         current_chunk = ""
         
-        # 鎸夋钀藉垎鍓?
+        # 按段落分割
         paragraphs = text.split("\n\n")
         
         for paragraph in paragraphs:
@@ -318,17 +318,17 @@ class KnowledgeBase:
     
     async def generate_and_store_embeddings(self, document: Document) -> None:
         """
-        鐢熸垚骞跺瓨鍌ㄦ枃妗ｇ殑鍚戦噺鍒版暟鎹簱
+        生成并存储文档的向量到数据库
         
         Args:
-            document: 鏂囨。瀵硅薄
+            document: 文档对象
         """
         try:
             if not document.content:
                 logger.warning(f"Document {document.id} has no content")
                 return
             
-            # 鐢熸垚鍚戦噺
+            # 生成向量
             embeddings = await self.generate_embeddings(document.content)
             
             if not embeddings:
@@ -382,18 +382,18 @@ class KnowledgeBase:
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        鎼滅储鐩稿叧鍐呭
+        搜索相关内容
         
         Args:
-            query: 鏌ヨ鏂囨湰
-            debate_id: 杈╄ID锛堝彲閫夛紝鐢ㄤ簬闄愬埗鎼滅储鑼冨洿锛?
-            top_k: 杩斿洖缁撴灉鏁伴噺
+            query: 查询文本
+            debate_id: 辩论ID（可选，用于限制搜索范围）
+            top_k: 返回结果数量
             
         Returns:
-            鐩稿叧鏂囨。鍒楄〃
+            相关文档列表
         """
         try:
-            # 鐢熸垚鏌ヨ鍚戦噺
+            # 生成查询向量
             query_embedding = await self.generate_embeddings(query)
             
             if not query_embedding:
@@ -470,13 +470,13 @@ class KnowledgeBase:
     
     async def delete_document(self, document_id: str) -> bool:
         """
-        鍒犻櫎鏂囨。
+        删除文档
         
         Args:
-            document_id: 鏂囨。ID
+            document_id: 文档ID
             
         Returns:
-            鏄惁鍒犻櫎鎴愬姛
+            是否删除成功
         """
         try:
             document = self.db.query(Document).filter(Document.id == document_id).first()
@@ -485,7 +485,7 @@ class KnowledgeBase:
                 logger.warning(f"Document {document_id} not found")
                 return False
             
-            # 鍒犻櫎鏂囦欢
+            # 删除文件
             if os.path.exists(document.file_path):
                 os.remove(document.file_path)
                 logger.info(f"Deleted file: {document.file_path}")
@@ -495,7 +495,7 @@ class KnowledgeBase:
                 {"document_id": str(document_id)}
             )
             
-            # 鍒犻櫎鏁版嵁搴撹褰?
+            # 删除数据库记录
             self.db.delete(document)
             self.db.commit()
             
@@ -509,13 +509,13 @@ class KnowledgeBase:
     
     def get_documents(self, debate_id: str) -> List[Document]:
         """
-        鑾峰彇杈╄鐨勬墍鏈夋枃妗?
+        获取辩论的所有文档
         
         Args:
-            debate_id: 杈╄ID
+            debate_id: 辩论ID
             
         Returns:
-            鏂囨。鍒楄〃
+            文档列表
         """
         try:
             documents = self.db.query(Document).filter(
@@ -530,13 +530,13 @@ class KnowledgeBase:
     
     def get_document_by_id(self, document_id: str) -> Optional[Document]:
         """
-        鏍规嵁ID鑾峰彇鏂囨。
+        根据ID获取文档
         
         Args:
-            document_id: 鏂囨。ID
+            document_id: 文档ID
             
         Returns:
-            鏂囨。瀵硅薄
+            文档对象
         """
         try:
             document = self.db.query(Document).filter(Document.id == document_id).first()

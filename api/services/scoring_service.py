@@ -618,7 +618,11 @@ class ScoringService:
             return None
 
         speeches = (
-            db.execute(select(Speech).where(Speech.debate_id == participation.debate_id))
+            db.execute(
+                select(Speech)
+                .where(Speech.debate_id == participation.debate_id)
+                .where(Speech.is_valid_for_scoring.is_(True))
+            )
             .scalars()
             .all()
         )
@@ -695,6 +699,7 @@ class ScoringService:
             )
             .join(Speech, Score.speech_id == Speech.id)  # 显式连接条件
             .filter(Speech.debate_id == debate_id)
+            .filter(Speech.is_valid_for_scoring.is_(True))
             .filter(Speech.speaker_type == type)
         )
 
@@ -763,7 +768,11 @@ class ScoringService:
         }
 
         speeches = (
-            db.execute(select(Speech).where(Speech.debate_id == debate_id))
+            db.execute(
+                select(Speech)
+                .where(Speech.debate_id == debate_id)
+                .where(Speech.is_valid_for_scoring.is_(True))
+            )
             .scalars()
             .all()
         )

@@ -19,6 +19,15 @@ import {
 import AdminService, { type EmailConfig, type EmailConfigUpdate } from '@/services/admin.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 
+const toFormData = (config?: EmailConfig | null): EmailConfigUpdate => ({
+  smtp_host: config?.smtp_host ?? '',
+  smtp_port: config?.smtp_port ?? 587,
+  smtp_user: config?.smtp_user ?? '',
+  smtp_password: '',
+  from_email: config?.from_email ?? '',
+  auto_send_enabled: config?.auto_send_enabled ?? false,
+});
+
 const EmailConfiguration: React.FC = () => {
   const { toast } = useToast();
   const [config, setConfig] = useState<EmailConfig | null>(null);
@@ -28,14 +37,7 @@ const EmailConfiguration: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   
-  const [formData, setFormData] = useState<EmailConfigUpdate>({
-    smtp_host: '',
-    smtp_port: 587,
-    smtp_user: '',
-    smtp_password: '',
-    from_email: '',
-    auto_send_enabled: false
-  });
+  const [formData, setFormData] = useState<EmailConfigUpdate>(toFormData());
 
   useEffect(() => {
     loadConfig();
@@ -46,14 +48,7 @@ const EmailConfiguration: React.FC = () => {
       setLoading(true);
       const data = await AdminService.getEmailConfig();
       setConfig(data);
-      setFormData({
-        smtp_host: data.smtp_host,
-        smtp_port: data.smtp_port,
-        smtp_user: data.smtp_user,
-        smtp_password: data.smtp_password,
-        from_email: data.from_email,
-        auto_send_enabled: data.auto_send_enabled
-      });
+      setFormData(toFormData(data));
     } catch (err: any) {
       console.error('Failed to load email config:', err);
       toast({
@@ -72,32 +67,32 @@ const EmailConfiguration: React.FC = () => {
 
   const handleCancel = () => {
     if (config) {
-      setFormData({
-        smtp_host: config.smtp_host,
-        smtp_port: config.smtp_port,
-        smtp_user: config.smtp_user,
-        smtp_password: config.smtp_password,
-        from_email: config.from_email,
-        auto_send_enabled: config.auto_send_enabled
-      });
+      setFormData(toFormData(config));
     }
     setIsEditing(false);
   };
 
   const handleSave = async () => {
-    if (!formData.smtp_host || !formData.smtp_port || !formData.smtp_user || !formData.smtp_password) {
+    const password = String(formData.smtp_password || '').trim();
+    const passwordRequired = !config?.smtp_password_configured;
+    if (!formData.smtp_host || !formData.smtp_port || !formData.smtp_user || (passwordRequired && !password)) {
       toast({
         variant: 'destructive',
         title: '验证失败',
-        description: '请填写所有必填字段',
+        description: passwordRequired ? '请填写 SMTP 密码或授权码' : '请填写所有必填字段',
       });
       return;
     }
 
     try {
       setSubmitting(true);
-      const updatedConfig = await AdminService.updateEmailConfig(formData);
+      const payload: EmailConfigUpdate = {
+        ...formData,
+        smtp_password: password || undefined,
+      };
+      const updatedConfig = await AdminService.updateEmailConfig(payload);
       setConfig(updatedConfig);
+      setFormData(toFormData(updatedConfig));
       setIsEditing(false);
       toast({
         variant: 'success',
@@ -217,14 +212,20 @@ const EmailConfiguration: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="smtp-password">密码 (授权码) *</Label>
+            <Label htmlFor="smtp-password">
+              密码 (授权码) {config?.smtp_password_configured ? '' : '*'}
+            </Label>
             <div className="relative">
               <Input
                 id="smtp-password"
                 type={showPassword ? 'text' : 'password'}
                 value={formData.smtp_password}
                 onChange={(e) => setFormData({ ...formData, smtp_password: e.target.value })}
-                placeholder="••••••••"
+                placeholder={
+                  config?.smtp_password_configured
+                    ? '留空表示保留旧密码'
+                    : '请输入 SMTP 密码或授权码'
+                }
                 disabled={!isEditing || submitting}
                 className={!isEditing ? 'bg-slate-50 pr-10' : 'pr-10'}
               />
@@ -236,6 +237,11 @@ const EmailConfiguration: React.FC = () => {
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+            <p className="text-xs text-slate-500">
+              {config?.smtp_password_configured
+                ? `当前状态：已配置${config.smtp_password_masked ? `（${config.smtp_password_masked}）` : ''}`
+                : '当前状态：未配置'}
+            </p>
           </div>
 
           <div className="space-y-2">

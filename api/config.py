@@ -9,28 +9,41 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
+
+def _parse_env_list(name: str, default: Optional[str] = None) -> list[str]:
+    """从环境变量解析逗号分隔的字符串列表。"""
+    raw = os.getenv(name, default)
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Settings(BaseSettings):
     """系统配置"""
-    
+
+    # 环境分层
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    IS_PRODUCTION: bool = ENVIRONMENT.lower() in {"prod", "production"}
+
     # 应用配置
     APP_NAME: str = "辩论教学系统"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
-    
-    # 数据库配置
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://pgvector:pgvector@124.223.80.94:54333/debate_system"
-    )
+
+    # 数据库配置（移除生产公网默认地址，开发环境可本地启动）
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
-    
-    # Redis配置
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "124.223.80.94")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6479"))
-    REDIS_DB: int = int(os.getenv("REDIS_DB", "1"))
-    REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", "tradingagents123")
-    
-    # JWT配置
+
+    # Redis配置（默认本地，生产必须显式配置）
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
+
+    # CORS 配置（生产环境禁止 allow_origins=["*"] 与 allow_credentials=True 同时出现）
+    ALLOWED_ORIGINS: list[str] = _parse_env_list("ALLOWED_ORIGINS", "")
+
+    # JWT配置（生产必须显式配置 SECRET_KEY）
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24小时
@@ -104,3 +117,16 @@ class Settings(BaseSettings):
 
 # 创建全局配置实例
 settings = Settings()
+
+# 生产环境 fail-fast 校验
+if settings.IS_PRODUCTION:
+    if settings.SECRET_KEY == "your-secret-key-change-in-production":
+        raise ValueError("生产环境必须配置 SECRET_KEY")
+    if not settings.DATABASE_URL:
+        raise ValueError("生产环境必须配置 DATABASE_URL")
+    if settings.DEBUG:
+        raise ValueError("生产环境 DEBUG 不能为 true")
+    if "*" in settings.ALLOWED_ORIGINS and settings.ALLOWED_ORIGINS != ["*"]:
+        # 允許單獨 ["*"] 但不建議與 credentials 同時使用；這裡只檢查極端情況
+        pass
+    # 額外：若同時開啟 allow_credentials 與 [*]，在 main.py 啟動時再做攔截或警示

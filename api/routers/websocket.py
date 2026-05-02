@@ -24,6 +24,7 @@ from utils.audio_duration import (
     get_audio_duration_seconds,
     resolve_local_upload_path_from_audio_url,
 )
+from utils.speech_payload import build_speech_payload
 from models.user import User
 from services.room_manager import DebatePhase
 from models.speech import Speech
@@ -232,6 +233,11 @@ async def websocket_debate_endpoint(
                     room_id, user_id, message_data, db
                 )
 
+            elif message_type == "speech_playback_skipped":
+                await handle_speech_playback_skipped_message(
+                    room_id, user_id, message_data, db
+                )
+
             elif message_type == "ping":
                 # 心跳消息
                 try:
@@ -424,6 +430,7 @@ async def handle_speech_message(
             content=str(content),
             audio_url=audio_url,
             duration=int(duration),
+            is_valid_for_scoring=True,
             timestamp=(datetime.utcnow() + timedelta(hours=8)),
         )
         db.add(speech)
@@ -431,22 +438,39 @@ async def handle_speech_message(
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to persist speech: {e}", exc_info=True)
+        await websocket_manager.send_to_user(
+            user_id,
+            {
+                "type": "error",
+                "data": {
+                    "message": "发言保存失败，请重试",
+                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                },
+            },
+        )
+        return
 
     # 广播发言消息
     await websocket_manager.broadcast_to_room(
         room_id,
         {
             "type": "speech",
-            "data": {
-                "user_id": user_id,
-                "role": user_role,
-                "name": participant.get("name"),
-                "stance": participant.get("stance"),
-                "content": content,
-                "audio_url": audio_url,
-                "duration": duration,
-                "timestamp": data.get("timestamp"),
-            },
+            "data": build_speech_payload(
+                speech_id=str(speech.id),
+                user_id=user_id,
+                role=user_role,
+                name=participant.get("name"),
+                stance=participant.get("stance"),
+                speaker_type="human",
+                content=content,
+                audio_url=audio_url,
+                duration=duration,
+                timestamp=getattr(speech, "timestamp", None),
+                is_audio=False,
+                phase=str(room_state.current_phase.value),
+                segment_id=getattr(room_state, "segment_id", None),
+                segment_title=getattr(room_state, "segment_title", None),
+            ),
         },
     )
 
@@ -932,6 +956,8 @@ async def handle_audio_message(
                 content="",
                 audio_url=audio_url,
                 duration=int(duration or 0),
+                transcription_status="processing",
+                is_valid_for_scoring=False,
                 timestamp=speech_timestamp,
             )
             db.add(speech)
@@ -940,30 +966,49 @@ async def handle_audio_message(
             db.rollback()
             speech = None
             logger.error(f"Failed to persist initial audio speech: {e}", exc_info=True)
+            if asr_turn_still_current():
+                await room_manager.update_room_state(
+                    room_id,
+                    turn_processing_status="failed",
+                    turn_processing_kind="asr",
+                    turn_processing_error="语音发言保存失败",
+                    turn_speech_committed=False,
+                )
+            await websocket_manager.send_to_user(
+                user_id,
+                {
+                    "type": "error",
+                    "data": {
+                        "message": "语音发言保存失败，请重试",
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
+            return
 
         # 先广播语音占位消息，后续ASR完成后再用同一speech_id回填文本。
         await websocket_manager.broadcast_to_room(
             room_id,
             {
                 "type": "speech",
-                "data": {
-                    "speech_id": str(speech.id) if speech and speech.id else None,
-                    "message_id": str(speech.id) if speech and speech.id else None,
-                    "user_id": user_id,
-                    "role": user_role,
-                    "name": participant.get("name"),
-                    "stance": participant.get("stance"),
-                    "content": "",
-                    "audio_url": audio_url,
-                    "audio_format": audio_format,
-                    "duration": int(duration or 0),
-                    "timestamp": speech_timestamp.isoformat(),
-                    "is_audio": True,
-                    "transcription_status": "processing",
-                    "phase": str(room_state.current_phase.value),
-                    "segment_id": segment_id,
-                    "segment_title": getattr(room_state, "segment_title", None),
-                },
+                "data": build_speech_payload(
+                    speech_id=str(speech.id),
+                    user_id=user_id,
+                    role=user_role,
+                    name=participant.get("name"),
+                    stance=participant.get("stance"),
+                    speaker_type="human",
+                    content="",
+                    audio_url=audio_url,
+                    audio_format=audio_format,
+                    duration=int(duration or 0),
+                    timestamp=speech_timestamp,
+                    is_audio=True,
+                    transcription_status="processing",
+                    phase=str(room_state.current_phase.value),
+                    segment_id=segment_id,
+                    segment_title=getattr(room_state, "segment_title", None),
+                ),
             },
         )
 
@@ -993,29 +1038,37 @@ async def handle_audio_message(
                     turn_speech_committed=False,
                 )
             if speech is not None:
+                try:
+                    speech.transcription_status = "failed"
+                    speech.transcription_error = str(transcription_result.get("error"))
+                    speech.is_valid_for_scoring = False
+                    db.commit()
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"Failed to mark ASR speech failed: {e}", exc_info=True)
                 await websocket_manager.broadcast_to_room(
                     room_id,
                     {
                         "type": "speech",
-                        "data": {
-                            "speech_id": str(speech.id),
-                            "message_id": str(speech.id),
-                            "user_id": user_id,
-                            "role": user_role,
-                            "name": participant.get("name"),
-                            "stance": participant.get("stance"),
-                            "content": "",
-                            "audio_url": audio_url,
-                            "audio_format": audio_format,
-                            "duration": int(duration or 0),
-                            "timestamp": speech_timestamp.isoformat(),
-                            "is_audio": True,
-                            "transcription_status": "failed",
-                            "transcription_error": str(transcription_result.get("error")),
-                            "phase": str(room_state.current_phase.value),
-                            "segment_id": segment_id,
-                            "segment_title": getattr(room_state, "segment_title", None),
-                        },
+                        "data": build_speech_payload(
+                            speech_id=str(speech.id),
+                            user_id=user_id,
+                            role=user_role,
+                            name=participant.get("name"),
+                            stance=participant.get("stance"),
+                            speaker_type="human",
+                            content="",
+                            audio_url=audio_url,
+                            audio_format=audio_format,
+                            duration=int(duration or 0),
+                            timestamp=speech_timestamp,
+                            is_audio=True,
+                            transcription_status="failed",
+                            transcription_error=str(transcription_result.get("error")),
+                            phase=str(room_state.current_phase.value),
+                            segment_id=segment_id,
+                            segment_title=getattr(room_state, "segment_title", None),
+                        ),
                     },
                 )
             await websocket_manager.send_to_user(
@@ -1044,29 +1097,37 @@ async def handle_audio_message(
                     turn_speech_committed=False,
                 )
             if speech is not None:
+                try:
+                    speech.transcription_status = "failed"
+                    speech.transcription_error = "未识别到语音内容"
+                    speech.is_valid_for_scoring = False
+                    db.commit()
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"Failed to mark empty ASR speech failed: {e}", exc_info=True)
                 await websocket_manager.broadcast_to_room(
                     room_id,
                     {
                         "type": "speech",
-                        "data": {
-                            "speech_id": str(speech.id),
-                            "message_id": str(speech.id),
-                            "user_id": user_id,
-                            "role": user_role,
-                            "name": participant.get("name"),
-                            "stance": participant.get("stance"),
-                            "content": "",
-                            "audio_url": audio_url,
-                            "audio_format": audio_format,
-                            "duration": int(duration or 0),
-                            "timestamp": speech_timestamp.isoformat(),
-                            "is_audio": True,
-                            "transcription_status": "failed",
-                            "transcription_error": "未识别到语音内容",
-                            "phase": str(room_state.current_phase.value),
-                            "segment_id": segment_id,
-                            "segment_title": getattr(room_state, "segment_title", None),
-                        },
+                        "data": build_speech_payload(
+                            speech_id=str(speech.id),
+                            user_id=user_id,
+                            role=user_role,
+                            name=participant.get("name"),
+                            stance=participant.get("stance"),
+                            speaker_type="human",
+                            content="",
+                            audio_url=audio_url,
+                            audio_format=audio_format,
+                            duration=int(duration or 0),
+                            timestamp=speech_timestamp,
+                            is_audio=True,
+                            transcription_status="failed",
+                            transcription_error="未识别到语音内容",
+                            phase=str(room_state.current_phase.value),
+                            segment_id=segment_id,
+                            segment_title=getattr(room_state, "segment_title", None),
+                        ),
                     },
                 )
             await websocket_manager.send_to_user(
@@ -1092,35 +1153,57 @@ async def handle_audio_message(
                 # 使用同一条Speech记录回填识别文本，前端可按speech_id合并更新。
                 speech.content = str(text)
                 speech.duration = int(duration)
+                speech.transcription_status = "completed"
+                speech.transcription_error = None
+                speech.is_valid_for_scoring = True
                 if audio_url and not speech.audio_url:
                     speech.audio_url = audio_url
                 db.commit()
             except Exception as e:
                 db.rollback()
                 logger.error(f"Failed to update speech after ASR: {e}", exc_info=True)
+                if asr_turn_still_current():
+                    await room_manager.update_room_state(
+                        room_id,
+                        turn_processing_status="failed",
+                        turn_processing_kind="asr",
+                        turn_processing_error="语音识别结果保存失败",
+                        turn_speech_committed=False,
+                    )
+                await websocket_manager.send_to_user(
+                    user_id,
+                    {
+                        "type": "error",
+                        "data": {
+                            "message": "语音识别结果保存失败，请重试",
+                            "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                        },
+                    },
+                )
+                return
 
         await websocket_manager.broadcast_to_room(
             room_id,
             {
                 "type": "speech",
-                "data": {
-                    "speech_id": str(speech.id) if speech and speech.id else None,
-                    "message_id": str(speech.id) if speech and speech.id else None,
-                    "user_id": user_id,
-                    "role": user_role,
-                    "name": participant.get("name"),
-                    "stance": participant.get("stance"),
-                    "content": text,
-                    "audio_url": audio_url,
-                    "audio_format": audio_format,
-                    "duration": int(duration),
-                    "timestamp": speech_timestamp.isoformat(),
-                    "is_audio": True,
-                    "transcription_status": "completed",
-                    "phase": str(room_state.current_phase.value),
-                    "segment_id": segment_id,
-                    "segment_title": getattr(room_state, "segment_title", None),
-                },
+                "data": build_speech_payload(
+                    speech_id=str(speech.id),
+                    user_id=user_id,
+                    role=user_role,
+                    name=participant.get("name"),
+                    stance=participant.get("stance"),
+                    speaker_type="human",
+                    content=text,
+                    audio_url=audio_url,
+                    audio_format=audio_format,
+                    duration=int(duration),
+                    timestamp=speech_timestamp,
+                    is_audio=True,
+                    transcription_status="completed",
+                    phase=str(room_state.current_phase.value),
+                    segment_id=segment_id,
+                    segment_title=getattr(room_state, "segment_title", None),
+                ),
             },
         )
 
@@ -1419,6 +1502,15 @@ async def handle_speech_playback_failed_message(
     db: Session,
 ) -> None:
     await flow_controller.handle_speech_playback_failed(room_id, user_id, data or {})
+
+
+async def handle_speech_playback_skipped_message(
+    room_id: str,
+    user_id: str,
+    data: dict,
+    db: Session,
+) -> None:
+    await flow_controller.handle_speech_playback_skipped(room_id, user_id, data or {})
 
 
 async def handle_end_turn_message(

@@ -22,7 +22,7 @@ import {
   normalizeTranscriptEntry,
   upsertTranscriptEntry,
 } from '@/lib/debate-transcript';
-import { audioPlaybackDebug } from '@/lib/utils';
+import { audioPlaybackDebug, debateDebug } from '@/lib/utils';
 import PcmStreamPlayer from '@/lib/pcm-stream-player';
 import type { MessageType } from '@/lib/websocket-client';
 import {
@@ -181,11 +181,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   // WebSocket连接
   const { isConnected, send, on, off } = useWebSocket(roomId, {
     onConnect: () => {
-      console.log('Connected to debate room');
+      debateDebug('DebateArena', 'Connected to debate room');
       setError(null);
     },
     onDisconnect: () => {
-      console.log('Disconnected from debate room');
+      debateDebug('DebateArena', 'Disconnected from debate room');
     },
     onError: (err) => {
       console.error('WebSocket error:', err);
@@ -194,7 +194,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   });
 
   const sendSpeechPlaybackEvent = React.useCallback((payload: {
-    status: 'started' | 'finished' | 'failed';
+    status: 'started' | 'finished' | 'failed' | 'skipped';
     speechId?: string;
     segmentId?: string | null;
     speakerRole?: string | null;
@@ -215,6 +215,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       ? 'speech_playback_started'
       : payload.status === 'finished'
       ? 'speech_playback_finished'
+      : payload.status === 'skipped'
+      ? 'speech_playback_skipped'
       : 'speech_playback_failed';
     send(messageType, {
       speech_id: normalizedSpeechId,
@@ -438,7 +440,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   useEffect(() => {
     // 监听状态更新
     const handleStateUpdate = (data: WsPayload) => {
-      console.log('State update:', data);
+      debateDebug('DebateArena', 'State update', data);
       const nextParticipants = toRoomParticipants(data.participants);
       const currentUserRoleFromState = nextParticipants.length > 0
         ? nextParticipants.find((participant) => participant.user_id === currentUserIdRef.current)?.role || currentUserRoleRef.current
@@ -448,7 +450,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         // 如果轮到当前用户发言，自动取消静音
         if (currentUserRoleFromState && roleMatches(currentUserRoleFromState, data.current_speaker)) {
           setIsMuted(false);
-          console.log('轮到当前用户发言，自动取消静音');
+          debateDebug('DebateArena', '轮到当前用户发言，自动取消静音');
         }
       }
       if (data.current_phase) setCurrentPhase(String(data.current_phase));
@@ -472,7 +474,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听用户加入事件
     const handleUserJoined = (data: WsPayload) => {
-      console.log('User joined:', data);
+      debateDebug('DebateArena', 'User joined', data);
       const participant = toRoomParticipant(data);
       if (!participant) return;
       // 使用函数式更新基于最新 participants 去重，避免旧闭包导致同一用户被重复插入。
@@ -485,7 +487,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听用户离开事件
     const handleUserLeft = (data: WsPayload) => {
-      console.log('User left:', data);
+      debateDebug('DebateArena', 'User left', data);
       if (data.user_id) {
         // 从participants列表中移除用户
         setParticipants(prev => prev.filter(p => p.user_id !== String(data.user_id)));
@@ -494,7 +496,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听阶段变化
     const handlePhaseChange = (data: WsPayload) => {
-      console.log('Phase change:', data);
+      debateDebug('DebateArena', 'Phase change', data);
       if (data.phase) setCurrentPhase(String(data.phase));
     };
 
@@ -509,7 +511,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听计时器更新
     const handleTimerUpdate = (data: WsPayload) => {
-      console.log('Timer update:', data);
+      debateDebug('DebateArena', 'Timer update', data);
       if (typeof data.time_remaining === 'number') {
         setTimeRemaining(data.time_remaining);
       }
@@ -517,7 +519,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听字幕
     const handleSubtitle = (data: WsPayload) => {
-      console.log('Subtitle:', data);
+      debateDebug('DebateArena', 'Subtitle', data);
       setSubtitle(toOptionalString(data.text) || '');
       // 5秒后清除字幕
       setTimeout(() => setSubtitle(''), 5000);
@@ -525,7 +527,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
     // 监听发言
     const handleSpeech = (data: WsPayload) => {
-      console.log('Speech:', data);
+      debateDebug('DebateArena', 'Speech', data);
       const speechId = String(data?.speech_id || data?.message_id || data?.id || '').trim();
       audioPlaybackDebug('DebateArena', '收到 speech 事件', {
         roomId,
@@ -576,7 +578,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         // 自动播放关闭时，整条流式 TTS 都应静默跳过，直到收到 end 事件再清理忽略标记。
         ignoredLiveTtsSpeechIdsRef.current.add(speechId);
         sendSpeechPlaybackEvent({
-          status: 'failed',
+          status: 'skipped',
           speechId,
           speakerRole: toOptionalString(data?.role),
           source: 'stream',
@@ -667,7 +669,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       // 自由辩论阶段：当前用户抢到麦时，自动取消静音，允许发言
       if (data.user_id === currentUserIdRef.current) {
         setIsMuted(false);
-        console.log('当前用户抢麦成功，自动取消静音');
+        debateDebug('DebateArena', '当前用户抢麦成功，自动取消静音');
       }
     };
 
@@ -691,7 +693,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     };
 
     const handleDebateProcessing = (data: WsPayload) => {
-      console.log('Debate processing:', data);
+      debateDebug('DebateArena', 'Debate processing', data);
       setIsProcessingReport(true);
       toastRef.current({
         title: '辩论已结束',
@@ -810,34 +812,46 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     }
   };
 
-  const handleSendAudio = (audioBlob: Blob, clientTranscript?: string) => {
+  const handleSendAudio = (audioBlob: Blob, clientTranscript?: string): Promise<void> => {
     if (isConnected) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64Audio = (reader.result as string) || '';
-        const parts = base64Audio.split(',');
-        const raw = parts.length > 1 ? parts[1] : base64Audio;
-        const mime = String(audioBlob.type || '').toLowerCase();
-        const format =
-          mime.includes('wav')
-            ? 'wav'
-            : mime.includes('mpeg') || mime.includes('mp3')
-              ? 'mp3'
-              : mime.includes('ogg')
-                ? 'ogg'
-                : mime.includes('mp4')
-                  ? 'mp4'
-                  : mime.includes('m4a') || mime.includes('x-m4a')
-                    ? 'm4a'
-                    : 'webm';
-        send('audio', {
-          audio_data: raw,
-          audio_format: format,
-          client_transcript: clientTranscript?.trim() || undefined,
-        });
-      };
-      reader.readAsDataURL(audioBlob);
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => {
+          reject(new Error('读取录音文件失败，请重新录制后再试'));
+        };
+        reader.onload = () => {
+          try {
+            const base64Audio = (reader.result as string) || '';
+            const parts = base64Audio.split(',');
+            const raw = parts.length > 1 ? parts[1] : base64Audio;
+            const mime = String(audioBlob.type || '').toLowerCase();
+            const format =
+              mime.includes('wav')
+                ? 'wav'
+                : mime.includes('mpeg') || mime.includes('mp3')
+                  ? 'mp3'
+                  : mime.includes('ogg')
+                    ? 'ogg'
+                    : mime.includes('mp4')
+                      ? 'mp4'
+                      : mime.includes('m4a') || mime.includes('x-m4a')
+                        ? 'm4a'
+                        : 'webm';
+            send('audio', {
+              audio_data: raw,
+              audio_format: format,
+              client_transcript: clientTranscript?.trim() || undefined,
+            });
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        };
+        reader.readAsDataURL(audioBlob);
+      });
     }
+
+    return Promise.reject(new Error('未连接到辩论房间，请稍后重试'));
   };
 
   const requestRecordingPermission = async (): Promise<{ allowed: boolean; message?: string }> => {
@@ -978,7 +992,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   
   // 调试日志
   if (isFreeDebate && micOwnerUserId) {
-    console.log('抢麦状态检查:', {
+    debateDebug('DebateArena', '抢麦状态检查', {
       micOwnerUserId,
       currentUserId,
       micExpiresAt,

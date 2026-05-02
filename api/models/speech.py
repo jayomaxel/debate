@@ -3,7 +3,7 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped
 from typing import TYPE_CHECKING
@@ -28,6 +28,9 @@ class Speech(Base):
     content = Column(Text, nullable=False)
     audio_url = Column(String(500), nullable=True)
     duration = Column(Integer, nullable=False)  # 秒
+    transcription_status = Column(String(20), nullable=True)
+    transcription_error = Column(Text, nullable=True)
+    is_valid_for_scoring = Column(Boolean, nullable=False, default=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     
     # 关系

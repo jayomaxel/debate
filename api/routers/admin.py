@@ -34,7 +34,6 @@ from schemas.auth import PasswordChangeRequest
 from utils.email_service import EmailService
 
 logger = get_logger(__name__)
-print("LOADING ADMIN ROUTER MODULE")
 
 router = APIRouter(prefix="/api/admin", tags=["管理员端"])
 
@@ -725,26 +724,36 @@ async def update_vector_config(
         )
 
 
+def _mask_password(password: Optional[str]) -> tuple[bool, Optional[str]]:
+    """返回密码是否已配置，以及脱敏后的掩码字符串。"""
+    if not password:
+        return False, None
+    if len(password) <= 8:
+        return True, "***"
+    return True, f"{password[:4]}***{password[-4:]}"
+
+
 @router.get(
     "/config/email",
     summary="获取邮件配置",
-    # dependencies=[Depends(require_role(["administrator"]))]
+    dependencies=[Depends(require_role(["administrator"]))]
 )
 async def get_email_config(
-    # current_user: User = Depends(require_role(["administrator"])),
+    current_user: User = Depends(require_role(["administrator"])),
     db: Session = Depends(get_db)
 ):
-    print("INSIDE GET_EMAIL_CONFIG")
     try:
         config_service = ConfigService(db)
         config = await config_service.get_email_config()
-        
+
+        configured, masked = _mask_password(config.smtp_password)
         response_data = EmailConfigResponse(
             id=str(config.id),
             smtp_host=config.smtp_host,
             smtp_port=config.smtp_port,
             smtp_user=config.smtp_user,
-            smtp_password=config.smtp_password,
+            smtp_password_configured=configured,
+            smtp_password_masked=masked,
             from_email=config.from_email,
             auto_send_enabled=config.auto_send_enabled,
             created_at=config.created_at,
@@ -785,12 +794,14 @@ async def update_email_config(
             auto_send_enabled=request.auto_send_enabled
         )
         
+        configured, masked = _mask_password(config.smtp_password)
         response_data = EmailConfigResponse(
             id=str(config.id),
             smtp_host=config.smtp_host,
             smtp_port=config.smtp_port,
             smtp_user=config.smtp_user,
-            smtp_password=config.smtp_password,
+            smtp_password_configured=configured,
+            smtp_password_masked=masked,
             from_email=config.from_email,
             auto_send_enabled=config.auto_send_enabled,
             created_at=config.created_at,

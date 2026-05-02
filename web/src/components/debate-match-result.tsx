@@ -6,6 +6,7 @@ import StanceDisplay from './stance-display';
 import TeamMember, { TeamMember as TeamMemberType } from './team-member';
 import StudentService from '@/services/student.service';
 import type { Debate, DebateParticipant } from '@/services/student.service';
+import { debateDebug } from '@/lib/utils';
 import {
   ArrowLeft,
   Volume2,
@@ -166,7 +167,7 @@ const DebateMatchResult: React.FC<DebateMatchResultProps> = ({
 
   const handleReady = () => {
     // 用户点击准备就绪
-    console.log('用户准备就绪');
+    debateDebug('DebateMatchResult', '用户准备就绪');
     onStartDebate?.(joinedDebate?.id);
   };
 

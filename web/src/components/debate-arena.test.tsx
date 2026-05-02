@@ -211,7 +211,7 @@ describe('DebateArena', () => {
     expect(pcmPlayer.stop).toHaveBeenCalledTimes(1);
 
     act(() => {
-      startHandler?.({ speech_id: 'speech-live-001' });
+      startHandler?.({ speech_id: 'speech-live-001', role: 'ai_1', segment_id: 'opening_negative_1' });
       chunkHandler?.({
         speech_id: 'speech-live-001',
         audio_base64: 'AQID',
@@ -225,6 +225,15 @@ describe('DebateArena', () => {
     expect(pcmPlayer.startStream).not.toHaveBeenCalled();
     expect(pcmPlayer.appendChunk).not.toHaveBeenCalled();
     expect(pcmPlayer.endStream).not.toHaveBeenCalled();
+    expect(websocketSendMock).toHaveBeenCalledWith(
+      'speech_playback_skipped',
+      expect.objectContaining({
+        speech_id: 'speech-live-001',
+        segment_id: 'opening_negative_1',
+        speaker_role: 'ai_1',
+        playback_source: 'stream',
+      })
+    );
   });
 
   it('should show ai turn status and block grab mic while ai is thinking in free debate', async () => {
@@ -275,6 +284,79 @@ describe('DebateArena', () => {
         })
       );
     });
+  });
+
+  it('should allow a choice-mode candidate to select themselves as speaker', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const stateUpdateHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'state_update'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    act(() => {
+      stateUpdateHandler?.({
+        current_phase: 'questioning',
+        speaker_mode: 'choice',
+        speaker_options: ['debater_1', 'debater_2'],
+        current_speaker: null,
+        segment_id: 'questioning_1_pos_answer',
+        segment_title: '盘问回答',
+        participants: [
+          {
+            user_id: 'user-001',
+            role: 'debater_1',
+            name: '测试学生',
+          },
+        ],
+      });
+    });
+
+    const selectButton = await screen.findByText('选择我来回答');
+    act(() => {
+      fireEvent.click(selectButton);
+    });
+
+    expect(websocketSendMock).toHaveBeenCalledWith('select_speaker', { role: 'debater_1' });
+  });
+
+  it('should render backend flow segments when they are provided by state update', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const stateUpdateHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'state_update'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    act(() => {
+      stateUpdateHandler?.({
+        current_phase: 'opening',
+        segment_index: 1,
+        segment_id: 'custom_b',
+        segment_title: '自定义第二段',
+        flow_segments: [
+          { id: 'custom_a', title: '自定义第一段', phase: 'opening', duration: 10, mode: 'fixed' },
+          { id: 'custom_b', title: '自定义第二段', phase: 'opening', duration: 10, mode: 'fixed' },
+        ],
+        participants: [
+          {
+            user_id: 'user-001',
+            role: 'debater_1',
+            name: '测试学生',
+          },
+        ],
+      });
+    });
+
+    expect(await screen.findByText('自定义第一段')).toBeTruthy();
+    expect(screen.getAllByText('自定义第二段').length).toBeGreaterThan(0);
+    expect(screen.getByText('(2/2)')).toBeTruthy();
   });
 
   it('should send speech playback finished event when debate controls reports ai audio completion', async () => {

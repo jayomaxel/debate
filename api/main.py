@@ -27,9 +27,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# CORS：生产环境不建议 allow_origins=["*"] 与 allow_credentials=True 同时出现
+_cors_origins = settings.ALLOWED_ORIGINS if settings.ALLOWED_ORIGINS else ["*"]
+if settings.IS_PRODUCTION and "*" in _cors_origins:
+    logger.warning(
+        "生产环境 CORS allow_origins 包含 '*'，建议显式配置 ALLOWED_ORIGINS 环境变量"
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

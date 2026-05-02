@@ -1067,36 +1067,36 @@ class DocumentService:
                 self.db.commit()
             except Exception as rollback_error:
                 logger.error(
-                    f"鍥炴粴澶辫触: {document_id}, 閿欒: {rollback_error}",
+                    f"回滚失败: {document_id}, 错误: {rollback_error}",
                     exc_info=True,
                 )
                 self.db.rollback()
 
         try:
-            logger.info(f"寮€濮嬪鐞嗘枃妗? {document_id}")
+            logger.info(f"开始处理文档: {document_id}")
 
             document = self.db.execute(
                 select(KBDocument).where(KBDocument.id == uuid.UUID(document_id))
             ).scalar_one_or_none()
 
             if not document:
-                raise ValueError(f"鏂囨。涓嶅瓨鍦? {document_id}")
+                raise ValueError(f"文档不存在: {document_id}")
 
             document.upload_status = "processing"
             document.error_message = None
             self.db.commit()
             self.db.refresh(document)
 
-            logger.info(f"瑙ｆ瀽鏂囨。: {document.filename} ({document.file_type})")
+            logger.info(f"解析文档: {document.filename} ({document.file_type})")
             text_content = await self.parse_document(
                 document.file_path,
                 document.file_type,
             )
 
-            logger.info(f"寮€濮嬫枃鏈垎鍧? {document_id}")
+            logger.info(f"开始文本分块: {document_id}")
             chunks = await self.chunk_text(text_content)
 
-            logger.info(f"寮€濮嬬敓鎴愬祵鍏ュ悜閲? {document_id}")
+            logger.info(f"开始生成嵌入向量: {document_id}")
             chunk_texts = [chunk["content"] for chunk in chunks]
             embeddings = await self.generate_embeddings(chunk_texts)
 
@@ -1113,7 +1113,7 @@ class DocumentService:
                     document_id,
                 )
 
-            logger.info(f"寮€濮嬪瓨鍌ㄦ枃妗ｅ潡鍜屽悜閲? {document_id}")
+            logger.info(f"开始存储文档块和向量: {document_id}")
             chunk_records = await self.store_chunks_with_embeddings(
                 str(document.id),
                 chunks,
@@ -1128,15 +1128,15 @@ class DocumentService:
             self.db.refresh(document)
 
             logger.info(
-                f"鏂囨。澶勭悊鎴愬姛瀹屾垚: {document_id}, "
-                f"鏂囦欢鍚? {document.filename}, "
-                f"鍧楁暟: {len(chunk_records)}"
+                f"文档处理成功完成: {document_id}, "
+                f"文件名: {document.filename}, "
+                f"块数: {len(chunk_records)}"
             )
 
         except ValueError as e:
             error_msg = str(e)
             logger.error(
-                f"鏂囨。澶勭悊澶辫触锛堥獙璇侀敊璇級: {document_id}, 閿欒: {error_msg}"
+                f"文档处理失败（验证错误）: {document_id}, 错误: {error_msg}"
             )
             mark_failed(error_msg)
             raise
@@ -1144,16 +1144,16 @@ class DocumentService:
         except RuntimeError as e:
             error_msg = str(e)
             logger.error(
-                f"鏂囨。澶勭悊澶辫触锛堣繍琛屾椂閿欒锛? {document_id}, 閿欒: {error_msg}",
+                f"文档处理失败（运行时错误）: {document_id}, 错误: {error_msg}",
                 exc_info=True,
             )
             mark_failed(error_msg)
             raise
 
         except Exception as e:
-            error_msg = f"鏈鏈熺殑閿欒: {str(e)}"
+            error_msg = f"未预期的错误: {str(e)}"
             logger.error(
-                f"鏂囨。澶勭悊澶辫触锛堟湭棰勬湡閿欒锛? {document_id}, 閿欒: {e}",
+                f"文档处理失败（未预期错误）: {document_id}, 错误: {e}",
                 exc_info=True,
             )
             mark_failed(error_msg)

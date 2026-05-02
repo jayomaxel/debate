@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /d D:\\\\Afile\\\\AIDebate-sourcecode-latest\\\\api)",
+      "Bash(python -m compileall -q routers/admin.py schemas/config.py config.py main.py)",
+      "Bash(python *)"
+    ]
+  }
+}

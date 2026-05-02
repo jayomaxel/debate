@@ -942,7 +942,7 @@ class AIDebaterAgent:
             if response.status_code != 200:
                 error_text = await response.aread()
                 raise RuntimeError(
-                    f"LLM API閿欒: {response.status_code} - {error_text.decode(errors='ignore')}"
+                    f"LLM API错误: {response.status_code} - {error_text.decode(errors='ignore')}"
                 )
 
             async for raw_line in response.aiter_lines():

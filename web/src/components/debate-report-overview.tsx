@@ -147,6 +147,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         const color = isAI ? aiColors[idx % aiColors.length] : humanColors[idx % humanColors.length];
         return {
           name: p.name,
+          role: p.role,
           time: duration,
           percentage: 0,
           isAI,

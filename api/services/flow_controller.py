@@ -22,6 +22,7 @@ from models.speech import Speech
 from agents.debater_agent import AIDebaterAgent
 from services.config_service import ConfigService
 from utils.voice_processor import voice_processor
+from utils.speech_payload import build_speech_payload
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -787,6 +788,33 @@ class DebateFlowController:
             and str(room_state.segment_id or "") == str(segment.get("id") or "")
         )
 
+    def _is_ai_turn_still_current(
+        self,
+        room_id: str,
+        segment: Dict[str, Any],
+        speaker_role: Optional[str],
+    ) -> bool:
+        room_state = room_manager.get_room_state(room_id)
+        if not room_state or not self._is_room_segment_active(room_id, segment):
+            return False
+
+        expected_role = str(speaker_role or "").strip()
+        if expected_role:
+            current_speaker = str(getattr(room_state, "current_speaker", "") or "")
+            if current_speaker != expected_role:
+                return False
+
+            ai_turn_role = str(getattr(room_state, "ai_turn_speaker_role", "") or "")
+            if ai_turn_role and ai_turn_role != expected_role:
+                return False
+
+            ai_turn_segment_id = str(getattr(room_state, "ai_turn_segment_id", "") or "")
+            expected_segment_id = str(segment.get("id") or "")
+            if ai_turn_segment_id and ai_turn_segment_id != expected_segment_id:
+                return False
+
+        return True
+
     def _speaker_side(self, speaker_role: Optional[str]) -> Optional[str]:
         normalized = str(speaker_role or "").strip()
         if normalized.startswith("ai_"):
@@ -957,6 +985,9 @@ class DebateFlowController:
         """Keep a failed AI turn on its segment until the segment timer expires."""
         room_state = room_manager.get_room_state(room_id)
         if not room_state:
+            return
+
+        if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
             return
 
         if self._is_playback_gate_active(room_state):
@@ -1144,6 +1175,8 @@ class DebateFlowController:
             return False
 
         next_controller_user_id = self._resolve_playback_controller_user_id(room_state)
+        if not next_controller_user_id:
+            return False
         if next_controller_user_id == current_controller_user_id:
             return False
 
@@ -1184,14 +1217,21 @@ class DebateFlowController:
         *,
         status: str,
         speech_id: Optional[str] = None,
+        segment_id: Optional[str] = None,
+        speaker_role: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> bool:
         await self._refresh_playback_controller_if_needed(room_id)
         room_state = room_manager.get_room_state(room_id)
-        if not self._matches_playback_gate(room_state, speech_id=speech_id):
+        if not self._matches_playback_gate(
+            room_state,
+            speech_id=speech_id,
+            segment_id=segment_id,
+            speaker_role=speaker_role,
+        ):
             return False
 
-        if user_id is not None and status not in {"completed", "skipped", "timeout"}:
+        if user_id is not None and status in {"completed", "skipped", "failed"}:
             controller_user_id = str(
                 getattr(room_state, "playback_gate_controller_user_id", "") or ""
             ).strip()
@@ -1281,22 +1321,45 @@ class DebateFlowController:
         self, room_id: str, user_id: str, data: Dict[str, Any]
     ) -> bool:
         speech_id = str(data.get("speech_id") or "").strip()
+        segment_id = str(data.get("segment_id") or "").strip()
+        speaker_role = str(data.get("speaker_role") or "").strip()
         return await self._finalize_playback_gate(
             room_id,
             status="completed",
             speech_id=speech_id or None,
-            user_id=None,
+            segment_id=segment_id or None,
+            speaker_role=speaker_role or None,
+            user_id=user_id,
         )
 
     async def handle_speech_playback_failed(
         self, room_id: str, user_id: str, data: Dict[str, Any]
     ) -> bool:
         speech_id = str(data.get("speech_id") or "").strip()
+        segment_id = str(data.get("segment_id") or "").strip()
+        speaker_role = str(data.get("speaker_role") or "").strip()
         return await self._finalize_playback_gate(
             room_id,
             status="skipped",
             speech_id=speech_id or None,
-            user_id=None,
+            segment_id=segment_id or None,
+            speaker_role=speaker_role or None,
+            user_id=user_id,
+        )
+
+    async def handle_speech_playback_skipped(
+        self, room_id: str, user_id: str, data: Dict[str, Any]
+    ) -> bool:
+        speech_id = str(data.get("speech_id") or "").strip()
+        segment_id = str(data.get("segment_id") or "").strip()
+        speaker_role = str(data.get("speaker_role") or "").strip()
+        return await self._finalize_playback_gate(
+            room_id,
+            status="skipped",
+            speech_id=speech_id or None,
+            segment_id=segment_id or None,
+            speaker_role=speaker_role or None,
+            user_id=user_id,
         )
 
     def _build_free_debate_segment(self) -> Dict[str, Any]:
@@ -1517,6 +1580,7 @@ class DebateFlowController:
             db.execute(
                 select(Speech)
                 .where(Speech.debate_id == debate_uuid)
+                .where(Speech.is_valid_for_scoring.is_(True))
                 .order_by(Speech.timestamp.desc(), Speech.id.desc())
                 .limit(limit)
             )
@@ -2452,13 +2516,12 @@ class DebateFlowController:
         if not room_state:
             return False
 
-        if reason not in {"host_advance", "timeout", "end_turn"}:
-            turn_processing_status = getattr(
-                room_state, "turn_processing_status", "idle"
-            )
-            turn_processing_kind = getattr(room_state, "turn_processing_kind", None)
-            pending_advance_reason = getattr(room_state, "pending_advance_reason", None)
-            if turn_processing_status == "processing":
+        turn_processing_status = getattr(room_state, "turn_processing_status", "idle")
+        turn_processing_kind = getattr(room_state, "turn_processing_kind", None)
+        pending_advance_reason = getattr(room_state, "pending_advance_reason", None)
+        bypass_processing_gate = reason in {"host_advance", "timeout"}
+        if turn_processing_status == "processing":
+            if not bypass_processing_gate:
                 if not pending_advance_reason:
                     await room_manager.update_room_state(
                         room_id, pending_advance_reason=reason
@@ -2469,12 +2532,25 @@ class DebateFlowController:
                             "type": "advance_deferred",
                             "data": {
                                 "reason": reason,
+                                "processing_kind": turn_processing_kind,
                                 "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
                             },
                         },
                     )
                 return True
-            if turn_processing_status == "failed" and turn_processing_kind:
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "advance_forced",
+                    "data": {
+                        "reason": reason,
+                        "processing_kind": turn_processing_kind,
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
+        if turn_processing_status == "failed" and turn_processing_kind:
+            if not bypass_processing_gate:
                 await websocket_manager.broadcast_to_room(
                     room_id,
                     {
@@ -2490,6 +2566,20 @@ class DebateFlowController:
                     },
                 )
                 return False
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "advance_forced",
+                    "data": {
+                        "reason": reason,
+                        "processing_kind": turn_processing_kind,
+                        "processing_error": getattr(
+                            room_state, "turn_processing_error", None
+                        ),
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
 
         await self._cancel_active_ai_turn_for_advance(room_id)
 
@@ -2901,6 +2991,8 @@ class DebateFlowController:
             )
 
             latest_state = room_manager.get_room_state(room_id)
+            if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
+                return
             if self._is_playback_gate_active(latest_state):
                 return
             if latest_state and latest_state.current_phase == DebatePhase.FREE_DEBATE:
@@ -3039,6 +3131,7 @@ class DebateFlowController:
                     db.execute(
                         select(Speech)
                         .where(Speech.debate_id == debate_uuid)
+                        .where(Speech.is_valid_for_scoring.is_(True))
                         .order_by(Speech.timestamp.asc())
                         .limit(30)
                     )
@@ -3141,25 +3234,24 @@ class DebateFlowController:
                     current_audio_status: str,
                     current_audio_format: Optional[str],
                 ) -> Dict[str, Any]:
-                    """?? speech ????????? speech_id ????????"""
-                    return {
-                        "speech_id": str(speech.id),
-                        "message_id": str(speech.id),
-                        "user_id": None,
-                        "role": str(speaker_role),
-                        "name": ai_name,
-                        "stance": "negative",
-                        "content": current_text,
-                        "audio_url": current_audio_url,
-                        "audio_format": current_audio_format,
-                        "duration": current_duration,
-                        "timestamp": speech_timestamp.isoformat(),
-                        "speaker_type": "ai",
-                        "audio_status": current_audio_status,
-                        "phase": db_phase_value,
-                        "segment_id": segment.get("id"),
-                        "segment_title": segment.get("title"),
-                    }
+                    return build_speech_payload(
+                        speech_id=str(speech.id),
+                        user_id=None,
+                        role=str(speaker_role),
+                        name=ai_name,
+                        stance="negative",
+                        speaker_type="ai",
+                        content=current_text,
+                        audio_url=current_audio_url,
+                        audio_format=current_audio_format,
+                        duration=current_duration,
+                        timestamp=speech_timestamp,
+                        is_audio=bool(current_audio_url),
+                        audio_status=current_audio_status,
+                        phase=db_phase_value,
+                        segment_id=segment.get("id"),
+                        segment_title=segment.get("title"),
+                    )
 
                 async def flush_incremental_text(force: bool = False) -> None:
                     """
@@ -3784,6 +3876,9 @@ class DebateFlowController:
             )
 
         speaker_role = str(draft.get("speaker_role") or room_state.current_speaker or "")
+        if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
+            return False
+
         text = str(draft.get("draft_text") or "").strip() or "[AI暂时无法回应]"
         duration = max(1, int(len(text) / 2.5))
         speech_timestamp = self._now()
@@ -3831,24 +3926,24 @@ class DebateFlowController:
             current_audio_status: str,
             current_audio_format: Optional[str],
         ) -> Dict[str, Any]:
-            return {
-                "speech_id": str(speech.id),
-                "message_id": str(speech.id),
-                "user_id": None,
-                "role": speaker_role,
-                "name": ai_name,
-                "stance": stance,
-                "content": text,
-                "audio_url": current_audio_url,
-                "audio_format": current_audio_format,
-                "duration": duration,
-                "timestamp": speech_timestamp.isoformat(),
-                "speaker_type": "ai",
-                "audio_status": current_audio_status,
-                "phase": db_phase_value,
-                "segment_id": segment.get("id"),
-                "segment_title": segment.get("title"),
-            }
+            return build_speech_payload(
+                speech_id=str(speech.id),
+                user_id=None,
+                role=speaker_role,
+                name=ai_name,
+                stance=stance,
+                speaker_type="ai",
+                content=text,
+                audio_url=current_audio_url,
+                audio_format=current_audio_format,
+                duration=duration,
+                timestamp=speech_timestamp,
+                is_audio=bool(current_audio_url),
+                audio_status=current_audio_status,
+                phase=db_phase_value,
+                segment_id=segment.get("id"),
+                segment_title=segment.get("title"),
+            )
 
         await websocket_manager.broadcast_to_room(
             room_id,
@@ -3880,6 +3975,8 @@ class DebateFlowController:
             nonlocal playback_gate_started
             if playback_gate_started:
                 return
+            if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
+                return
             playback_gate_started = await self._start_playback_gate(
                 room_id,
                 speech_id=str(speech.id),
@@ -3892,6 +3989,9 @@ class DebateFlowController:
         async def broadcast_stream_chunk(audio_chunk: bytes) -> None:
             nonlocal stream_started
             nonlocal stream_chunk_index
+
+            if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
+                return
 
             if not stream_started:
                 stream_started = True
@@ -4025,12 +4125,21 @@ class DebateFlowController:
                     logger.warning(f"AI audio save failed: {exc}", exc_info=True)
 
         conversion_ok = bool(audio_url)
+        turn_still_current = self._is_ai_turn_still_current(
+            room_id,
+            segment,
+            speaker_role,
+        )
         if conversion_ok:
             speech.audio_url = audio_url
             speech.duration = duration
             db.commit()
+            if not turn_still_current:
+                return False
             if not stream_started:
                 await ensure_playback_gate_started()
+                if not playback_gate_started:
+                    return False
             await room_manager.update_room_state(
                 room_id,
                 turn_processing_status="succeeded",
@@ -4053,6 +4162,8 @@ class DebateFlowController:
                 },
             )
         else:
+            if not turn_still_current:
+                return False
             err = (
                 stream_result.get("error")
                 or draft.get("error")
@@ -4069,7 +4180,11 @@ class DebateFlowController:
                 turn_speech_timestamp=self._now(),
             )
 
-        if stream_started:
+        if stream_started and self._is_ai_turn_still_current(
+            room_id,
+            segment,
+            speaker_role,
+        ):
             await websocket_manager.broadcast_to_room(
                 room_id,
                 {
@@ -4093,18 +4208,19 @@ class DebateFlowController:
             segment_id=str(segment.get("id") or ""),
             speaker_role=speaker_role,
         )
-        if cached:
+        if cached and self._is_ai_turn_still_current(room_id, segment, speaker_role):
             cached["status"] = "released"
             cached["released_at"] = self._now()
             cached["speech_id"] = str(speech.id)
             self._store_ai_draft(room_id, cached)
 
-        await self.notify_speech_committed(
-            room_id,
-            speech_id=str(speech.id),
-            speaker_role=speaker_role,
-            segment_id=str(segment.get("id") or ""),
-        )
+        if self._is_ai_turn_still_current(room_id, segment, speaker_role):
+            await self.notify_speech_committed(
+                room_id,
+                speech_id=str(speech.id),
+                speaker_role=speaker_role,
+                segment_id=str(segment.get("id") or ""),
+            )
 
         return conversion_ok
 
@@ -4263,11 +4379,15 @@ class DebateFlowController:
                     draft=draft,
                     db=db,
                 )
+                if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
+                    return
             finally:
                 db.close()
 
             latest_state = room_manager.get_room_state(room_id)
             if not latest_state:
+                return
+            if not self._is_ai_turn_still_current(room_id, segment, speaker_role):
                 return
 
             if latest_state.current_phase == DebatePhase.FREE_DEBATE:
@@ -4387,51 +4507,8 @@ class DebateFlowController:
                         continue
 
                 if room_state.segment_start_time:
-                    if (
-                        room_state.current_phase == DebatePhase.FREE_DEBATE
-                        and room_state.mic_expires_at
-                    ):
-                        if (datetime.utcnow() + timedelta(hours=8)) >= room_state.mic_expires_at:
-                            expired_owner_role = str(
-                                getattr(room_state, "mic_owner_role", "") or ""
-                            )
-                            next_side = "human"
-                            last_side = getattr(room_state, "free_debate_last_side", None)
-                            should_trigger_ai = False
-                            if expired_owner_role.startswith("debater_"):
-                                next_side = "human"
-                                last_side = "human"
-                                should_trigger_ai = True
-                            elif expired_owner_role.startswith("ai_"):
-                                next_side = "human"
-                                last_side = "ai"
-                            await room_manager.update_room_state(
-                                room_id,
-                                mic_owner_user_id=None,
-                                mic_owner_role=None,
-                                mic_expires_at=None,
-                                current_speaker=None,
-                                free_debate_last_side=last_side,
-                                free_debate_next_side=next_side,
-                            )
-                            if expired_owner_role.startswith("ai_"):
-                                await self._clear_ai_turn_state_if_matches(
-                                    room_id,
-                                    segment_id=str(getattr(room_state, "segment_id", "") or ""),
-                                    speaker_role=expired_owner_role,
-                                )
-                            await websocket_manager.broadcast_to_room(
-                                room_id,
-                                {
-                                    "type": "mic_released",
-                                    "data": {
-                                        "reason": "expired",
-                                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                                    },
-                                },
-                            )
-                            if should_trigger_ai:
-                                await self.schedule_free_debate_ai_turn(room_id)
+                    if await self._release_expired_free_debate_mic(room_id, room_state):
+                        room_state = room_manager.get_room_state(room_id) or room_state
                     segments = (
                         self.segments.get(room_id) or self._build_default_segments()
                     )
@@ -4475,6 +4552,63 @@ class DebateFlowController:
             logger.info(f"Timer cancelled for room {room_id}")
         except Exception as e:
             logger.error(f"Timer error for room {room_id}: {e}", exc_info=True)
+
+    async def _release_expired_free_debate_mic(
+        self, room_id: str, room_state: Any
+    ) -> bool:
+        if (
+            getattr(room_state, "current_phase", None) != DebatePhase.FREE_DEBATE
+            or not getattr(room_state, "mic_expires_at", None)
+            or self._now() < room_state.mic_expires_at
+        ):
+            return False
+
+        expired_owner_role = str(getattr(room_state, "mic_owner_role", "") or "")
+        last_side = getattr(room_state, "free_debate_last_side", None)
+        next_side = "human"
+        should_trigger_ai = False
+
+        if expired_owner_role.startswith("debater_"):
+            last_side = "human"
+            next_side = "ai"
+            should_trigger_ai = True
+        elif expired_owner_role.startswith("ai_"):
+            last_side = "ai"
+            next_side = "human"
+
+        await room_manager.update_room_state(
+            room_id,
+            mic_owner_user_id=None,
+            mic_owner_role=None,
+            mic_expires_at=None,
+            current_speaker=None,
+            free_debate_last_side=last_side,
+            free_debate_next_side=next_side,
+        )
+
+        if expired_owner_role.startswith("ai_"):
+            await self._clear_ai_turn_state_if_matches(
+                room_id,
+                segment_id=str(getattr(room_state, "segment_id", "") or ""),
+                speaker_role=expired_owner_role,
+            )
+
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "mic_released",
+                "data": {
+                    "reason": "expired",
+                    "next_side": next_side,
+                    "timestamp": self._now().isoformat(),
+                },
+            },
+        )
+
+        if should_trigger_ai:
+            await self.schedule_free_debate_ai_turn(room_id)
+
+        return True
 
     async def handle_segment_timeout(self, room_id: str) -> None:
         """

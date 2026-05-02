@@ -30,6 +30,26 @@ export function audioPlaybackDebug(
   console.debug(`[AudioPlayback][${scope}] ${message}`);
 }
 
+export function debateDebug(
+  scope: string,
+  message: string,
+  payload?: Record<string, unknown>
+) {
+  const isDev = Boolean(
+    (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV
+  );
+  if (!isDev) {
+    return;
+  }
+
+  if (payload) {
+    console.debug(`[Debate][${scope}] ${message}`, payload);
+    return;
+  }
+
+  console.debug(`[Debate][${scope}] ${message}`);
+}
+
 export function shouldDebugAudioMessageType(type: string) {
   return [
     'speech',
@@ -39,6 +59,7 @@ export function shouldDebugAudioMessageType(type: string) {
     'speech_playback_started',
     'speech_playback_finished',
     'speech_playback_failed',
+    'speech_playback_skipped',
   ].includes(type);
 }
 

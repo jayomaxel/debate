@@ -386,6 +386,7 @@ async def export_report_pdf(
             db.execute(
                 select(Speech)
                 .where(Speech.debate_id == debate_id)
+                .where(Speech.is_valid_for_scoring.is_(True))
                 .order_by(Speech.timestamp)
             )
             .scalars()
@@ -545,6 +546,7 @@ async def send_report_email(
             db.execute(
                 select(Speech)
                 .where(Speech.debate_id == debate_id)
+                .where(Speech.is_valid_for_scoring.is_(True))
                 .order_by(Speech.timestamp)
             )
             .scalars()

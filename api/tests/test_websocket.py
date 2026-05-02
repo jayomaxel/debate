@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from agents.debater_agent import AIDebaterAgent
@@ -7,6 +8,7 @@ from services.room_manager import room_manager, DebatePhase, RoomState
 from services.flow_controller import flow_controller
 from utils.voice_processor import voice_processor
 from utils.websocket_manager import websocket_manager
+from utils.speech_payload import build_speech_payload
 
 
 def test_flow_controller_segment_flow():
@@ -44,12 +46,14 @@ def test_flow_controller_segment_flow():
     assert room_state.segment_id == "s1"
     assert room_state.current_speaker == "debater_1"
     assert room_state.speaker_mode == "fixed"
+    assert [segment["id"] for segment in room_state.flow_segments] == ["s1", "s2"]
 
     asyncio.run(flow_controller.advance_segment(room_id))
     assert room_state.current_phase == DebatePhase.QUESTIONING
     assert room_state.segment_id == "s2"
     assert room_state.speaker_mode == "choice"
-    assert room_state.current_speaker in room_state.speaker_options
+    assert room_state.current_speaker is None
+    assert room_state.speaker_options == ["debater_2", "debater_3"]
 
     ok = asyncio.run(flow_controller.set_current_speaker(room_id, "debater_3"))
     assert ok is True
@@ -57,6 +61,202 @@ def test_flow_controller_segment_flow():
 
     asyncio.run(flow_controller.cleanup_room(room_id))
     room_manager.rooms.pop(room_id, None)
+
+
+def test_build_speech_payload_contains_unified_fields():
+    speech_id = str(uuid.uuid4())
+    payload = build_speech_payload(
+        speech_id=speech_id,
+        user_id="user-001",
+        role="debater_1",
+        name="学生一",
+        stance="正方",
+        speaker_type="human",
+        content="统一字段测试",
+        audio_url=None,
+        audio_format=None,
+        duration=3,
+        timestamp="2026-05-02T12:00:00",
+        is_audio=False,
+        transcription_status=None,
+        phase="opening",
+        segment_id="opening_positive_1",
+        segment_title="立论阶段",
+    )
+
+    assert payload == {
+        "speech_id": speech_id,
+        "message_id": speech_id,
+        "user_id": "user-001",
+        "role": "debater_1",
+        "name": "学生一",
+        "stance": "正方",
+        "speaker_type": "human",
+        "content": "统一字段测试",
+        "audio_url": None,
+        "audio_format": None,
+        "duration": 3,
+        "timestamp": "2026-05-02T12:00:00",
+        "is_audio": False,
+        "transcription_status": None,
+        "phase": "opening",
+        "segment_id": "opening_positive_1",
+        "segment_title": "立论阶段",
+    }
+
+
+def test_auto_score_filters_invalid_speeches(db_session, monkeypatch):
+    from models.class_model import Class
+    from models.debate import Debate
+    from models.speech import Speech
+    from models.user import User
+    from services.scoring_service import ScoringService
+
+    teacher = db_session.query(User).filter(User.account == "test_admin").one()
+    class_id = uuid.uuid4()
+    debate_id = uuid.uuid4()
+    db_session.add(
+        Class(
+            id=class_id,
+            name="Auto Score Filter Class",
+            code=f"ASF{uuid.uuid4().hex[:8]}",
+            teacher_id=teacher.id,
+        )
+    )
+    db_session.add(
+        Debate(
+            id=debate_id,
+            topic="自动评分过滤测试",
+            description="",
+            duration=3,
+            invitation_code=uuid.uuid4().hex[:6].upper(),
+            class_id=class_id,
+            teacher_id=teacher.id,
+            status="completed",
+        )
+    )
+    db_session.add_all(
+        [
+            Speech(
+                id=uuid.uuid4(),
+                debate_id=debate_id,
+                speaker_id=None,
+                speaker_type="ai",
+                speaker_role="ai_1",
+                phase="opening",
+                content="有效发言",
+                duration=3,
+                is_valid_for_scoring=True,
+                timestamp=datetime.utcnow(),
+            ),
+            Speech(
+                id=uuid.uuid4(),
+                debate_id=debate_id,
+                speaker_id=None,
+                speaker_type="human",
+                speaker_role="debater_1",
+                phase="opening",
+                content="这条有内容但 ASR 失败，不能进评分",
+                duration=3,
+                transcription_status="failed",
+                is_valid_for_scoring=False,
+                timestamp=datetime.utcnow() + timedelta(seconds=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    captured = {}
+
+    async def _fake_batch_score_debate(*, db, debate_id, speeches, context):
+        captured["speech_contents"] = [speech.content for speech in speeches]
+        captured["context_contents"] = [item["content"] for item in context]
+        return {"scores": [], "summary": "ok"}
+
+    monkeypatch.setattr(
+        ScoringService,
+        "batch_score_debate",
+        _fake_batch_score_debate,
+        raising=True,
+    )
+
+    asyncio.run(room_manager._auto_score_and_generate_report(db_session, debate_id))
+
+    assert captured["speech_contents"] == ["有效发言"]
+    assert captured["context_contents"] == ["有效发言"]
+
+
+def test_flow_completion_calls_room_manager_end_debate(monkeypatch):
+    from services import flow_controller as fc
+
+    room_id = "test_room_flow_completion_end_debate_001"
+    debate_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        segment_index=0,
+        segment_id="only_segment",
+    )
+    room_manager.rooms[room_id] = room_state
+    flow_controller.segments[room_id] = [
+        {
+            "id": "only_segment",
+            "title": "唯一段落",
+            "phase": DebatePhase.OPENING,
+            "duration": 5,
+            "mode": "fixed",
+            "speaker_roles": ["debater_1"],
+        }
+    ]
+    flow_controller.segment_index[room_id] = 0
+
+    called = []
+
+    class _DummySession:
+        def close(self):
+            return None
+
+    async def _fake_end_debate(_room_id, db):
+        called.append((_room_id, db))
+        room_state.current_phase = DebatePhase.FINISHED
+        return True
+
+    monkeypatch.setattr(fc.db_module, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(fc.room_manager, "end_debate", _fake_end_debate)
+
+    try:
+        result = asyncio.run(flow_controller.advance_segment(room_id))
+    finally:
+        _cleanup_flow_state(room_id)
+
+    assert result is True
+    assert called and called[0][0] == room_id
+    assert room_state.current_phase == DebatePhase.FINISHED
+
+
+def test_finish_debate_flow_is_idempotent_when_room_already_finished(monkeypatch):
+    from services import flow_controller as fc
+
+    room_id = "test_room_finish_idempotent_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.FINISHED,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    async def _fail_if_called(*args, **kwargs):
+        raise AssertionError("end_debate should not be called for an already finished room")
+
+    monkeypatch.setattr(fc.room_manager, "end_debate", _fail_if_called)
+
+    try:
+        result = asyncio.run(flow_controller.finish_debate_flow(room_id))
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert result is True
 
 
 def test_websocket_manager_room_membership():
@@ -190,7 +390,7 @@ def _make_flow_test_speech(role, content, *, phase="free_debate", speaker_type=N
     )
 
 
-def test_end_turn_force_advance_bypasses_voice_processing():
+def test_end_turn_defers_while_voice_processing():
     room_id = "test_room_turn_gate_001"
     debate_id = str(uuid.uuid4())
 
@@ -227,12 +427,554 @@ def test_end_turn_force_advance_bypasses_voice_processing():
     room_state.turn_processing_kind = "asr"
     ok = asyncio.run(flow_controller.force_advance_segment(room_id, reason="end_turn"))
     assert ok is True
-    assert room_state.segment_id == "s2"
-    assert room_state.pending_advance_reason is None
-    assert room_state.turn_processing_status == "idle"
+    assert room_state.segment_id == "s1"
+    assert room_state.pending_advance_reason == "end_turn"
+    assert room_state.turn_processing_status == "processing"
 
     asyncio.run(flow_controller.cleanup_room(room_id))
     room_manager.rooms.pop(room_id, None)
+
+
+def test_choice_candidate_can_select_speaker(monkeypatch):
+    room_id = "test_room_choice_select_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+        speaker_mode="choice",
+        speaker_options=["debater_2", "debater_3"],
+        current_speaker=None,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    async def _noop_sync(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(flow_controller, "_sync_upcoming_ai_prethinking", _noop_sync)
+
+    try:
+        selected = asyncio.run(flow_controller.set_current_speaker(room_id, "debater_3"))
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert selected is True
+    assert room_state.current_speaker == "debater_3"
+
+
+def test_choice_non_candidate_cannot_select_speaker(monkeypatch):
+    room_id = "test_room_choice_non_candidate_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+        speaker_mode="choice",
+        speaker_options=["debater_2", "debater_3"],
+        current_speaker=None,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    async def _noop_sync(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(flow_controller, "_sync_upcoming_ai_prethinking", _noop_sync)
+
+    try:
+        selected = asyncio.run(flow_controller.set_current_speaker(room_id, "debater_4"))
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert selected is False
+    assert room_state.current_speaker is None
+
+
+def test_choice_cannot_switch_speaker_after_committed_speech(monkeypatch):
+    room_id = "test_room_choice_committed_no_switch_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+        speaker_mode="choice",
+        speaker_options=["debater_2", "debater_3"],
+        current_speaker="debater_2",
+        turn_speech_committed=True,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    async def _noop_sync(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(flow_controller, "_sync_upcoming_ai_prethinking", _noop_sync)
+
+    try:
+        selected = asyncio.run(flow_controller.set_current_speaker(room_id, "debater_3"))
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert selected is False
+    assert room_state.current_speaker == "debater_2"
+
+
+def test_text_speech_commit_failure_does_not_broadcast_or_commit_turn():
+    from routers import websocket as ws
+
+    room_id = "test_room_text_commit_fail_001"
+    debate_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _FailingDB:
+        def add(self, obj):
+            self._last_added = obj
+
+        def commit(self):
+            raise RuntimeError("commit failed")
+
+        def rollback(self):
+            return None
+
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_speech_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"content": "测试发言"},
+                db=_FailingDB(),
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert [m for m in broadcasted if m.get("type") == "speech"] == []
+    assert room_state.turn_speech_committed is False
+    assert sent[-1]["type"] == "error"
+    assert "保存失败" in sent[-1]["data"]["message"]
+
+
+def test_empty_text_speech_is_rejected_without_commit():
+    from routers import websocket as ws
+
+    room_id = "test_room_empty_text_speech_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _TrackingDB:
+        add_called = False
+        commit_called = False
+
+        def add(self, obj):
+            self.add_called = True
+
+        def commit(self):
+            self.commit_called = True
+
+    db = _TrackingDB()
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_speech_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"content": ""},
+                db=db,
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert db.add_called is False
+    assert db.commit_called is False
+    assert [m for m in broadcasted if m.get("type") == "speech"] == []
+    assert room_state.turn_speech_committed is False
+    assert sent[-1]["type"] == "error"
+    assert "不能为空" in sent[-1]["data"]["message"]
+
+
+def test_blank_text_speech_is_rejected_without_commit():
+    from routers import websocket as ws
+
+    room_id = "test_room_blank_text_speech_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _TrackingDB:
+        add_called = False
+        commit_called = False
+
+        def add(self, obj):
+            self.add_called = True
+
+        def commit(self):
+            self.commit_called = True
+
+    db = _TrackingDB()
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_speech_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"content": "   \n\t  "},
+                db=db,
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert db.add_called is False
+    assert db.commit_called is False
+    assert [m for m in broadcasted if m.get("type") == "speech"] == []
+    assert room_state.turn_speech_committed is False
+    assert sent[-1]["type"] == "error"
+    assert "不能为空" in sent[-1]["data"]["message"]
+
+
+def test_audio_initial_speech_commit_failure_stops_asr_and_broadcast():
+    from routers import websocket as ws
+
+    room_id = "test_room_audio_commit_fail_001"
+    debate_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _FailingDB:
+        def add(self, obj):
+            self._last_added = obj
+
+        def commit(self):
+            raise RuntimeError("commit failed")
+
+        def rollback(self):
+            return None
+
+    broadcasted = []
+    sent = []
+    transcribe_called = False
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    def _fake_decode_audio_base64(_b64):
+        return b"\x00\x01"
+
+    async def _fake_save_audio_file(_data, _filename):
+        return None
+
+    async def _fake_transcribe_audio(_data, **kwargs):
+        nonlocal transcribe_called
+        transcribe_called = True
+        return {"text": "不应到达"}
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    orig_decode = ws.voice_processor.decode_audio_base64
+    orig_save = ws.voice_processor.save_audio_file
+    orig_transcribe = ws.voice_processor.transcribe_audio
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        ws.voice_processor.decode_audio_base64 = _fake_decode_audio_base64
+        ws.voice_processor.save_audio_file = _fake_save_audio_file
+        ws.voice_processor.transcribe_audio = _fake_transcribe_audio
+        asyncio.run(
+            ws.handle_audio_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"audio_data": "xx", "audio_format": "webm"},
+                db=_FailingDB(),
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        ws.voice_processor.decode_audio_base64 = orig_decode
+        ws.voice_processor.save_audio_file = orig_save
+        ws.voice_processor.transcribe_audio = orig_transcribe
+        room_manager.rooms.pop(room_id, None)
+
+    assert [m for m in broadcasted if m.get("type") == "speech"] == []
+    assert transcribe_called is False
+    assert room_state.turn_processing_status == "failed"
+    assert room_state.turn_speech_committed is False
+    assert sent[-1]["type"] == "error"
+    assert "保存失败" in sent[-1]["data"]["message"]
+
+
+def test_stale_asr_success_does_not_mark_new_segment_committed():
+    from routers import websocket as ws
+
+    room_id = "test_room_stale_asr_success_001"
+    debate_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        segment_id="s1",
+        segment_title="第一段",
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _DummyDB:
+        def add(self, obj):
+            self._last_added = obj
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    def _fake_decode_audio_base64(_b64):
+        return b"\x00\x01"
+
+    async def _fake_save_audio_file(_data, _filename):
+        return None
+
+    async def _fake_transcribe_audio(_data, **kwargs):
+        await room_manager.update_room_state(
+            room_id,
+            segment_id="s2",
+            segment_title="第二段",
+            current_speaker="debater_2",
+            turn_processing_status="idle",
+            turn_processing_kind=None,
+            turn_speech_committed=False,
+            turn_speech_user_id=None,
+            turn_speech_role=None,
+        )
+        return {"text": "旧阶段语音完成"}
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    orig_decode = ws.voice_processor.decode_audio_base64
+    orig_save = ws.voice_processor.save_audio_file
+    orig_transcribe = ws.voice_processor.transcribe_audio
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        ws.voice_processor.decode_audio_base64 = _fake_decode_audio_base64
+        ws.voice_processor.save_audio_file = _fake_save_audio_file
+        ws.voice_processor.transcribe_audio = _fake_transcribe_audio
+
+        asyncio.run(
+            ws.handle_audio_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"audio_data": "xx", "audio_format": "webm"},
+                db=_DummyDB(),
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        ws.voice_processor.decode_audio_base64 = orig_decode
+        ws.voice_processor.save_audio_file = orig_save
+        ws.voice_processor.transcribe_audio = orig_transcribe
+        room_manager.rooms.pop(room_id, None)
+
+    speech_messages = [m for m in broadcasted if m.get("type") == "speech"]
+    assert len(speech_messages) == 2
+    assert speech_messages[-1]["data"]["content"] == "旧阶段语音完成"
+    assert room_state.segment_id == "s2"
+    assert room_state.current_speaker == "debater_2"
+    assert room_state.turn_processing_status == "idle"
+    assert room_state.turn_speech_committed is False
+    assert [m for m in sent if m.get("type") == "audio_processed"]
+
+
+def test_stale_asr_failure_does_not_mark_new_segment_failed():
+    from routers import websocket as ws
+
+    room_id = "test_room_stale_asr_failure_001"
+    debate_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        segment_id="s1",
+        segment_title="第一段",
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _DummyDB:
+        def add(self, obj):
+            self._last_added = obj
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    def _fake_decode_audio_base64(_b64):
+        return b"\x00\x01"
+
+    async def _fake_save_audio_file(_data, _filename):
+        return None
+
+    async def _fake_transcribe_audio(_data, **kwargs):
+        await room_manager.update_room_state(
+            room_id,
+            segment_id="s2",
+            segment_title="第二段",
+            current_speaker="debater_2",
+            turn_processing_status="idle",
+            turn_processing_kind=None,
+            turn_speech_committed=False,
+            turn_speech_user_id=None,
+            turn_speech_role=None,
+        )
+        return {"error": "stale ASR failed"}
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    orig_decode = ws.voice_processor.decode_audio_base64
+    orig_save = ws.voice_processor.save_audio_file
+    orig_transcribe = ws.voice_processor.transcribe_audio
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        ws.voice_processor.decode_audio_base64 = _fake_decode_audio_base64
+        ws.voice_processor.save_audio_file = _fake_save_audio_file
+        ws.voice_processor.transcribe_audio = _fake_transcribe_audio
+
+        asyncio.run(
+            ws.handle_audio_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"audio_data": "xx", "audio_format": "webm"},
+                db=_DummyDB(),
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        ws.voice_processor.decode_audio_base64 = orig_decode
+        ws.voice_processor.save_audio_file = orig_save
+        ws.voice_processor.transcribe_audio = orig_transcribe
+        room_manager.rooms.pop(room_id, None)
+
+    speech_messages = [m for m in broadcasted if m.get("type") == "speech"]
+    assert len(speech_messages) == 2
+    assert speech_messages[-1]["data"]["transcription_status"] == "failed"
+    assert room_state.segment_id == "s2"
+    assert room_state.current_speaker == "debater_2"
+    assert room_state.turn_processing_status == "idle"
+    assert room_state.turn_processing_kind is None
+    assert room_state.turn_speech_committed is False
 
 
 def test_ai_response_turn_without_question_is_skippable():
@@ -272,6 +1014,200 @@ def test_free_debate_ai_speaker_rotates_away_from_last_ai():
     )
 
     assert selected in {"ai_2", "ai_3", "ai_4"}
+
+
+def test_human_mic_expire_sets_next_side_ai_immediately(monkeypatch):
+    room_id = "test_room_human_mic_expire_next_ai_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.FREE_DEBATE,
+        segment_id="free_debate",
+        mic_owner_user_id="user-001",
+        mic_owner_role="debater_1",
+        mic_expires_at=datetime.utcnow() + timedelta(hours=8, seconds=-1),
+        current_speaker="debater_1",
+        free_debate_next_side="human",
+    )
+    room_manager.rooms[room_id] = room_state
+
+    scheduled = []
+    broadcasted = []
+
+    async def _fake_schedule_free_debate_ai_turn(_room_id):
+        scheduled.append(_room_id)
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    monkeypatch.setattr(
+        flow_controller,
+        "schedule_free_debate_ai_turn",
+        _fake_schedule_free_debate_ai_turn,
+    )
+    monkeypatch.setattr(websocket_manager, "broadcast_to_room", _fake_broadcast_to_room)
+
+    try:
+        released = asyncio.run(
+            flow_controller._release_expired_free_debate_mic(room_id, room_state)
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert released is True
+    assert room_state.mic_owner_user_id is None
+    assert room_state.current_speaker is None
+    assert room_state.free_debate_last_side == "human"
+    assert room_state.free_debate_next_side == "ai"
+    assert scheduled == [room_id]
+    assert broadcasted[-1]["type"] == "mic_released"
+    assert broadcasted[-1]["data"]["next_side"] == "ai"
+
+
+def test_ai_mic_expire_returns_next_side_human(monkeypatch):
+    room_id = "test_room_ai_mic_expire_next_human_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.FREE_DEBATE,
+        segment_id="free_debate",
+        mic_owner_user_id="__ai__",
+        mic_owner_role="ai_2",
+        mic_expires_at=datetime.utcnow() + timedelta(hours=8, seconds=-1),
+        current_speaker="ai_2",
+        free_debate_next_side="ai",
+    )
+    room_manager.rooms[room_id] = room_state
+
+    scheduled = []
+    broadcasted = []
+
+    async def _fake_schedule_free_debate_ai_turn(_room_id):
+        scheduled.append(_room_id)
+
+    async def _fake_clear_ai_turn_state_if_matches(*args, **kwargs):
+        room_state.ai_turn_status = "idle"
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    monkeypatch.setattr(
+        flow_controller,
+        "schedule_free_debate_ai_turn",
+        _fake_schedule_free_debate_ai_turn,
+    )
+    monkeypatch.setattr(
+        flow_controller,
+        "_clear_ai_turn_state_if_matches",
+        _fake_clear_ai_turn_state_if_matches,
+    )
+    monkeypatch.setattr(websocket_manager, "broadcast_to_room", _fake_broadcast_to_room)
+
+    try:
+        released = asyncio.run(
+            flow_controller._release_expired_free_debate_mic(room_id, room_state)
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert released is True
+    assert room_state.mic_owner_user_id is None
+    assert room_state.current_speaker is None
+    assert room_state.free_debate_last_side == "ai"
+    assert room_state.free_debate_next_side == "human"
+    assert scheduled == []
+    assert broadcasted[-1]["data"]["next_side"] == "human"
+
+
+def test_playback_skipped_from_controller_releases_gate():
+    room_id = "test_room_playback_skipped_controller_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        playback_gate_status="waiting",
+        playback_gate_speech_id="speech-001",
+        playback_gate_segment_id="opening_negative_1",
+        playback_gate_speaker_role="ai_1",
+        playback_gate_controller_user_id="controller-001",
+    )
+    room_manager.rooms[room_id] = room_state
+
+    try:
+        released = asyncio.run(
+            flow_controller.handle_speech_playback_skipped(
+                room_id,
+                "controller-001",
+                {"speech_id": "speech-001"},
+            )
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert released is True
+    assert room_state.playback_gate_status == "idle"
+    assert room_state.playback_gate_speech_id is None
+
+
+def test_playback_skipped_from_non_controller_is_ignored():
+    room_id = "test_room_playback_skipped_non_controller_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        playback_gate_status="waiting",
+        playback_gate_speech_id="speech-001",
+        playback_gate_segment_id="opening_negative_1",
+        playback_gate_speaker_role="ai_1",
+        playback_gate_controller_user_id="controller-001",
+    )
+    room_manager.rooms[room_id] = room_state
+
+    try:
+        released = asyncio.run(
+            flow_controller.handle_speech_playback_skipped(
+                room_id,
+                "viewer-001",
+                {"speech_id": "speech-001"},
+            )
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert released is False
+    assert room_state.playback_gate_status == "waiting"
+    assert room_state.playback_gate_speech_id == "speech-001"
+
+
+def test_playback_finished_with_stale_segment_is_ignored():
+    room_id = "test_room_playback_finished_stale_segment_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        playback_gate_status="waiting",
+        playback_gate_speech_id="speech-001",
+        playback_gate_segment_id="opening_negative_1",
+        playback_gate_speaker_role="ai_1",
+        playback_gate_controller_user_id="controller-001",
+    )
+    room_manager.rooms[room_id] = room_state
+
+    try:
+        released = asyncio.run(
+            flow_controller.handle_speech_playback_finished(
+                room_id,
+                "controller-001",
+                {
+                    "speech_id": "speech-001",
+                    "segment_id": "next_segment",
+                    "speaker_role": "ai_1",
+                },
+            )
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert released is False
+    assert room_state.playback_gate_status == "waiting"
+    assert room_state.playback_gate_segment_id == "opening_negative_1"
 
 
 def test_ai_turn_plan_prefers_eager_questions_and_fast_responses():
@@ -798,11 +1734,18 @@ def test_run_ai_turn_releases_cached_draft_after_response_delay(monkeypatch):
     fake_db = _FlowTestDB()
     broadcasted = []
     sleep_calls = []
+    coze_parameters = {
+        "ai_turns": {
+            "opening_negative_1": {
+                "response_delay_sec": 3,
+            }
+        }
+    }
 
     turn_plan = fc.flow_controller.resolve_ai_turn_plan(
         segment,
         room_state,
-        coze_parameters={},
+        coze_parameters=coze_parameters,
     )
     dependency_signature = fc.flow_controller._build_turn_dependency_signature(
         turn_plan,
@@ -839,6 +1782,9 @@ def test_run_ai_turn_releases_cached_draft_after_response_delay(monkeypatch):
     async def _fake_broadcast_to_room(_room_id, message):
         broadcasted.append(message)
 
+    async def _fake_get_coze_config_with_delay(_self):
+        return SimpleNamespace(parameters=coze_parameters)
+
     async def _fake_update_room_state(_room_id, **kwargs):
         for key, value in kwargs.items():
             setattr(room_state, key, value)
@@ -869,7 +1815,7 @@ def test_run_ai_turn_releases_cached_draft_after_response_delay(monkeypatch):
     monkeypatch.setattr(fc.websocket_manager, "broadcast_to_room", _fake_broadcast_to_room)
     monkeypatch.setattr(fc.room_manager, "update_room_state", _fake_update_room_state)
     monkeypatch.setattr(fc.db_module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(fc.ConfigService, "get_coze_config", _fake_get_coze_config)
+    monkeypatch.setattr(fc.ConfigService, "get_coze_config", _fake_get_coze_config_with_delay)
     monkeypatch.setattr(fc.ConfigService, "get_tts_config", _fake_get_tts_config)
     monkeypatch.setattr(
         fc.flow_controller,
@@ -1767,8 +2713,11 @@ def test_audio_transcription_error_marks_turn_failed():
         room_manager.rooms.pop(room_id, None)
 
     speech_messages = [m for m in broadcasted if m.get("type") == "speech"]
-    assert len(speech_messages) == 1
+    assert len(speech_messages) == 2
     assert speech_messages[0]["data"]["content"] == ""
+    assert speech_messages[0]["data"]["transcription_status"] == "processing"
+    assert speech_messages[1]["data"]["speech_id"] == speech_messages[0]["data"]["speech_id"]
+    assert speech_messages[1]["data"]["transcription_status"] == "failed"
     assert room_state.turn_processing_status == "failed"
     assert room_state.turn_processing_kind == "asr"
     assert room_state.turn_processing_error == "ASR service unavailable"
@@ -1933,6 +2882,103 @@ def test_ai_turn_broadcasts_text_before_audio(monkeypatch):
     assert speech_messages[1]["data"]["content"] == "这是先到的AI文本"
     assert speech_messages[1]["data"]["audio_url"] == "/uploads/audio/test-ai.mp3"
     assert speech_messages[0]["data"]["speech_id"] == speech_messages[1]["data"]["speech_id"]
+
+
+def test_stale_ai_tts_result_does_not_update_new_segment(monkeypatch):
+    from services import flow_controller as fc
+
+    room_id = "test_room_stale_ai_tts_001"
+    debate_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        current_speaker="ai_1",
+        segment_index=1,
+        segment_id="opening_negative_1",
+        segment_title="立论阶段：反方一辩",
+    )
+    room_state.ai_debaters = [{"id": "ai_1", "name": "AI一辩"}]
+    room_manager.rooms[room_id] = room_state
+
+    segment = {
+        "id": "opening_negative_1",
+        "title": "立论阶段：反方一辩",
+        "phase": DebatePhase.OPENING,
+        "duration": 180,
+        "mode": "fixed",
+        "speaker_roles": ["ai_1"],
+    }
+    draft = {
+        "speaker_role": "ai_1",
+        "draft_text": "旧阶段 AI 回复",
+        "configured_audio_format": "mp3",
+    }
+
+    fake_db = _FlowTestDB()
+    broadcasted = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_stream_live(**kwargs):
+        return {
+            "audio_data": None,
+            "audio_format": None,
+            "chunk_count": 0,
+            "used_streaming": False,
+        }
+
+    async def _fake_synthesize_speech(**kwargs):
+        room_state.segment_index = 2
+        room_state.segment_id = "next_segment"
+        room_state.segment_title = "新阶段"
+        room_state.current_speaker = "debater_2"
+        room_state.turn_processing_status = "idle"
+        room_state.turn_processing_kind = None
+        room_state.turn_speech_committed = False
+        room_state.ai_turn_segment_id = "next_segment"
+        room_state.ai_turn_speaker_role = "debater_2"
+        return b"old-audio"
+
+    async def _fake_save_audio_file(_audio_data, _filename):
+        return "old-stage.mp3"
+
+    monkeypatch.setattr(fc.websocket_manager, "broadcast_to_room", _fake_broadcast_to_room)
+    monkeypatch.setattr(
+        fc.voice_processor,
+        "synthesize_speech_stream_live",
+        _fake_stream_live,
+    )
+    monkeypatch.setattr(fc.voice_processor, "synthesize_speech", _fake_synthesize_speech)
+    monkeypatch.setattr(fc.voice_processor, "save_audio_file", _fake_save_audio_file)
+    monkeypatch.setattr(
+        fc.voice_processor,
+        "build_audio_url",
+        lambda _path: "/uploads/old-stage.mp3",
+    )
+
+    try:
+        released = asyncio.run(
+            fc.flow_controller.release_ai_speech(
+                room_id=room_id,
+                segment=segment,
+                room_state=room_state,
+                draft=draft,
+                db=fake_db,
+            )
+        )
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    speech_messages = [m for m in broadcasted if m.get("type") == "speech"]
+    assert released is False
+    assert len(speech_messages) == 1
+    assert speech_messages[0]["data"]["audio_status"] == "processing"
+    assert room_state.segment_id == "next_segment"
+    assert room_state.current_speaker == "debater_2"
+    assert room_state.turn_speech_committed is False
+    assert room_state.turn_processing_status == "idle"
 
 
 def test_ai_turn_broadcasts_realtime_tts_chunks(monkeypatch):

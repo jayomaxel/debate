@@ -22,7 +22,7 @@ interface DebateAudioControlProps {
   onToggleMic?: () => void;
   onToggleVideo?: () => void;
   onRequestStartRecording?: () => Promise<boolean>;
-  onSendAudio?: (audioBlob: Blob, clientTranscript?: string) => void;
+  onSendAudio?: (audioBlob: Blob, clientTranscript?: string) => void | Promise<void>;
   onGrabMic?: () => void;
   onEndTurn?: () => void;
 }
@@ -121,7 +121,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       }
       
       // 发送音频
-      onSendAudio?.(audioBlob, clientTranscript);
+      await onSendAudio?.(audioBlob, clientTranscript);
     } catch (err: any) {
       stopClientSpeechRecognition();
       console.error('Failed to stop recording:', err);
@@ -193,6 +193,15 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
             {micStatusText}
           </p>
         </div>
+      )}
+
+      {recordingError && (
+        <Alert variant="destructive" className="w-full py-2 px-3">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="text-xs leading-relaxed">
+            {recordingError}
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* 核心操作区 */}

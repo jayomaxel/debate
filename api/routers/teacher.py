@@ -131,17 +131,17 @@ async def get_classes(
         )
 
 
-@router.get("/dashboard", summary="鑾峰彇鏁欏笀鎺у埗鍙扮粺璁?")
+@router.get("/dashboard", summary="获取教师控制台统计")
 async def get_teacher_dashboard(
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db)
 ):
-    """鑾峰彇鏁欏笀鎺у埗鍙扮粺璁版嵁"""
+    """获取教师控制台统计数据"""
     try:
         analytics = AnalyticsService(db)
         return {
             "code": 200,
-            "message": "鑾峰彇鎴愬姛",
+            "message": "获取成功",
             "data": analytics.get_teacher_dashboard(str(current_user.id))
         }
     except ValueError as e:

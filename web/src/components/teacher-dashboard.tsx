@@ -32,6 +32,7 @@ import {
   buildDebateDescription,
   parseDebateDescription,
 } from '@/lib/debate-description';
+import { debateDebug } from '@/lib/utils';
 import UserProfile from './user-profile';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
@@ -388,7 +389,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   const handleEditDebate = async (debate: TeacherDebate) => {
-    console.log('Editing debate (initial):', debate);
+    debateDebug('TeacherDashboard', 'Editing debate initial', {
+      debateId: debate.id,
+      status: debate.status,
+    });
 
     // Set basic info first for immediate feedback
     setEditingDebateId(debate.id);
@@ -401,7 +405,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     try {
       // Fetch latest details to ensure we have student_ids
       const debateDetails = await TeacherService.getDebate(debate.id);
-      console.log('Editing debate (fetched):', debateDetails);
+      debateDebug('TeacherDashboard', 'Editing debate fetched', {
+        debateId: debateDetails.id,
+        status: debateDetails.status,
+        studentCount: debateDetails.student_ids?.length || 0,
+      });
 
       const descriptionMeta = parseDebateDescription(debateDetails.description);
       const rounds = descriptionMeta.rounds || '3';
@@ -576,109 +584,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
-  // 加载状态
-  /*
-  const handleSaveDebate = async (saveMode: 'draft' | 'published') => {
-    if (!debateConfig.class_id) {
-      setError('璇烽€夋嫨鐝骇');
-      return;
-    }
-
-    if (!debateConfig.topic.trim()) {
-      setError('\u8bf7\u8f93\u5165\u8fa9\u8bba\u4e3b\u9898');
-      return;
-    }
-
-    if (saveMode === 'published' && selectedStudentIds.length === 0) {
-      setError('璇疯嚦灏戦€夋嫨涓€鍚嶅鐢熷弬涓庤京璁?);
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-      setSubmitMode(saveMode);
-      setError(null);
-
-      const params: CreateDebateParams = {
-        class_id: debateConfig.class_id,
-        topic: debateConfig.topic.trim(),
-        duration: parseInt(debateConfig.duration, 10),
-        description: buildDebateDescription(debateConfig.rounds, debateConfig.knowledgePoints),
-        student_ids: selectedStudentIds,
-        status: saveMode,
-      };
-
-      if (editingDebateId) {
-        const updatedDebate = await TeacherService.updateDebate(editingDebateId, params);
-        setDebates(prev => prev.map(d => d.id === editingDebateId ? updatedDebate : d));
-        setDebateDetailsById(prev => ({ ...prev, [editingDebateId]: updatedDebate }));
-        toast({
-          variant: 'success',
-          title: editingDebateStatus === 'draft' && saveMode === 'published' ? '鑽夌鍙戝竷鎴愬姛' : '杈╄鏇存柊鎴愬姛',
-          description: editingDebateStatus === 'draft' && saveMode === 'published' ? '鑽夌宸插彂甯冿紝瀛︾敓鍙互鍔犲叆浜? : '杈╄淇℃伅宸蹭繚瀛?,
-          duration: 3000,
-        });
-      } else {
-        const newDebate = await TeacherService.createDebate(params);
-        setDebates(prev => [newDebate, ...prev]);
-        setDebateDetailsById(prev => ({ ...prev, [newDebate.id]: newDebate }));
-
-        if (saveMode === 'draft') {
-          toast({
-            variant: 'success',
-            title: '鑽夌宸蹭繚瀛?',
-            description: '鍙互鍦ㄥ巻鍙茶褰曚腑缁х画缂栬緫鎴栧彂甯?,
-            duration: 3000,
-          });
-        } else {
-          toast({
-            variant: 'success',
-            title: '杈╄鍒涘缓鎴愬姛',
-            description: `閭€璇风爜锛?{newDebate.invitation_code}锛堝凡鏅鸿兘鍒嗙粍锛塦,
-            duration: 5000,
-            action: (
-              <ToastAction
-                altText="鏌ョ湅鍒嗙粍"
-                onClick={() => {
-                  setActiveTab('history');
-                  setGroupingOpen(newDebate.id, true);
-                }}
-              >
-                鏌ョ湅鍒嗙粍
-              </ToastAction>
-            ),
-          });
-        }
-      }
-
-      try {
-        const latestStats = await TeacherService.getDashboardStats();
-        setDashboardStats(latestStats);
-      } catch (statsError) {
-        console.warn('Failed to refresh dashboard stats after save:', statsError);
-      }
-
-      setDebateConfig({
-        topic: '',
-        duration: '30',
-        rounds: '3',
-        class_id: selectedClass,
-        knowledgePoints: '',
-      });
-      setSelectedStudentIds([]);
-      setEditingDebateId(null);
-      setEditingDebateStatus(null);
-      setError(null);
-    } catch (err: any) {
-      console.error('Failed to save debate:', err);
-      setError(err.message || '淇濆瓨澶辫触');
-    } finally {
-      setSubmitting(false);
-      setSubmitMode(null);
-    }
-  };
-
-  */
   const handleSaveDebate = async (saveMode: 'draft' | 'published') => {
     if (!debateConfig.class_id) {
       setError('Please select a class');

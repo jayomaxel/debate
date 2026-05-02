@@ -1,0 +1,97 @@
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.db.local
+    image: debate-db:local
+    container_name: aidebate-db
+    environment:
+      POSTGRES_DB: debate_system
+      POSTGRES_USER: pgvector
+      POSTGRES_PASSWORD: pgvector
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pgvector -d debate_system"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aidebate-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: debate-api:dev
+    container_name: aidebate-api
+    environment:
+      DEBUG: "true"
+      DATABASE_URL: postgresql://pgvector:pgvector@db:5432/debate_system
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      SECRET_KEY: local-delivery-secret-key
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn main:app --host 0.0.0.0 --port 7860 --reload"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:7860:7860"
+    volumes:
+      - ./api:/app
+      - ./api/logs:/app/logs
+      - ./api/uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  web:
+    image: node:18-alpine
+    container_name: aidebate-web
+    working_dir: /app
+    network_mode: host
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./web:/app
+      - web_node_modules:/app/node_modules
+    command: >
+      sh -c "npm install -g pnpm@10.11.0 &&
+      pnpm install --frozen-lockfile &&
+      pnpm dev --host 0.0.0.0"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  web_node_modules:

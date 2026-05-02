@@ -680,11 +680,13 @@ class DebateRoomManager:
         logger.info(f"开始自动评分和报告生成: debate_id={debate_id}")
 
         try:
-            # 获取所有发言（包括AI和人类）
+            # 获取所有可用于评分的发言（包括AI和人类）。
+            # ASR 失败/空转写会保留 speech 供回放排查，但不能进入评分和报告上下文。
             speeches = db.execute(
-                select(Speech).where(
-                    Speech.debate_id == debate_id
-                ).order_by(Speech.timestamp)
+                select(Speech)
+                .where(Speech.debate_id == debate_id)
+                .where(Speech.is_valid_for_scoring.is_(True))
+                .order_by(Speech.timestamp)
             ).scalars().all()
             speeches = [
                 speech
