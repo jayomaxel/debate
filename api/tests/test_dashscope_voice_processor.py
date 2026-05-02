@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+import shutil
 
 from utils.voice_processor import voice_processor
 from config import settings
@@ -170,4 +171,45 @@ def test_persist_audio_for_dashscope_falls_back_from_invalid_public_prefix(
     assert public_url is not None
     assert public_url.startswith(
         "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr/"
+    )
+
+
+def test_fun_asr_realtime_falls_back_to_filetrans_when_ffmpeg_missing(
+    monkeypatch,
+):
+    captured = {}
+
+    async def _fake_filetrans(**kwargs):
+        captured.update(kwargs)
+        return {
+            "text": "fallback ok",
+            "duration": 1,
+            "confidence": 1.0,
+        }
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        voice_processor,
+        "_dashscope_transcribe_filetrans",
+        _fake_filetrans,
+    )
+
+    result = asyncio.run(
+        voice_processor._dashscope_sdk_transcribe_local(
+            audio_data=b"fake-webm",
+            audio_format="webm",
+            language="zh",
+            api_key="test-key",
+            model_name="fun-asr-realtime-2025-11-07",
+            parameters={},
+        )
+    )
+
+    assert result["text"] == "fallback ok"
+    assert "warning" in result
+    assert captured["audio_format"] == "webm"
+    assert captured["model_name"] == "qwen3-asr-flash-filetrans"
+    assert (
+        captured["api_endpoint"]
+        == "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
     )

@@ -1685,6 +1685,20 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                       <Pencil className='w-4 h-4 mr-1' />
                                       编辑
                                     </Button>
+                                    <Button
+                                      size='sm'
+                                      className='h-8 px-3 bg-blue-600 hover:bg-blue-700 text-white'
+                                      disabled={
+                                        !['published', 'in_progress'].includes(
+                                          debate.status
+                                        )
+                                      }
+                                      onClick={() =>
+                                        onNavigate('debate', debate.id)
+                                      }
+                                    >
+                                      进入
+                                    </Button>
                                     {/*<Button
                                         size="sm"
                                         className="h-8 px-3 bg-blue-600 hover:bg-blue-700 text-white"

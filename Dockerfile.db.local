@@ -1,14 +1,15 @@
 FROM postgres:15-alpine
 
-# Use a mirror that is reachable in this environment, then compile a
-# PostgreSQL 15-compatible pgvector from the vendored release archive.
-COPY pgvector-0.8.1.tar.gz /tmp/pgvector.tar.gz
+# Compile a PostgreSQL 15-compatible pgvector during the image build so
+# the database image no longer depends on a vendored archive in the repo.
+ARG PGVECTOR_VERSION=0.8.1
 
 RUN printf '%s\n%s\n' \
     'https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/main' \
     'https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/community' \
     > /etc/apk/repositories \
- && apk add --no-cache build-base tar clang19 llvm19 \
+ && apk add --no-cache build-base ca-certificates curl tar clang19 llvm19 \
+ && curl -fsSL "https://codeload.github.com/pgvector/pgvector/tar.gz/refs/tags/v${PGVECTOR_VERSION}" -o /tmp/pgvector.tar.gz \
  && mkdir -p /tmp/pgvector \
  && tar -xzf /tmp/pgvector.tar.gz -C /tmp/pgvector --strip-components=1 \
  && cd /tmp/pgvector \

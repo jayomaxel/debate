@@ -27,6 +27,8 @@ interface PendingStreamState {
  * 如果新的语音流在上一条尚未播完时到达，会先进等待队列，避免后来的语音直接截断前一条。
  */
 export class PcmStreamPlayer {
+  private static readonly INITIAL_PLAYBACK_LEAD_SECONDS = 0.18;
+  private static readonly STEADY_PLAYBACK_LEAD_SECONDS = 0.1;
   private audioContext: AudioContext | null = null;
   private nextPlaybackTime = 0;
   private activeStreamId: string | null = null;
@@ -107,7 +109,8 @@ export class PcmStreamPlayer {
     const context = await this.ensureAudioContext();
     this.activeStreamId = nextStreamId;
     this.streamChunkCount = nextStream.chunkCount;
-    this.nextPlaybackTime = context.currentTime + 0.05;
+    this.nextPlaybackTime =
+      context.currentTime + PcmStreamPlayer.STEADY_PLAYBACK_LEAD_SECONDS;
     this.clearReleaseTimer();
     audioPlaybackDebug('PcmStreamPlayer', '开始播放新的流式 TTS', {
       streamId: nextStreamId,
@@ -155,7 +158,14 @@ export class PcmStreamPlayer {
     source.buffer = audioBuffer;
     source.connect(context.destination);
 
-    const startAt = Math.max(context.currentTime + 0.02, this.nextPlaybackTime);
+    const desiredLeadSeconds =
+      streamState.chunkCount <= 1
+        ? PcmStreamPlayer.INITIAL_PLAYBACK_LEAD_SECONDS
+        : PcmStreamPlayer.STEADY_PLAYBACK_LEAD_SECONDS;
+    const startAt = Math.max(
+      context.currentTime + desiredLeadSeconds,
+      this.nextPlaybackTime
+    );
     source.onended = () => {
       this.scheduledNodes.delete(source);
     };

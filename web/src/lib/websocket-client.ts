@@ -1,4 +1,5 @@
 export type MessageType =
+  | 'room_joined'
   | 'state_update'
   | 'user_joined'
   | 'user_left'
@@ -49,6 +50,9 @@ interface WebSocketClientOptions {
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
   heartbeatInterval?: number;
+  onOpen?: () => void;
+  onClose?: (event?: CloseEvent) => void;
+  onError?: (error: Event) => void;
 }
 
 type ImportMetaWithEnv = ImportMeta & {
@@ -57,7 +61,7 @@ type ImportMetaWithEnv = ImportMeta & {
   };
 };
 
-const getWebSocketBaseUrl = () => {
+export const getWebSocketBaseUrl = () => {
   const envBase = (
     (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
   ).replace(/\/+$/, '');
@@ -72,6 +76,15 @@ const getWebSocketBaseUrl = () => {
   return `${protocol}//${window.location.host}`;
 };
 
+export const buildDebateWebSocketUrl = (roomId: string, token?: string) => {
+  const baseUrl = getWebSocketBaseUrl();
+  const roomPath = `/ws/debate/${encodeURIComponent(roomId)}`;
+  if (!token) {
+    return `${baseUrl}${roomPath}`;
+  }
+  return `${baseUrl}${roomPath}?token=${encodeURIComponent(token)}`;
+};
+
 export default class WebSocketClient {
   private socket: WebSocket | null = null;
   private handlers = new Map<MessageType, Set<EventHandler>>();
@@ -84,11 +97,17 @@ export default class WebSocketClient {
   private readonly reconnectInterval: number;
   private readonly maxReconnectAttempts: number;
   private readonly heartbeatInterval: number;
+  private readonly onOpen?: () => void;
+  private readonly onClose?: () => void;
+  private readonly onError?: (error: Event) => void;
 
   constructor(options: WebSocketClientOptions = {}) {
     this.reconnectInterval = options.reconnectInterval ?? 3000;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 5;
     this.heartbeatInterval = options.heartbeatInterval ?? 30000;
+    this.onOpen = options.onOpen;
+    this.onClose = options.onClose;
+    this.onError = options.onError;
   }
 
   async connect(roomId: string, token: string): Promise<void> {
@@ -97,7 +116,12 @@ export default class WebSocketClient {
     this.currentRoomId = roomId;
     this.currentToken = token;
 
-    const url = `${getWebSocketBaseUrl()}/ws/debate/${encodeURIComponent(roomId)}?token=${encodeURIComponent(token)}`;
+    const url = buildDebateWebSocketUrl(roomId, token);
+    const debugUrl = buildDebateWebSocketUrl(roomId);
+    console.debug('[WebSocketClient] Connecting to debate websocket', {
+      roomId,
+      url: debugUrl,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(url);
@@ -106,6 +130,11 @@ export default class WebSocketClient {
       socket.onopen = () => {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
+        console.debug('[WebSocketClient] Debate websocket connected', {
+          roomId,
+          url: debugUrl,
+        });
+        this.onOpen?.();
         resolve();
       };
 
@@ -113,12 +142,27 @@ export default class WebSocketClient {
         this.handleMessage(event.data);
       };
 
-      socket.onerror = () => {
+      socket.onerror = (event) => {
+        console.error('[WebSocketClient] Debate websocket error', {
+          roomId,
+          url: debugUrl,
+        });
+        this.onError?.(event);
         reject(new Error('WebSocket connection failed'));
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         this.stopHeartbeat();
+        this.socket = null;
+        console.warn('[WebSocketClient] Debate websocket closed', {
+          roomId,
+          url: debugUrl,
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          closedByUser: this.closedByUser,
+        });
+        this.onClose?.(event);
         if (!this.closedByUser) {
           this.scheduleReconnect();
         }

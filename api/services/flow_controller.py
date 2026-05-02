@@ -1042,6 +1042,23 @@ class DebateFlowController:
             return True
         return normalized_expected in normalized_actual
 
+    def _roles_equivalent(self, left: Optional[str], right: Optional[str]) -> bool:
+        return self._role_matches(left, right) or self._role_matches(right, left)
+
+    def _resolve_matching_role(
+        self, role: Optional[str], candidates: Optional[List[str]]
+    ) -> Optional[str]:
+        normalized_role = str(role or "").strip()
+        if not normalized_role:
+            return None
+        for candidate in candidates or []:
+            normalized_candidate = str(candidate or "").strip()
+            if not normalized_candidate:
+                continue
+            if self._roles_equivalent(normalized_candidate, normalized_role):
+                return normalized_candidate
+        return None
+
     def _resolve_playback_gate_deadline(self, duration_sec: int) -> datetime:
         normalized_duration = max(1, int(duration_sec or 1))
         buffer_sec = min(6.0, max(2.0, normalized_duration * 0.25))
@@ -2390,19 +2407,28 @@ class DebateFlowController:
         if not room_state:
             return False
 
+        matched_speaker_option = self._resolve_matching_role(
+            role, room_state.speaker_options or []
+        )
         if room_state.current_phase == DebatePhase.FREE_DEBATE:
-            return role in (room_state.speaker_options or [])
+            return matched_speaker_option is not None
 
         if room_state.speaker_mode == "choice":
-            if role not in (room_state.speaker_options or []):
+            if not matched_speaker_option:
                 return False
-            return not room_state.current_speaker or room_state.current_speaker == role
+            return (
+                not room_state.current_speaker
+                or self._roles_equivalent(
+                    room_state.current_speaker, matched_speaker_option
+                )
+            )
 
-        if role in (room_state.speaker_options or []):
+        if matched_speaker_option:
             return True
 
         return (
-            room_state.current_speaker == role or room_state.current_speaker == user_id
+            self._roles_equivalent(room_state.current_speaker, role)
+            or room_state.current_speaker == user_id
         )
 
     async def set_current_speaker(self, room_id: str, speaker_role: str) -> bool:
@@ -2410,24 +2436,31 @@ class DebateFlowController:
         if not room_state:
             return False
 
-        if speaker_role not in (room_state.speaker_options or []):
+        resolved_speaker_role = self._resolve_matching_role(
+            speaker_role, room_state.speaker_options or []
+        )
+        if not resolved_speaker_role:
             return False
         if (
             getattr(room_state, "speaker_mode", None) == "choice"
             and room_state.current_speaker
-            and room_state.current_speaker != speaker_role
+            and not self._roles_equivalent(
+                room_state.current_speaker, resolved_speaker_role
+            )
         ):
             return False
         if getattr(room_state, "turn_speech_committed", False):
             return False
 
-        await room_manager.update_room_state(room_id, current_speaker=speaker_role)
+        await room_manager.update_room_state(
+            room_id, current_speaker=resolved_speaker_role
+        )
         segments = self.get_segments(room_id)
         current_index = int(getattr(room_state, "segment_index", 0) or 0)
         segment = segments[current_index] if current_index < len(segments) else None
         if (
             segment
-            and str(speaker_role or "").startswith("ai_")
+            and str(resolved_speaker_role or "").startswith("ai_")
             and str(segment.get("mode") or "") in {"fixed", "choice"}
         ):
             if room_id in self.ai_tasks:
@@ -3651,6 +3684,12 @@ class DebateFlowController:
     ) -> Dict[str, Any]:
         speaker_role = str(speaker_role or room_state.current_speaker or "")
         segment_id = str(segment.get("id") or "")
+        logger.info(
+            "Preparing AI draft for room %s, segment %s, speaker %s",
+            room_id,
+            segment_id,
+            speaker_role,
+        )
         dependency_signature = self._build_turn_dependency_signature(
             turn_plan,
             recent_speeches,
@@ -3694,6 +3733,12 @@ class DebateFlowController:
         current_task = asyncio.current_task()
         fallback_due_to_wait_timeout = False
         if existing_task and existing_task is not current_task and not existing_task.done():
+            logger.info(
+                "Waiting on existing AI draft task for room %s, segment %s, speaker %s",
+                room_id,
+                segment_id,
+                speaker_role,
+            )
             try:
                 if self._is_topic_only_eager_turn(turn_plan) or self._is_reactive_fallback_turn(turn_plan):
                     await asyncio.wait_for(
@@ -3772,6 +3817,12 @@ class DebateFlowController:
                 or self._is_reactive_fallback_turn(turn_plan)
             ):
                 raise asyncio.TimeoutError()
+            logger.info(
+                "Generating AI draft text for room %s, segment %s, speaker %s",
+                room_id,
+                segment_id,
+                speaker_role,
+            )
             result = await asyncio.wait_for(
                 agent.generate_speech_with_audio(
                     speech_type=str(turn_plan.get("speech_type") or "free_debate"),
@@ -3812,6 +3863,14 @@ class DebateFlowController:
             draft["status"] = "failed"
             draft["error"] = str(exc)
             self._store_ai_draft(room_id, draft)
+            logger.error(
+                "AI draft generation failed for room %s, segment %s, speaker %s: %s",
+                room_id,
+                segment_id,
+                speaker_role,
+                exc,
+                exc_info=True,
+            )
             raise
 
         text = AIDebaterAgent.limit_reply_text(
@@ -3839,6 +3898,12 @@ class DebateFlowController:
             }
         )
         self._store_ai_draft(room_id, draft)
+        logger.info(
+            "AI draft ready for room %s, segment %s, speaker %s",
+            room_id,
+            segment_id,
+            speaker_role,
+        )
         return dict(draft)
 
     async def release_ai_speech(
@@ -3851,6 +3916,13 @@ class DebateFlowController:
     ) -> bool:
         if not self._is_room_segment_active(room_id, segment):
             return False
+
+        logger.info(
+            "Releasing AI speech for room %s, segment %s, speaker %s",
+            room_id,
+            str(segment.get("id") or ""),
+            str(draft.get("speaker_role") or room_state.current_speaker or ""),
+        )
 
         phase_for_turn = room_state.current_phase
         if phase_for_turn in {
@@ -3906,20 +3978,34 @@ class DebateFlowController:
             speaker_role=speaker_role,
         )
 
-        speech = Speech(
-            id=uuid.uuid4(),
-            debate_id=uuid.UUID(str(room_state.debate_id)),
-            speaker_id=None,
-            speaker_type="ai",
-            speaker_role=speaker_role,
-            phase=db_phase_value,
-            content=text,
-            audio_url=None,
-            duration=duration,
-            timestamp=speech_timestamp,
-        )
-        db.add(speech)
-        db.commit()
+        try:
+            speech = Speech(
+                id=uuid.uuid4(),
+                debate_id=uuid.UUID(str(room_state.debate_id)),
+                speaker_id=None,
+                speaker_type="ai",
+                speaker_role=speaker_role,
+                phase=db_phase_value,
+                content=text,
+                audio_url=None,
+                duration=duration,
+                timestamp=speech_timestamp,
+                transcription_status="completed",
+                transcription_error=None,
+                is_valid_for_scoring=True,
+            )
+            db.add(speech)
+            db.commit()
+        except Exception as exc:
+            logger.error(
+                "Failed to persist AI speech for room %s, segment %s, speaker %s: %s",
+                room_id,
+                str(segment.get("id") or ""),
+                speaker_role,
+                exc,
+                exc_info=True,
+            )
+            raise
 
         def build_speech_event(
             current_audio_url: Optional[str],
@@ -4229,13 +4315,29 @@ class DebateFlowController:
         turn_processing_kind = "llm"
         speaker_role = ""
         try:
+            logger.info(
+                "AI turn started for room %s, segment %s",
+                room_id,
+                str(segment.get("id") or ""),
+            )
             await asyncio.sleep(0.3)
             room_state = room_manager.get_room_state(room_id)
             if not room_state or not self._is_room_segment_active(room_id, segment):
+                logger.info(
+                    "AI turn aborted before start for room %s, segment %s because room or segment is inactive",
+                    room_id,
+                    str(segment.get("id") or ""),
+                )
                 return
 
             speaker_role = str(room_state.current_speaker or "")
             if not speaker_role.startswith("ai_"):
+                logger.info(
+                    "AI turn skipped for room %s, segment %s because current speaker is %s",
+                    room_id,
+                    str(segment.get("id") or ""),
+                    speaker_role,
+                )
                 return
 
             await self._set_ai_turn_state(
@@ -4286,6 +4388,12 @@ class DebateFlowController:
                 db_module.init_engine()
             db = db_module.SessionLocal()
             try:
+                logger.info(
+                    "AI turn loading debate and recent speeches for room %s, segment %s, speaker %s",
+                    room_id,
+                    str(segment.get("id") or ""),
+                    speaker_role,
+                )
                 debate = db.execute(
                     select(Debate).where(Debate.id == debate_uuid)
                 ).scalar_one_or_none()

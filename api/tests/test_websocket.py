@@ -514,6 +514,152 @@ def test_choice_cannot_switch_speaker_after_committed_speech(monkeypatch):
     assert room_state.current_speaker == "debater_2"
 
 
+def test_apply_choice_segment_with_all_ai_options_auto_selects_current_speaker(monkeypatch):
+    from services import flow_controller as fc
+
+    room_id = "test_room_choice_all_ai_auto_select_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    segment = {
+        "id": "questioning_2_neg_answer",
+        "title": "盘问第2轮：反方回答（二辩或三辩）",
+        "phase": DebatePhase.QUESTIONING,
+        "duration": 90,
+        "mode": "choice",
+        "speaker_roles": ["ai_2", "ai_3"],
+    }
+
+    async def _fake_update_room_state(_room_id, **kwargs):
+        for key, value in kwargs.items():
+            setattr(room_state, key, value)
+        return True
+
+    async def _noop_sync(*args, **kwargs):
+        return None
+
+    created_tasks = []
+
+    def _fake_create_task(coro):
+        created_tasks.append(coro)
+
+        class _FakeTask:
+            def cancel(self):
+                return None
+
+            def done(self):
+                return False
+
+            def __await__(self):
+                if False:
+                    yield None
+                return None
+
+        return _FakeTask()
+
+    monkeypatch.setattr(fc.room_manager, "update_room_state", _fake_update_room_state)
+    monkeypatch.setattr(fc.flow_controller, "_sync_upcoming_ai_prethinking", _noop_sync)
+    monkeypatch.setattr(fc.flow_controller, "_select_random_ai_speaker", lambda options: "ai_3")
+    monkeypatch.setattr(fc.asyncio, "create_task", _fake_create_task)
+
+    fc.flow_controller.segments[room_id] = [segment]
+    fc.flow_controller.segment_index[room_id] = 0
+
+    try:
+        applied = asyncio.run(fc.flow_controller._apply_current_segment(room_id))
+    finally:
+        for task in created_tasks:
+            task.close()
+        fc.flow_controller.ai_tasks.pop(room_id, None)
+        room_manager.rooms.pop(room_id, None)
+        fc.flow_controller.segments.pop(room_id, None)
+        fc.flow_controller.segment_index.pop(room_id, None)
+
+    assert applied is True
+    assert room_state.segment_id == "questioning_2_neg_answer"
+    assert room_state.speaker_mode == "choice"
+    assert room_state.current_speaker == "ai_3"
+    assert room_state.speaker_options == ["ai_2", "ai_3"]
+    assert len(created_tasks) == 1
+
+
+def test_apply_choice_segment_with_ai_1_or_ai_4_auto_selects_current_speaker(monkeypatch):
+    from services import flow_controller as fc
+
+    room_id = "test_room_choice_ai14_auto_select_001"
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+    )
+    room_manager.rooms[room_id] = room_state
+
+    segment = {
+        "id": "questioning_4_neg_answer",
+        "title": "盘问第4轮：反方回答（一辩或四辩）",
+        "phase": DebatePhase.QUESTIONING,
+        "duration": 90,
+        "mode": "choice",
+        "speaker_roles": ["ai_1", "ai_4"],
+    }
+
+    async def _fake_update_room_state(_room_id, **kwargs):
+        for key, value in kwargs.items():
+            setattr(room_state, key, value)
+        return True
+
+    async def _noop_sync(*args, **kwargs):
+        return None
+
+    created_tasks = []
+
+    def _fake_create_task(coro):
+        created_tasks.append(coro)
+
+        class _FakeTask:
+            def cancel(self):
+                return None
+
+            def done(self):
+                return False
+
+            def __await__(self):
+                if False:
+                    yield None
+                return None
+
+        return _FakeTask()
+
+    monkeypatch.setattr(fc.room_manager, "update_room_state", _fake_update_room_state)
+    monkeypatch.setattr(fc.flow_controller, "_sync_upcoming_ai_prethinking", _noop_sync)
+    monkeypatch.setattr(fc.flow_controller, "_select_random_ai_speaker", lambda options: "ai_4")
+    monkeypatch.setattr(fc.asyncio, "create_task", _fake_create_task)
+
+    fc.flow_controller.segments[room_id] = [segment]
+    fc.flow_controller.segment_index[room_id] = 0
+
+    try:
+        applied = asyncio.run(fc.flow_controller._apply_current_segment(room_id))
+    finally:
+        for task in created_tasks:
+            task.close()
+        fc.flow_controller.ai_tasks.pop(room_id, None)
+        room_manager.rooms.pop(room_id, None)
+        fc.flow_controller.segments.pop(room_id, None)
+        fc.flow_controller.segment_index.pop(room_id, None)
+
+    assert applied is True
+    assert room_state.segment_id == "questioning_4_neg_answer"
+    assert room_state.speaker_mode == "choice"
+    assert room_state.current_speaker == "ai_4"
+    assert room_state.speaker_options == ["ai_1", "ai_4"]
+    assert len(created_tasks) == 1
+
+
 def test_text_speech_commit_failure_does_not_broadcast_or_commit_turn():
     from routers import websocket as ws
 
@@ -779,6 +925,272 @@ def test_audio_initial_speech_commit_failure_stops_asr_and_broadcast():
     assert room_state.turn_speech_committed is False
     assert sent[-1]["type"] == "error"
     assert "保存失败" in sent[-1]["data"]["message"]
+
+
+def test_request_recording_allows_prefixed_participant_role():
+    from routers import websocket as ws
+
+    room_id = "test_room_request_recording_prefixed_role_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "team.debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    sent = []
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_request_recording_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"request_id": "req-1"},
+                db=None,
+            )
+        )
+    finally:
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert sent[-1]["type"] == "recording_permission"
+    assert sent[-1]["data"]["request_id"] == "req-1"
+    assert sent[-1]["data"]["allowed"] is True
+
+
+def test_non_moderator_cannot_start_advance_or_end_debate():
+    from routers import websocket as ws
+
+    room_id = "test_room_non_moderator_permissions_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        segment_id="opening_positive_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "debater_1", "name": "学生", "stance": "positive"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _DummyDB:
+        pass
+
+    sent = []
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(ws.handle_start_debate_message(room_id, user_id, {}, _DummyDB()))
+        asyncio.run(ws.handle_advance_segment_message(room_id, user_id, {}, _DummyDB()))
+        asyncio.run(ws.handle_end_debate_message(room_id, user_id, {}, _DummyDB()))
+    finally:
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    permission_messages = [
+        message["data"]["message"]
+        for message in sent
+        if message.get("type") == "permission_denied"
+    ]
+    assert permission_messages == [
+        "只有主持人可以开始辩论",
+        "只有主持人可以推进环节",
+        "只有主持人可以结束辩论",
+    ]
+
+
+def test_teacher_moderator_can_end_debate_on_last_segment(monkeypatch):
+    from routers import websocket as ws
+
+    room_id = "test_room_teacher_moderator_end_debate_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.CLOSING,
+        segment_index=14,
+        segment_id="closing_positive_4",
+    )
+    room_state.participants = [
+        {
+            "user_id": user_id,
+            "role": "teacher_moderator",
+            "name": "主持人",
+            "user_type": "teacher",
+            "can_moderate": True,
+            "can_speak": False,
+        }
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _DummyDB:
+        pass
+
+    called = []
+
+    async def _fake_end_debate(_room_id, _db):
+        called.append((_room_id, _db))
+        return True
+
+    monkeypatch.setattr(ws.room_manager, "end_debate", _fake_end_debate)
+
+    try:
+        asyncio.run(ws.handle_end_debate_message(room_id, user_id, {}, _DummyDB()))
+    finally:
+        room_manager.rooms.pop(room_id, None)
+
+    assert called
+    assert called[0][0] == room_id
+
+
+def test_request_recording_choice_mode_selects_prefixed_participant_role():
+    from routers import websocket as ws
+
+    room_id = "test_room_request_recording_choice_prefixed_role_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.QUESTIONING,
+        speaker_mode="choice",
+        current_speaker=None,
+        speaker_options=["debater_2", "debater_3"],
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "team.debater_3", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    broadcasted = []
+    sent = []
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_request_recording_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"request_id": "req-choice"},
+                db=None,
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert room_state.current_speaker == "debater_3"
+    assert broadcasted[-1]["type"] == "speaker_selected"
+    assert sent[-1]["type"] == "recording_permission"
+    assert sent[-1]["data"]["allowed"] is True
+
+
+def test_audio_message_accepts_prefixed_participant_role():
+    from routers import websocket as ws
+
+    room_id = "test_room_audio_prefixed_role_001"
+    debate_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=debate_id,
+        current_phase=DebatePhase.OPENING,
+        current_speaker="debater_1",
+    )
+    room_state.participants = [
+        {"user_id": user_id, "role": "team.debater_1", "name": "u1", "stance": "pro"}
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    class _DummyDB:
+        def add(self, obj):
+            self._last_added = obj
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    broadcasted = []
+    sent = []
+    transcribe_called = False
+
+    async def _fake_broadcast_to_room(_room_id, message):
+        broadcasted.append(message)
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    def _fake_decode_audio_base64(_b64):
+        return b"\x00\x01"
+
+    async def _fake_save_audio_file(_data, _filename):
+        return None
+
+    async def _fake_transcribe_audio(_data, **kwargs):
+        nonlocal transcribe_called
+        transcribe_called = True
+        return {"text": "prefixed role audio"}
+
+    orig_broadcast = ws.websocket_manager.broadcast_to_room
+    orig_send = ws.websocket_manager.send_to_user
+    orig_decode = ws.voice_processor.decode_audio_base64
+    orig_save = ws.voice_processor.save_audio_file
+    orig_transcribe = ws.voice_processor.transcribe_audio
+    try:
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast_to_room
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        ws.voice_processor.decode_audio_base64 = _fake_decode_audio_base64
+        ws.voice_processor.save_audio_file = _fake_save_audio_file
+        ws.voice_processor.transcribe_audio = _fake_transcribe_audio
+        asyncio.run(
+            ws.handle_audio_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"audio_data": "xx", "audio_format": "webm"},
+                db=_DummyDB(),
+            )
+        )
+    finally:
+        ws.websocket_manager.broadcast_to_room = orig_broadcast
+        ws.websocket_manager.send_to_user = orig_send
+        ws.voice_processor.decode_audio_base64 = orig_decode
+        ws.voice_processor.save_audio_file = orig_save
+        ws.voice_processor.transcribe_audio = orig_transcribe
+        room_manager.rooms.pop(room_id, None)
+
+    assert transcribe_called is True
+    assert [m for m in sent if m.get("type") == "permission_denied"] == []
+    speech_messages = [m for m in broadcasted if m.get("type") == "speech"]
+    assert len(speech_messages) == 2
+    assert speech_messages[-1]["data"]["content"] == "prefixed role audio"
 
 
 def test_stale_asr_success_does_not_mark_new_segment_committed():

@@ -1267,6 +1267,61 @@ class VoiceProcessor:
             else:
                 ffmpeg_path = shutil.which("ffmpeg")
                 if not ffmpeg_path:
+                    fallback_model_name = str(
+                        parameters.get("fallback_model_name") or ""
+                    ).strip()
+                    if not fallback_model_name:
+                        configured_model_name = str(
+                            settings.ASR_MODEL_NAME or ""
+                        ).strip()
+                        fallback_model_name = (
+                            configured_model_name
+                            if configured_model_name
+                            and not configured_model_name.startswith(
+                                "fun-asr-realtime"
+                            )
+                            else "qwen3-asr-flash-filetrans"
+                        )
+
+                    fallback_api_endpoint = str(
+                        parameters.get("fallback_api_endpoint") or ""
+                    ).strip()
+                    if not fallback_api_endpoint:
+                        configured_api_endpoint = str(
+                            settings.ASR_API_ENDPOINT or ""
+                        ).strip()
+                        if configured_api_endpoint.lower().startswith(
+                            ("http://", "https://")
+                        ):
+                            fallback_api_endpoint = configured_api_endpoint
+                        else:
+                            fallback_api_endpoint = (
+                                "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+                            )
+
+                    fallback_parameters = dict(parameters or {})
+                    fallback_parameters["provider"] = "dashscope"
+                    fallback_result = await self._dashscope_transcribe_filetrans(
+                        audio_data=audio_data,
+                        audio_format=src_format,
+                        language=language,
+                        api_key=api_key,
+                        api_endpoint=fallback_api_endpoint,
+                        model_name=fallback_model_name,
+                        parameters=fallback_parameters,
+                    )
+                    if fallback_result.get("error"):
+                        fallback_result["error"] = (
+                            "DashScope fun-asr-realtime needs WAV/PCM (16k mono). "
+                            f"Current audio format={src_format}, ffmpeg not found; "
+                            "auto-fallback to file transcription also failed: "
+                            f"{fallback_result['error']}"
+                        )
+                    else:
+                        fallback_result["warning"] = (
+                            "ffmpeg not found; auto-fallback to DashScope file transcription"
+                        )
+                    return fallback_result
                     return {
                         "text": "",
                         "duration": 0,

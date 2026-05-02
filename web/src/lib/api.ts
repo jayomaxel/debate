@@ -35,12 +35,30 @@ client.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
+  if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV) {
+    const requestUrl = `${config.baseURL || ''}${config.url || ''}`;
+    console.debug('[API] Request', {
+      method: String(config.method || 'get').toUpperCase(),
+      url: requestUrl || config.url,
+      hasToken: !!token,
+      origin: typeof window !== 'undefined' ? window.location.origin : '',
+    });
+  }
+
   return config;
 });
 
 client.interceptors.response.use(
   (response) => unwrapResponseData(response.data),
   async (error) => {
+    if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV) {
+      console.error('[API] Response error', {
+        method: String(error.config?.method || 'get').toUpperCase(),
+        url: `${error.config?.baseURL || ''}${error.config?.url || ''}`,
+        status: error.response?.status,
+        detail: error.response?.data,
+      });
+    }
     const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
 
     if (error.response?.status === 401 && !originalRequest?._retry) {

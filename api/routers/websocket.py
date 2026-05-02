@@ -26,13 +26,116 @@ from utils.audio_duration import (
 )
 from utils.speech_payload import build_speech_payload
 from models.user import User
-from services.room_manager import DebatePhase
+from services.room_manager import DebatePhase, TEACHER_MODERATOR_ROLE
 from models.speech import Speech
 from logging_config import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
+
+
+def _get_room_participant(room_id: str, user_id: str) -> dict | None:
+    room_state = room_manager.get_room_state(room_id)
+    if not room_state:
+        return None
+    return next(
+        (p for p in room_state.participants if str(p.get("user_id")) == str(user_id)),
+        None,
+    )
+
+
+def _is_teacher_moderator(participant: dict | None) -> bool:
+    if not participant:
+        return False
+    if bool(participant.get("can_moderate")):
+        return True
+    return str(participant.get("role") or "") == TEACHER_MODERATOR_ROLE
+
+
+def _can_participant_speak(participant: dict | None) -> bool:
+    if not participant:
+        return False
+    if _is_teacher_moderator(participant):
+        return False
+    if "can_speak" in participant:
+        return bool(participant.get("can_speak"))
+    return True
+
+
+def _normalize_role(role: object | None) -> str:
+    return str(role or "").strip()
+
+
+def _role_matches(expected: object | None, actual: object | None) -> bool:
+    normalized_expected = _normalize_role(expected)
+    normalized_actual = _normalize_role(actual)
+    if not normalized_expected or not normalized_actual:
+        return False
+    if normalized_expected == normalized_actual:
+        return True
+    if normalized_actual.endswith(f".{normalized_expected}"):
+        return True
+    return normalized_expected in normalized_actual
+
+
+def _roles_equivalent(left: object | None, right: object | None) -> bool:
+    return _role_matches(left, right) or _role_matches(right, left)
+
+
+def _resolve_matching_speaker_role(
+    role: object | None, speaker_roles: list[object] | tuple[object, ...] | None
+) -> str | None:
+    normalized_role = _normalize_role(role)
+    if not normalized_role:
+        return None
+
+    for candidate in speaker_roles or []:
+        candidate_role = _normalize_role(candidate)
+        if not candidate_role:
+            continue
+        if _roles_equivalent(candidate_role, normalized_role):
+            return candidate_role
+
+    return None
+
+
+async def _send_permission_denied(user_id: str, message: str) -> None:
+    await websocket_manager.send_to_user(
+        user_id,
+        {
+            "type": "permission_denied",
+            "data": {
+                "message": message,
+                "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+            },
+        },
+    )
+
+
+async def _send_moderator_permission_denied(user_id: str, action_label: str) -> None:
+    await _send_permission_denied(user_id, f"只有主持人可以{action_label}")
+
+
+async def _send_recording_permission(
+    user_id: str,
+    *,
+    request_id,
+    allowed: bool,
+    message: str,
+) -> None:
+    await websocket_manager.send_to_user(
+        user_id,
+        {
+            "type": "recording_permission",
+            "data": {
+                "request_id": request_id,
+                "allowed": allowed,
+                "message": message,
+                "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+            },
+        },
+    )
 
 
 def _extract_transcription_text_and_duration(transcription_result) -> tuple[str, int]:
@@ -167,6 +270,18 @@ async def websocket_debate_endpoint(
         room_state = room_manager.get_room_state(room_id)
         if room_state:
             try:
+                participant = _get_room_participant(room_id, user_id)
+                await websocket.send_json(
+                    {
+                        "type": "room_joined",
+                        "data": {
+                            "room_id": room_id,
+                            "user_id": user_id,
+                            "participant": participant,
+                            "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                        },
+                    }
+                )
                 await websocket.send_json(
                     {"type": "state_update", "data": room_state.to_dict()}
                 )
@@ -321,6 +436,10 @@ async def handle_speech_message(
     if not user_role:
         return
 
+    if not _can_participant_speak(participant):
+        await _send_permission_denied(user_id, "教师主持模式下不可发言")
+        return
+
     if not content:
         await websocket_manager.send_to_user(
             user_id,
@@ -367,12 +486,17 @@ async def handle_speech_message(
             )
             return
     else:
+        matched_speaker_option = _resolve_matching_speaker_role(
+            user_role, room_state.speaker_options or []
+        )
         if (
             room_state.speaker_mode == "choice"
             and not room_state.current_speaker
-            and user_role in (room_state.speaker_options or [])
+            and matched_speaker_option
         ):
-            selected = await flow_controller.set_current_speaker(room_id, user_role)
+            selected = await flow_controller.set_current_speaker(
+                room_id, matched_speaker_option
+            )
             if selected:
                 room_state = room_manager.get_room_state(room_id) or room_state
                 await websocket_manager.broadcast_to_room(
@@ -385,7 +509,7 @@ async def handle_speech_message(
                         },
                     },
                 )
-        if room_state.current_speaker != user_role:
+        if not _roles_equivalent(room_state.current_speaker, user_role):
             await websocket_manager.send_to_user(
                 user_id,
                 {
@@ -527,12 +651,18 @@ async def handle_grab_mic_message(
         return
 
     user_role = None
+    participant_info = None
     for participant in room_state.participants:
         if participant["user_id"] == user_id:
             user_role = participant["role"]
+            participant_info = participant
             break
 
     if not user_role:
+        return
+
+    if not _can_participant_speak(participant_info):
+        await _send_permission_denied(user_id, "教师主持模式下不可抢麦")
         return
 
     if (
@@ -631,6 +761,15 @@ async def handle_request_recording_message(
         )
         return
 
+    if not _can_participant_speak(participant):
+        await _send_recording_permission(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="教师主持模式下不可录音发言",
+        )
+        return
+
     user_role = str(participant.get("role"))
     segment_title = getattr(room_state, "segment_title", None) or str(
         getattr(room_state, "segment_id", "") or ""
@@ -713,12 +852,17 @@ async def handle_request_recording_message(
         return
 
     current_speaker = getattr(room_state, "current_speaker", None)
+    matched_speaker_option = _resolve_matching_speaker_role(
+        user_role, room_state.speaker_options or []
+    )
     if (
         room_state.speaker_mode == "choice"
         and not current_speaker
-        and user_role in (room_state.speaker_options or [])
+        and matched_speaker_option
     ):
-        selected = await flow_controller.set_current_speaker(room_id, user_role)
+        selected = await flow_controller.set_current_speaker(
+            room_id, matched_speaker_option
+        )
         if selected:
             room_state = room_manager.get_room_state(room_id) or room_state
             current_speaker = getattr(room_state, "current_speaker", None)
@@ -748,7 +892,7 @@ async def handle_request_recording_message(
         )
         return
 
-    if str(current_speaker) == user_role:
+    if _roles_equivalent(current_speaker, user_role):
         await websocket_manager.send_to_user(
             user_id,
             {
@@ -832,6 +976,10 @@ async def handle_audio_message(
         if not user_role:
             return
 
+        if not _can_participant_speak(participant):
+            await _send_permission_denied(user_id, "教师主持模式下不可发送语音")
+            return
+
         now = (datetime.utcnow() + timedelta(hours=8))
         is_free_debate = room_state.current_phase == DebatePhase.FREE_DEBATE
 
@@ -866,7 +1014,7 @@ async def handle_audio_message(
                 )
                 return
         else:
-            if room_state.current_speaker != user_role:
+            if not _roles_equivalent(room_state.current_speaker, user_role):
                 await websocket_manager.send_to_user(
                     user_id,
                     {
@@ -1297,6 +1445,10 @@ async def handle_select_speaker_message(
     if not participant:
         return
 
+    if _is_teacher_moderator(participant):
+        await _send_permission_denied(user_id, "教师主持模式下不可选择发言人")
+        return
+
     desired_role = data.get("role")
     if not desired_role:
         return
@@ -1342,17 +1494,8 @@ async def handle_start_debate_message(
     )
     if not participant:
         return
-    if participant.get("role") != "debater_1":
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "permission_denied",
-                "data": {
-                    "message": "只有正方一辩可以开始辩论",
-                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                },
-            },
-        )
+    if not _is_teacher_moderator(participant):
+        await _send_moderator_permission_denied(user_id, "开始辩论")
         return
     ok = await room_manager.start_debate(room_id, db)
     if not ok:
@@ -1382,17 +1525,8 @@ async def handle_advance_segment_message(
     )
     if not participant:
         return
-    if participant.get("role") != "debater_1":
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "permission_denied",
-                "data": {
-                    "message": "只有正方一辩可以推进环节",
-                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                },
-            },
-        )
+    if not _is_teacher_moderator(participant):
+        await _send_moderator_permission_denied(user_id, "推进环节")
         return
     ok = await flow_controller.force_advance_segment(room_id, reason="host_advance")
     if not ok:
@@ -1422,17 +1556,8 @@ async def handle_end_debate_message(
     )
     if not participant:
         return
-    if participant.get("role") != "debater_1":
-        await websocket_manager.send_to_user(
-            user_id,
-            {
-                "type": "permission_denied",
-                "data": {
-                    "message": "只有正方一辩可以结束辩论",
-                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
-                },
-            },
-        )
+    if not _is_teacher_moderator(participant):
+        await _send_moderator_permission_denied(user_id, "结束辩论")
         return
     if room_state.current_phase in (DebatePhase.WAITING, DebatePhase.FINISHED):
         await websocket_manager.send_to_user(
@@ -1530,6 +1655,9 @@ async def handle_end_turn_message(
     user_role = participant.get("role")
     if not user_role:
         return
+    if not _can_participant_speak(participant):
+        await _send_permission_denied(user_id, "教师主持模式下不可结束发言")
+        return
     now = (datetime.utcnow() + timedelta(hours=8))
     if (
         room_state.current_phase == DebatePhase.FREE_DEBATE
@@ -1597,7 +1725,7 @@ async def handle_end_turn_message(
         )
         await flow_controller.schedule_free_debate_ai_turn(room_id)
         return
-    if room_state.current_speaker != user_role:
+    if not _roles_equivalent(room_state.current_speaker, user_role):
         await websocket_manager.send_to_user(
             user_id,
             {

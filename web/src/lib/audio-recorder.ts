@@ -47,11 +47,7 @@ export default class AudioRecorder {
 
     this.chunks = [];
 
-    const mimeType = this.resolveMimeType();
-    this.mediaRecorder = new MediaRecorder(
-      this.stream,
-      mimeType ? { mimeType } : undefined
-    );
+    this.mediaRecorder = this.createMediaRecorder(this.stream);
 
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -114,6 +110,19 @@ export default class AudioRecorder {
     ].filter(Boolean) as string[];
 
     return candidates.find((mimeType) => MediaRecorder.isTypeSupported?.(mimeType));
+  }
+
+  private createMediaRecorder(stream: MediaStream): MediaRecorder {
+    const mimeType = this.resolveMimeType();
+    if (mimeType) {
+      try {
+        return new MediaRecorder(stream, { mimeType });
+      } catch {
+        // Some browsers misreport support for container/codec combinations.
+      }
+    }
+
+    return new MediaRecorder(stream);
   }
 
   private stopTracks(): void {

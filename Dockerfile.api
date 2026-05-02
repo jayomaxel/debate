@@ -1,5 +1,5 @@
 # 后端API Dockerfile
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # 设置时区为上海
 ENV TZ=Asia/Shanghai
@@ -12,20 +12,19 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 # 安装系统依赖（仅保留必需的）
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     tzdata \
     libglib2.0-0 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
-    libgdk-pixbuf-2.0-0 \
+    libgdk-pixbuf2.0-0 \
     libffi-dev \
     shared-mime-info \
-    fonts-noto-cjk \
-    fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件

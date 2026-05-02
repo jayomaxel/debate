@@ -18,6 +18,8 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
+TEACHER_MODERATOR_ROLE = "teacher_moderator"
+
 
 class DebatePhase(str, Enum):
     """辩论环节"""
@@ -216,6 +218,32 @@ class DebateRoomManager:
         # 存储房间状态: {room_id: RoomState}
         self.rooms: Dict[str, RoomState] = {}
 
+    @staticmethod
+    def build_teacher_moderator_participant(user: User) -> dict:
+        return {
+            "user_id": str(user.id),
+            "name": user.name,
+            "role": TEACHER_MODERATOR_ROLE,
+            "stance": None,
+            "user_type": "teacher",
+            "can_moderate": True,
+            "can_speak": False,
+        }
+
+    @staticmethod
+    def build_student_participant(
+        user: User, participation: DebateParticipation
+    ) -> dict:
+        return {
+            "user_id": str(user.id),
+            "name": user.name,
+            "role": str(participation.role),
+            "stance": str(participation.stance),
+            "user_type": "student",
+            "can_moderate": False,
+            "can_speak": True,
+        }
+
     async def create_room(self, room_id: str, debate_id: str, db: Session) -> RoomState:
         """
         创建辩论房间
@@ -289,6 +317,13 @@ class DebateRoomManager:
             return False
 
         # 获取参与信息
+        debate = db.execute(
+            select(Debate).where(Debate.id == debate_uuid)
+        ).scalar_one_or_none()
+        if not debate:
+            logger.error(f"Debate {room_state.debate_id} not found")
+            return False
+
         participation = db.execute(
             select(DebateParticipation).where(
                 DebateParticipation.debate_id == debate_uuid,
@@ -296,7 +331,9 @@ class DebateRoomManager:
             )
         ).scalar_one_or_none()
 
-        if not participation:
+        is_teacher_moderator = str(getattr(debate, "teacher_id", "")) == str(user_uuid)
+
+        if not participation and not is_teacher_moderator:
             logger.error(
                 f"User {user_id} is not a participant of debate {room_state.debate_id}"
             )
@@ -312,12 +349,11 @@ class DebateRoomManager:
             return True
 
         # 添加参与者
-        participant_info = {
-            "user_id": user_id,
-            "name": user.name,
-            "role": str(participation.role),
-            "stance": str(participation.stance),
-        }
+        participant_info = (
+            self.build_teacher_moderator_participant(user)
+            if is_teacher_moderator
+            else self.build_student_participant(user, participation)
+        )
         room_state.participants.append(participant_info)
 
         logger.info(f"User {user_id} joined room {room_id}")
@@ -333,10 +369,7 @@ class DebateRoomManager:
             {
                 "type": "user_joined",
                 "data": {
-                    "user_id": user_id,
-                    "name": user.name,
-                    "role": str(participation.role),
-                    "stance": str(participation.stance),
+                    **participant_info,
                     "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
                 },
             },

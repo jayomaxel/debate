@@ -458,6 +458,10 @@ class StudentService {
 
   static async getDebateParticipants(debateId: string): Promise<DebateParticipant[]> {
     try {
+      console.debug('[StudentService] Loading debate participants', {
+        debateId,
+        path: `/api/student/debates/${debateId}/participants`,
+      });
       return await api.get<DebateParticipant[]>(`/api/student/debates/${debateId}/participants`);
     } catch (error) {
       console.error('[StudentService] Get debate participants failed:', error);

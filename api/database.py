@@ -93,9 +93,40 @@ def init_db():
     if engine is None:
         init_engine()
     Base.metadata.create_all(bind=engine)
+    _ensure_speech_columns()
     _ensure_ability_assessment_columns()
     _ensure_debate_report_columns()
     _ensure_debate_participation_columns()
+
+
+def _ensure_speech_columns():
+    if engine is None:
+        return
+
+    inspector = inspect(engine)
+    if "speeches" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("speeches")}
+    required_columns = [
+        ("transcription_status", "VARCHAR(20)"),
+        ("transcription_error", "TEXT"),
+        ("is_valid_for_scoring", "BOOLEAN NOT NULL DEFAULT true"),
+    ]
+
+    with engine.begin() as conn:
+        for column_name, column_type in required_columns:
+            if column_name in existing_columns:
+                continue
+            conn.execute(text(f"ALTER TABLE speeches ADD COLUMN {column_name} {column_type}"))
+
+        conn.execute(
+            text(
+                "UPDATE speeches "
+                "SET transcription_status = 'failed', is_valid_for_scoring = false "
+                "WHERE (content IS NULL OR trim(content) = '') AND audio_url IS NOT NULL"
+            )
+        )
 
 
 def _ensure_ability_assessment_columns():

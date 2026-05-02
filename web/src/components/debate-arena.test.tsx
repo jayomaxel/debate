@@ -13,6 +13,7 @@ const websocketSendMock = vi.fn();
 const toastMock = vi.fn();
 const debateControlsPropsSpy = vi.fn();
 const debateAudioControlPropsSpy = vi.fn();
+const debateHeaderPropsSpy = vi.fn();
 const pcmPlayerInstances: MockPcmStreamPlayer[] = [];
 type MockPcmPlayerOptions = {
   onPlaybackStateChange?: (isPlaying: boolean) => void;
@@ -21,7 +22,10 @@ type MockPcmPlayerOptions = {
 };
 
 vi.mock('./debate-header', () => ({
-  default: () => <div data-testid="debate-header" />,
+  default: (props: any) => {
+    debateHeaderPropsSpy(props);
+    return <div data-testid="debate-header" />;
+  },
 }));
 
 vi.mock('./participant-video', () => ({
@@ -440,5 +444,86 @@ describe('DebateArena', () => {
         playback_source: 'stream',
       })
     );
+  });
+
+  it('should hide speaking controls in teacher moderator mode', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const stateUpdateHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'state_update'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    act(() => {
+      stateUpdateHandler?.({
+        current_phase: 'waiting',
+        participants: [
+          {
+            user_id: 'user-001',
+            role: 'teacher_moderator',
+            name: '测试老师',
+            user_type: 'teacher',
+            can_moderate: true,
+            can_speak: false,
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(debateAudioControlPropsSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          showSpeakingControls: false,
+        })
+      );
+      expect(debateControlsPropsSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          showInput: false,
+          canSpeak: false,
+        })
+      );
+    });
+  });
+
+  it('should not expose moderator controls for a normal student participant', async () => {
+    render(<DebateArena roomId="room-001" onEndDebate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('room-001');
+    });
+
+    const stateUpdateHandler = websocketOnMock.mock.calls.find(
+      ([eventType]: [string, unknown]) => eventType === 'state_update'
+    )?.[1] as ((data: any) => void) | undefined;
+
+    act(() => {
+      stateUpdateHandler?.({
+        current_phase: 'closing',
+        segment_id: 'closing_positive_4',
+        segment_index: 14,
+        participants: [
+          {
+            user_id: 'user-001',
+            role: 'debater_1',
+            name: '测试学生',
+            user_type: 'student',
+            can_moderate: false,
+            can_speak: true,
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(debateHeaderPropsSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          canAdvanceSegment: false,
+          canEndDebate: false,
+        })
+      );
+    });
   });
 });

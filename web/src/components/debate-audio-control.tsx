@@ -18,6 +18,7 @@ interface DebateAudioControlProps {
   isMuted?: boolean;
   isVideoOff?: boolean;
   canGrabMic?: boolean;
+  showSpeakingControls?: boolean;
   micStatusText?: string;
   onToggleMic?: () => void;
   onToggleVideo?: () => void;
@@ -31,6 +32,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   isMuted = false,
   isVideoOff = false,
   canGrabMic = false,
+  showSpeakingControls = true,
   micStatusText,
   onToggleMic,
   onToggleVideo,
@@ -95,7 +97,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
         return;
       }
       if (!audioRecorderRef.current) {
-        audioRecorderRef.current = new AudioRecorder({ mimeType: 'audio/wav', sampleRate: 16000 });
+        audioRecorderRef.current = new AudioRecorder({ sampleRate: 16000 });
       }
       await audioRecorderRef.current.startRecording();
       startClientSpeechRecognition();
@@ -207,7 +209,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       {/* 核心操作区 */}
       <div className="flex flex-col gap-4 w-full mt-4">
         {/* 抢麦按钮 - 移到这里，更显眼 */}
-        {canGrabMic && (
+        {showSpeakingControls && canGrabMic && (
           <Button
             onClick={handleGrabMic}
             className="w-full h-14 rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center gap-2 bg-gradient-to-br from-purple-500 to-purple-700 hover:from-purple-400 hover:to-purple-600 border border-purple-400/30 animate-pulse"
@@ -217,7 +219,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
           </Button>
         )}
 
-        <Button
+        {showSpeakingControls && <Button
           onClick={async () => {
             if (isRecording) {
               await handleStopRecording();
@@ -244,9 +246,9 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
               <span className="font-medium text-white">点击录音</span>
             </>
           )}
-        </Button>
+        </Button>}
 
-        <Button
+        {showSpeakingControls && <Button
           onClick={handleEndTurn}
           className={`w-full h-12 rounded-xl shadow-md transition-all duration-300 flex items-center justify-center gap-2 ${
             'bg-gradient-to-br from-amber-500 to-amber-700 hover:from-amber-400 hover:to-amber-600 border border-amber-400/30'
@@ -256,7 +258,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
             <div className="w-full h-full bg-current rounded-[1px]" />
           </div>
           <span className="font-medium text-white">结束发言</span>
-        </Button>
+        </Button>}
       </div>
 
       {/* 底部功能区 - 移除抢麦按钮 */}

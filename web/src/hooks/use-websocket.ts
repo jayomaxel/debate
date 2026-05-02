@@ -64,6 +64,15 @@ export function useWebSocket(
   const [isConnected, setIsConnected] = useState(false);
   const clientRef = useRef<WebSocketClient | null>(null);
   const handlersRef = useRef<Map<MessageType, Set<EventHandler>>>(new Map());
+  const onConnectRef = useRef(onConnect);
+  const onDisconnectRef = useRef(onDisconnect);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onConnectRef.current = onConnect;
+    onDisconnectRef.current = onDisconnect;
+    onErrorRef.current = onError;
+  }, [onConnect, onDisconnect, onError]);
 
   /**
    * 初始化WebSocket客户端
@@ -74,6 +83,23 @@ export function useWebSocket(
         reconnectInterval,
         maxReconnectAttempts,
         heartbeatInterval,
+        onOpen: () => {
+          setIsConnected(true);
+          onConnectRef.current?.();
+        },
+        onClose: (event) => {
+          setIsConnected(false);
+          console.warn('[useWebSocket] Debate websocket disconnected', {
+            roomId,
+            code: event?.code,
+            reason: event?.reason,
+            wasClean: event?.wasClean,
+          });
+          onDisconnectRef.current?.();
+        },
+        onError: (error) => {
+          onErrorRef.current?.(error);
+        },
       });
     }
   }, [reconnectInterval, maxReconnectAttempts, heartbeatInterval]);
@@ -92,11 +118,14 @@ export function useWebSocket(
       if (!token) {
         throw new Error('No access token available');
       }
+      console.debug('[useWebSocket] Preparing debate websocket connection', {
+        roomId,
+        hasToken: !!token,
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+      });
 
       await clientRef.current.connect(roomId, token);
-      setIsConnected(true);
       audioPlaybackDebug('useWebSocket', '房间 websocket 连接成功', { roomId });
-      onConnect?.();
     } catch (error) {
       console.error('[useWebSocket] Connect failed:', error);
       audioPlaybackDebug('useWebSocket', '房间 websocket 连接失败', {
@@ -104,10 +133,10 @@ export function useWebSocket(
         error: String((error as any)?.message || error),
       });
       setIsConnected(false);
-      onError?.(error);
+      onErrorRef.current?.(error);
       throw error;
     }
-  }, [roomId, onConnect, onError]);
+  }, [roomId]);
 
   /**
    * 断开WebSocket连接
@@ -117,9 +146,8 @@ export function useWebSocket(
       audioPlaybackDebug('useWebSocket', '开始断开房间 websocket', { roomId });
       clientRef.current.disconnect();
       setIsConnected(false);
-      onDisconnect?.();
     }
-  }, [onDisconnect, roomId]);
+  }, [roomId]);
 
   /**
    * 发送消息

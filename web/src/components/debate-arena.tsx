@@ -24,7 +24,7 @@ import {
 } from '@/lib/debate-transcript';
 import { audioPlaybackDebug, debateDebug } from '@/lib/utils';
 import PcmStreamPlayer from '@/lib/pcm-stream-player';
-import type { MessageType } from '@/lib/websocket-client';
+import { buildDebateWebSocketUrl, type MessageType } from '@/lib/websocket-client';
 import {
   Users,
   Bot,
@@ -46,6 +46,9 @@ interface RoomParticipant {
   name: string;
   role: string;
   stance?: string | null;
+  user_type?: string | null;
+  can_moderate?: boolean;
+  can_speak?: boolean;
 }
 
 interface AIDebater {
@@ -96,6 +99,9 @@ const toRoomParticipant = (value: unknown): RoomParticipant | null => {
     name: String(value.name),
     role: String(value.role),
     stance: toOptionalString(value.stance),
+    user_type: toOptionalString(value.user_type),
+    can_moderate: value.can_moderate === undefined ? undefined : Boolean(value.can_moderate),
+    can_speak: value.can_speak === undefined ? undefined : Boolean(value.can_speak),
   };
 };
 
@@ -161,6 +167,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   }>>([]);
   const [backendFlowSegments, setBackendFlowSegments] = useState<FlowSegment[]>([]);
   const [isProcessingReport, setIsProcessingReport] = useState(false);
+  const [roomJoined, setRoomJoined] = useState(false);
+  const [participantsLoadError, setParticipantsLoadError] = useState<string | null>(null);
+  const [aiThinkingElapsedSec, setAiThinkingElapsedSec] = useState(0);
 
   const recordingPermissionWaiters = useRef<Map<string, { resolve: (result: { allowed: boolean; message?: string }) => void; timeoutId: number }>>(new Map());
   const liveTtsPlayerRef = useRef<PcmStreamPlayer | null>(null);
@@ -183,9 +192,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     onConnect: () => {
       debateDebug('DebateArena', 'Connected to debate room');
       setError(null);
+      setRoomJoined(false);
     },
     onDisconnect: () => {
       debateDebug('DebateArena', 'Disconnected from debate room');
+      setRoomJoined(false);
     },
     onError: (err) => {
       console.error('WebSocket error:', err);
@@ -270,10 +281,21 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
   const debateTopic = '辩论进行中';
   const currentUserId = user?.id || '';
+  const currentParticipant =
+    participants.find((p) => p.user_id === currentUserId) || null;
   const currentUserRole =
-    participants.find((p) => p.user_id === currentUserId)?.role ||
+    currentParticipant?.role ||
     assignedParticipants.find((p) => p.user_id === currentUserId)?.role ||
     null;
+  const currentUserCanModerate = !!currentParticipant?.can_moderate;
+  const isTeacherModeratorMode =
+    currentUserCanModerate || currentParticipant?.user_type === 'teacher';
+  const socketConnected = isConnected;
+  const debateReady = socketConnected && roomJoined;
+  const accessTokenExists =
+    typeof window !== 'undefined' ? !!window.localStorage.getItem('access_token') : false;
+  const debugOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const debugWebSocketUrl = roomId ? buildDebateWebSocketUrl(roomId) : '';
 
   useEffect(() => {
     // 将会在 websocket 回调中使用到的动态值同步到 ref，避免因为依赖变化重复解绑/重绑事件。
@@ -284,6 +306,34 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     toastRef.current = toast;
     onEndDebateRef.current = onEndDebate;
   }, [autoPlayEnabled, currentUserId, currentUserRole, speakerMode, toast, onEndDebate]);
+
+  useEffect(() => {
+    debateDebug('DebateArena', 'Mount or room changed', {
+      roomId,
+      origin: debugOrigin,
+      hasAccessToken: accessTokenExists,
+      userId: currentUserId,
+      userType: user?.user_type,
+      websocketUrl: debugWebSocketUrl,
+    });
+  }, [roomId, debugOrigin, accessTokenExists, currentUserId, user?.user_type, debugWebSocketUrl]);
+
+  useEffect(() => {
+    if (aiTurnStatus !== 'thinking') {
+      setAiThinkingElapsedSec(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setAiThinkingElapsedSec(0);
+    const timer = window.setInterval(() => {
+      setAiThinkingElapsedSec(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [aiTurnStatus, aiTurnSegmentTitle, aiTurnSpeakerRole]);
 
   useEffect(() => {
     if (autoPlayEnabled) {
@@ -441,6 +491,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     // 监听状态更新
     const handleStateUpdate = (data: WsPayload) => {
       debateDebug('DebateArena', 'State update', data);
+      setRoomJoined(true);
       const nextParticipants = toRoomParticipants(data.participants);
       const currentUserRoleFromState = nextParticipants.length > 0
         ? nextParticipants.find((participant) => participant.user_id === currentUserIdRef.current)?.role || currentUserRoleRef.current
@@ -470,6 +521,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       if (Array.isArray(data.flow_segments)) setBackendFlowSegments(toFlowSegments(data.flow_segments));
       if (Array.isArray(data.participants)) setParticipants(nextParticipants);
       if (Array.isArray(data.ai_debaters)) setAiDebaters(toAIDebaters(data.ai_debaters));
+    };
+
+    const handleRoomJoined = () => {
+      setRoomJoined(true);
+      setError(null);
     };
 
     // 监听用户加入事件
@@ -735,6 +791,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       });
     };
 
+    on('room_joined', handleRoomJoined);
     on('state_update', handleStateUpdate);
     on('user_joined', handleUserJoined);
     on('user_left', handleUserLeft);
@@ -759,6 +816,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     // 清理函数
     return () => {
       audioPlaybackDebug('DebateArena', '开始清理房间 websocket 监听', { roomId });
+      off('room_joined', handleRoomJoined);
       off('state_update', handleStateUpdate);
       off('user_joined', handleUserJoined);
       off('user_left', handleUserLeft);
@@ -784,12 +842,21 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
   useEffect(() => {
     const load = async () => {
-      if (!roomId) return;
+      if (!roomId) {
+        setAssignedParticipants([]);
+        setParticipantsLoadError('缺少 roomId，未发起参与者加载');
+        debateDebug('DebateArena', 'Skip loading participants because roomId is empty');
+        return;
+      }
       try {
+        setParticipantsLoadError(null);
         const data = await StudentService.getDebateParticipants(roomId);
         setAssignedParticipants(Array.isArray(data) ? data : []);
-      } catch {
+      } catch (loadError: any) {
         setAssignedParticipants([]);
+        setParticipantsLoadError(
+          String(loadError?.response?.data?.detail || loadError?.message || '参与者加载失败')
+        );
       }
     };
     load();
@@ -807,13 +874,13 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   };
 
   const handleSendMessage = (message: string) => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('speech', { content: message });
     }
   };
 
   const handleSendAudio = (audioBlob: Blob, clientTranscript?: string): Promise<void> => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onerror = () => {
@@ -855,7 +922,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   };
 
   const requestRecordingPermission = async (): Promise<{ allowed: boolean; message?: string }> => {
-    if (!isConnected) {
+    if (!isConnected || !roomJoined) {
       return { allowed: false, message: '未连接到辩论房间，请稍后重试' };
     }
     const requestId =
@@ -885,13 +952,13 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   };
 
   const handleGrabMic = () => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('grab_mic', {});
     }
   };
 
   const handleEndTurn = () => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('end_turn', {});
     } else {
       toast({
@@ -903,25 +970,25 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   };
 
   const handleStartDebate = () => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('start_debate', {});
     }
   };
 
   const handleAdvanceSegment = () => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('advance_segment', {});
     }
   };
 
   const handleSelectSpeaker = () => {
-    if (isConnected && currentUserRole) {
+    if (isConnected && roomJoined && currentUserRole) {
       send('select_speaker', { role: currentUserRole });
     }
   };
 
   const handleEndDebate = () => {
-    if (isConnected) {
+    if (isConnected && roomJoined) {
       send('end_debate', {});
     }
   };
@@ -954,12 +1021,19 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     const segmentLabel = aiTurnSegmentTitle || segmentTitle || phaseLabel(currentPhase);
 
     switch (normalizedStatus) {
-      case 'thinking':
+      case 'thinking': {
+        const waitingSuffix =
+          aiThinkingElapsedSec > 0 ? `，已等待 ${aiThinkingElapsedSec} 秒` : '';
+        const waitingHint =
+          aiThinkingElapsedSec >= 60
+            ? '，如果持续很久，通常说明后端卡在 AI 生成或数据库写入阶段'
+            : '';
         return {
           label: 'AI思考中',
-          detail: `${speakerName} 正在基于最新发言准备回应`,
+          detail: `${speakerName} 正在基于最新发言准备回应${waitingSuffix}${waitingHint}`,
           badgeClassName: 'bg-amber-500/20 text-amber-200 border-amber-400/40',
         };
+      }
       case 'ready':
         return {
           label: 'AI已准备，等待轮次',
@@ -1003,10 +1077,13 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     });
   }
   
-  const canSpeak = isFreeDebate
+  const canSpeak = isTeacherModeratorMode
+    ? false
+    : isFreeDebate
     ? micOwnerUserId === currentUserId && micActive
     : !!currentUserRole && roleMatches(currentUserRole, currentSpeakerRole);
-  const canGrabMic = isFreeDebate && !micActive && freeDebateNextSide !== 'ai';
+  const canGrabMic =
+    !isTeacherModeratorMode && isFreeDebate && !micActive && freeDebateNextSide !== 'ai';
   const micStatusText = isFreeDebate
     ? micActive
       ? `当前持麦：${micOwnerRole || ''}${micOwnerUserId === currentUserId ? '（你）' : ''}`
@@ -1014,11 +1091,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       ? aiTurnStatusMeta?.detail || '反方 AI 回合进行中，暂不可抢麦'
       : '当前无人持麦'
     : segmentTitle || undefined;
-  const isDebater1 = currentUserRole === 'debater_1';
-  const canStartDebate = isConnected && isDebater1 && currentPhase === 'waiting';
+  const canStartDebate = debateReady && currentUserCanModerate && currentPhase === 'waiting';
   const canSelectCurrentUserSpeaker =
-    isConnected &&
+    debateReady &&
     speakerMode === 'choice' &&
+    !isTeacherModeratorMode &&
     !!currentUserRole &&
     speakerOptions.some((role) => roleMatches(role, currentUserRole));
   const isCurrentUserSelectedSpeaker =
@@ -1048,10 +1125,15 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     (typeof segmentIndex === 'number' && segmentIndex === effectiveFlowSegments.length - 1);
 
   const hasDebater4Online = participants.some((p) => roleMatches('debater_4', p?.role));
-  const canAdvanceSegment = isConnected && isDebater1 && currentPhase !== 'waiting' && currentPhase !== 'finished' && !isLastSegment;
+  const canAdvanceSegment =
+    debateReady &&
+    currentUserCanModerate &&
+    currentPhase !== 'waiting' &&
+    currentPhase !== 'finished' &&
+    !isLastSegment;
   const canEndDebate =
-    isConnected &&
-    isDebater1 &&
+    debateReady &&
+    currentUserCanModerate &&
     currentPhase !== 'waiting' &&
     currentPhase !== 'finished' &&
     (isLastSegment ||
@@ -1074,11 +1156,22 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       )}
 
       {/* 连接状态指示器 */}
-      {!isConnected && (
+      {!roomJoined && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
           <Alert className="bg-amber-100 border-amber-300">
             <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
-            <AlertDescription className="text-amber-800">正在连接到辩论房间...</AlertDescription>
+            <AlertDescription className="text-amber-800">
+              {isConnected ? 'WebSocket 已连接，正在等待房间确认...' : '正在连接到辩论房间...'}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
+
+      {participantsLoadError && (
+        <div className="fixed top-16 right-4 z-50 max-w-md">
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{participantsLoadError}</AlertDescription>
           </Alert>
         </div>
       )}
@@ -1188,6 +1281,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
             isMuted={isMuted}
             isVideoOff={isVideoOff}
             canGrabMic={canGrabMic}
+            showSpeakingControls={!isTeacherModeratorMode}
             micStatusText={micStatusText}
             onToggleMic={handleToggleMic}
             onToggleVideo={handleToggleVideo}
@@ -1201,6 +1295,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         {/* 主内容区域 */}
         <div className="flex-1 flex flex-col h-full overflow-y-auto custom-scrollbar">
           <div className="max-w-7xl mx-auto w-full px-6 pt-4">
+            {isTeacherModeratorMode && (
+              <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
+              </div>
+            )}
             <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="text-sm text-slate-200">
@@ -1274,6 +1373,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                       {aiTurnStatusMeta.label}
                     </Badge>
                     <span className="text-sm text-slate-200">{aiTurnStatusMeta.detail}</span>
+                    {aiTurnStatus === 'thinking' && aiThinkingElapsedSec >= 60 && (
+                      <span className="text-xs text-amber-300">
+                        已等待 {aiThinkingElapsedSec} 秒，建议检查后端日志是否停在 AI 生成或数据库写入阶段
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
@@ -1390,6 +1494,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   {/* 底部控制区域 */}
   <DebateControls
     canSpeak={canSpeak}
+    showInput={!isTeacherModeratorMode}
     onSendMessage={handleSendMessage}
     transcript={transcript}
     autoPlayEnabled={autoPlayEnabled}
