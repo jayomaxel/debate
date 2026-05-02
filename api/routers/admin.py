@@ -11,6 +11,7 @@ import uuid
 from database import get_db
 from models.class_model import Class
 from models.user import User
+from services.avatar_service import AvatarService
 from services.class_service import ClassService
 from services.config_service import ConfigService
 from services.auth_service import AuthService
@@ -849,6 +850,7 @@ class UserListResponse(BaseModel):
     email: str
     phone: Optional[str] = None
     user_type: str
+    avatar: Optional[str] = None
     student_id: Optional[str] = None
     class_id: Optional[str] = None
     class_name: Optional[str] = None
@@ -892,6 +894,7 @@ def _build_user_response(user: User) -> UserListResponse:
         email=user.email,
         phone=user.phone,
         user_type=user.user_type,
+        avatar=AvatarService.build_avatar_payload(user)["avatar"],
         student_id=user.student_id,
         class_id=str(user.class_id) if user.class_id else None,
         class_name=user.class_.name if user.class_ else None,

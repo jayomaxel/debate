@@ -53,6 +53,13 @@ export interface DeleteAccountResult {
   note: string;
 }
 
+export interface DefaultAvatarOption {
+  key: string;
+  label: string;
+  palette: string[];
+  avatar_url: string;
+}
+
 // ==================== Auth Service ====================
 
 class AuthService {
@@ -233,9 +240,78 @@ class AuthService {
     class_id?: string;  // 新增：班级ID
   }): Promise<UserInfo> {
     try {
-      return await api.put('/api/auth/profile', params);
+      const profile = await api.put<UserInfo>('/api/auth/profile', params);
+      TokenManager.setUserInfo(profile);
+      return profile;
     } catch (error) {
       console.error('[AuthService] Update profile failed:', error);
+      throw error;
+    }
+  }
+
+  static async getDefaultAvatars(): Promise<DefaultAvatarOption[]> {
+    try {
+      return await api.get<DefaultAvatarOption[]>('/api/auth/avatars/defaults');
+    } catch (error) {
+      console.error('[AuthService] Get default avatars failed:', error);
+      throw error;
+    }
+  }
+
+  static async uploadAvatar(file: File): Promise<UserInfo> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const avatarData = await api.post<Partial<UserInfo>>(
+        '/api/auth/profile/avatar/upload',
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+      const nextUser = {
+        ...(TokenManager.getUserInfo() || {}),
+        ...avatarData,
+      } as UserInfo;
+      TokenManager.setUserInfo(nextUser);
+      return nextUser;
+    } catch (error) {
+      console.error('[AuthService] Upload avatar failed:', error);
+      throw error;
+    }
+  }
+
+  static async selectDefaultAvatar(avatarDefaultKey: string): Promise<UserInfo> {
+    try {
+      const avatarData = await api.put<Partial<UserInfo>>(
+        '/api/auth/profile/avatar/default',
+        { avatar_default_key: avatarDefaultKey }
+      );
+      const nextUser = {
+        ...(TokenManager.getUserInfo() || {}),
+        ...avatarData,
+      } as UserInfo;
+      TokenManager.setUserInfo(nextUser);
+      return nextUser;
+    } catch (error) {
+      console.error('[AuthService] Select default avatar failed:', error);
+      throw error;
+    }
+  }
+
+  static async clearAvatar(): Promise<UserInfo> {
+    try {
+      const avatarData = await api.delete<Partial<UserInfo>>('/api/auth/profile/avatar');
+      const nextUser = {
+        ...(TokenManager.getUserInfo() || {}),
+        ...avatarData,
+      } as UserInfo;
+      TokenManager.setUserInfo(nextUser);
+      return nextUser;
+    } catch (error) {
+      console.error('[AuthService] Clear avatar failed:', error);
       throw error;
     }
   }

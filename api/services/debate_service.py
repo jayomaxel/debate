@@ -480,6 +480,11 @@ class DebateService:
                 {
                     "user_id": str(p.user_id),
                     "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                    "avatar": (
+                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                        if user_by_id.get(p.user_id)
+                        else None
+                    ),
                     "role": p.role,
                     "role_reason": p.role_reason,
                 }
@@ -614,6 +619,11 @@ class DebateService:
                 {
                     "user_id": str(p.user_id),
                     "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                    "avatar": (
+                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                        if user_by_id.get(p.user_id)
+                        else None
+                    ),
                     "role": p.role,
                     "role_reason": p.role_reason,
                 }
@@ -761,6 +771,11 @@ class DebateService:
                 {
                     "user_id": str(p.user_id),
                     "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                    "avatar": (
+                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                        if user_by_id.get(p.user_id)
+                        else None
+                    ),
                     "role": p.role,
                     "role_reason": p.role_reason,
                 }

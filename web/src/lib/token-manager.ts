@@ -16,6 +16,10 @@ export interface UserInfo {
   phone?: string | null;
   student_id?: string | null;
   class_id?: string | null;
+  avatar?: string | null;
+  avatar_url?: string | null;
+  avatar_mode?: 'custom' | 'default' | 'none' | string;
+  avatar_default_key?: string | null;
   [key: string]: unknown;
 }
 

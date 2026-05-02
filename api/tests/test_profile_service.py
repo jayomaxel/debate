@@ -4,6 +4,7 @@ import pytest
 
 from models.class_model import Class
 from models.user import User
+from services.avatar_service import AvatarService
 from services.profile_service import ProfileService
 
 
@@ -132,3 +133,47 @@ def test_student_can_update_profile_with_same_class(db_session, profile_teacher_
     assert result["class_id"] == str(class_a.id)
     assert student.name == "New Name"
     assert student.class_id == class_a.id
+
+
+def test_profile_includes_avatar_payload(db_session):
+    student = User(
+        id=uuid.uuid4(),
+        account="student_avatar_profile",
+        password_hash="hashed_password",
+        user_type="student",
+        name="Avatar Student",
+        email="student-avatar-profile@test.com",
+        avatar_default_key="minimal-block-01",
+    )
+    db_session.add(student)
+    db_session.commit()
+
+    profile = ProfileService.get_profile(db=db_session, user_id=str(student.id))
+
+    assert profile["avatar_mode"] == "default"
+    assert profile["avatar_default_key"] == "minimal-block-01"
+    assert profile["avatar"]
+    assert profile["avatar_url"] == profile["avatar"]
+
+
+def test_apply_default_avatar_updates_profile(db_session):
+    teacher = User(
+        id=uuid.uuid4(),
+        account="teacher_avatar_default",
+        password_hash="hashed_password",
+        user_type="teacher",
+        name="Default Avatar Teacher",
+        email="teacher-avatar-default@test.com",
+    )
+    db_session.add(teacher)
+    db_session.commit()
+
+    AvatarService.apply_default_avatar(
+        db=db_session,
+        user=teacher,
+        default_key="minimal-block-02",
+    )
+
+    refreshed = ProfileService.get_profile(db=db_session, user_id=str(teacher.id))
+    assert refreshed["avatar_mode"] == "default"
+    assert refreshed["avatar_default_key"] == "minimal-block-02"
