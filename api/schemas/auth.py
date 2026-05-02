@@ -28,7 +28,14 @@ class UserResponse(BaseModel):
     account: str
     name: str
     email: Optional[str] = None
+    phone: Optional[str] = None
+    student_id: Optional[str] = None
+    class_id: Optional[str] = None
     user_type: str
+    avatar: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatar_mode: Optional[str] = None
+    avatar_default_key: Optional[str] = None
     created_at: Optional[datetime] = None
     
     class Config:
@@ -107,6 +114,11 @@ class UpdateProfileRequest(BaseModel):
     phone: Optional[str] = None
     student_id: Optional[str] = None
     class_id: Optional[str] = None
+
+
+class SelectDefaultAvatarRequest(BaseModel):
+    """Select default avatar request"""
+    avatar_default_key: str
 
 
 class DeleteAccountRequest(BaseModel):

@@ -1,14 +1,16 @@
 """
 认证API路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from database import get_db
 from models.user import User
 from services.auth_service import AuthService
+from services.avatar_service import AvatarService
 from middleware.auth_middleware import verify_token_middleware
+from schemas.auth import SelectDefaultAvatarRequest
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -311,6 +313,78 @@ async def update_profile(
         )
 
 
+@router.get("/avatars/defaults", summary="获取默认头像列表")
+async def get_default_avatars():
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": AvatarService.list_default_avatars(),
+    }
+
+
+@router.post("/profile/avatar/upload", summary="上传自定义头像")
+async def upload_profile_avatar(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verify_token_middleware),
+):
+    try:
+        content = await file.read()
+        avatar_payload = AvatarService.apply_custom_avatar(
+            db=db,
+            user=current_user,
+            content=content,
+            filename=file.filename,
+        )
+        return {
+            "code": 200,
+            "message": "头像上传成功",
+            "data": avatar_payload,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.put("/profile/avatar/default", summary="切换默认头像")
+async def select_default_avatar(
+    request: SelectDefaultAvatarRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verify_token_middleware),
+):
+    try:
+        avatar_payload = AvatarService.apply_default_avatar(
+            db=db,
+            user=current_user,
+            default_key=request.avatar_default_key,
+        )
+        return {
+            "code": 200,
+            "message": "默认头像已更新",
+            "data": avatar_payload,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/profile/avatar", summary="清除头像")
+async def clear_profile_avatar(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verify_token_middleware),
+):
+    avatar_payload = AvatarService.clear_avatar(db=db, user=current_user)
+    return {
+        "code": 200,
+        "message": "头像已清除",
+        "data": avatar_payload,
+    }
+
+
 
 class DeleteAccountRequest(BaseModel):
     password: str
@@ -351,4 +425,3 @@ async def delete_account(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-

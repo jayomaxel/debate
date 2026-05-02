@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".doc"}
+    AVATAR_MAX_UPLOAD_SIZE: int = 2 * 1024 * 1024  # 2MB
     
     # 邮件配置
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")

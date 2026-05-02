@@ -93,10 +93,42 @@ def init_db():
     if engine is None:
         init_engine()
     Base.metadata.create_all(bind=engine)
+    _ensure_user_avatar_columns()
     _ensure_speech_columns()
     _ensure_ability_assessment_columns()
     _ensure_debate_report_columns()
     _ensure_debate_participation_columns()
+
+
+def _ensure_user_avatar_columns():
+    if engine is None:
+        return
+
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("users")}
+    required_columns = [
+        ("avatar_blob", "BYTEA"),
+        ("avatar_mime_type", "VARCHAR(100)"),
+        ("avatar_filename", "VARCHAR(255)"),
+        ("avatar_default_key", "VARCHAR(64)"),
+    ]
+
+    if engine.dialect.name == "sqlite":
+        required_columns = [
+            ("avatar_blob", "BLOB"),
+            ("avatar_mime_type", "VARCHAR(100)"),
+            ("avatar_filename", "VARCHAR(255)"),
+            ("avatar_default_key", "VARCHAR(64)"),
+        ]
+
+    with engine.begin() as conn:
+        for column_name, column_type in required_columns:
+            if column_name in existing_columns:
+                continue
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}"))
 
 
 def _ensure_speech_columns():

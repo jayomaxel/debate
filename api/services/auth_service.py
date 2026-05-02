@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from models.user import User
+from services.avatar_service import AvatarService
+from services.profile_service import ProfileService
 from utils.security import hash_password, verify_password, create_access_token, create_refresh_token
 from utils.user_email import build_placeholder_email, to_public_email
 import uuid
@@ -17,6 +19,25 @@ class AuthService:
     # Administrator constants
     ADMIN_USERNAME = "admin"
     ADMIN_DEFAULT_PASSWORD = "Admin123!"
+
+    @staticmethod
+    def _serialize_user_summary(user: User) -> Dict[str, Any]:
+        profile = ProfileService.serialize_profile(user)
+        return {
+            "id": profile["id"],
+            "account": profile["account"],
+            "name": profile["name"],
+            "email": profile["email"],
+            "phone": profile["phone"],
+            "student_id": profile["student_id"],
+            "class_id": profile["class_id"],
+            "user_type": profile["user_type"],
+            "avatar": profile["avatar"],
+            "avatar_url": profile["avatar_url"],
+            "avatar_mode": profile["avatar_mode"],
+            "avatar_default_key": profile["avatar_default_key"],
+            "created_at": user.created_at,
+        }
     
     @staticmethod
     def register_teacher(
@@ -89,7 +110,8 @@ class AuthService:
             "name": user.name,
             "email": user.email,
             "user_type": user.user_type,
-            "class_id": str(user.class_id) if user.class_id else None
+            "class_id": str(user.class_id) if user.class_id else None,
+            "avatar": AvatarService.build_avatar_payload(user)["avatar"],
         }
     
     @staticmethod
@@ -166,7 +188,8 @@ class AuthService:
             "email": to_public_email(user.email),
             "user_type": user.user_type,
             "student_id": user.student_id,
-            "class_id": str(user.class_id) if user.class_id else None
+            "class_id": str(user.class_id) if user.class_id else None,
+            "avatar": AvatarService.build_avatar_payload(user)["avatar"],
         }
     
     @staticmethod
@@ -234,13 +257,7 @@ class AuthService:
             "refresh_token": refresh_token,
             "token_type": "bearer",
             "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 转换为秒
-            "user": {
-                "id": str(user.id),
-                "account": user.account,
-                "name": user.name,
-                "email": to_public_email(user.email),
-                "user_type": user.user_type
-            }
+            "user": AuthService._serialize_user_summary(user)
         }
     
     @staticmethod
@@ -291,7 +308,8 @@ class AuthService:
             "access_token": new_access_token,
             "refresh_token": new_refresh_token,
             "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "user": AuthService._serialize_user_summary(user),
         }
     
     @staticmethod
@@ -427,13 +445,7 @@ class AuthService:
             "refresh_token": refresh_token,
             "token_type": "bearer",
             "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "user": {
-                "id": str(admin_user.id),
-                "account": admin_user.account,
-                "name": admin_user.name,
-                "email": admin_user.email,
-                "user_type": admin_user.user_type
-            }
+            "user": AuthService._serialize_user_summary(admin_user)
         }
     
     @staticmethod

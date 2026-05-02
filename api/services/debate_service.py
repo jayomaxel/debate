@@ -8,6 +8,7 @@ from models.debate import Debate, DebateParticipation
 from models.user import User
 from models.class_model import Class
 from services.assessment_service import AssessmentService
+from services.avatar_service import AvatarService
 from services.config_service import ConfigService
 from config import settings
 from logging_config import get_logger
@@ -845,6 +846,11 @@ class DebateService:
                     {
                         "user_id": str(p.user_id),
                         "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                        "avatar": (
+                            AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                            if user_by_id.get(p.user_id)
+                            else None
+                        ),
                         "role": p.role,
                         "role_reason": p.role_reason,
                         "overall_score": overall_score_for(str(p.user_id)),
@@ -911,6 +917,11 @@ class DebateService:
             {
                 "user_id": str(p.user_id),
                 "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                "avatar": (
+                    AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                    if user_by_id.get(p.user_id)
+                    else None
+                ),
                 "role": p.role,
                 "role_reason": p.role_reason,
                 "overall_score": overall_score_for(str(p.user_id)),
@@ -956,6 +967,11 @@ class DebateService:
             {
                 "user_id": str(p.user_id),
                 "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
+                "avatar": (
+                    AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
+                    if user_by_id.get(p.user_id)
+                    else None
+                ),
                 "role": p.role,
                 "role_reason": p.role_reason,
                 "overall_score": overall_score_for(str(p.user_id)) if p.user_id else 0,

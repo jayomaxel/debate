@@ -9,6 +9,7 @@ from models.user import User
 from models.class_model import Class
 from models.debate import DebateParticipation, Debate
 from models.score import Score
+from services.avatar_service import AvatarService
 from utils.security import hash_password
 from utils.user_email import build_placeholder_email, to_public_email
 import uuid
@@ -90,7 +91,8 @@ class StudentService:
             "name": student.name,
             "email": to_public_email(student.email),
             "student_id": student.student_id,
-            "class_id": str(student.class_id)
+            "class_id": str(student.class_id),
+            "avatar": AvatarService.build_avatar_payload(student)["avatar"],
         }
     
     @staticmethod
@@ -211,11 +213,12 @@ class StudentService:
                 "id": str(student.id),
                 "account": student.account,
                 "name": student.name,
-                "email": student.email,
+                "email": to_public_email(student.email),
                 "student_id": student.student_id,
                 "class_id": str(student.class_id) if student.class_id else None,
                 "participation_count": participation_count,
-                "average_score": round(float(avg_score), 2) if avg_score else 0.0
+                "average_score": round(float(avg_score), 2) if avg_score else 0.0,
+                "avatar": AvatarService.build_avatar_payload(student)["avatar"],
             })
         
         return result
