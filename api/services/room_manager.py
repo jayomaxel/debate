@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from models.debate import Debate, DebateParticipation
+from models.debate import Debate, DebateParticipation, DebateReservationInvitation
 from models.user import User
 from utils.websocket_manager import websocket_manager
 from logging_config import get_logger
@@ -19,6 +19,7 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 TEACHER_MODERATOR_ROLE = "teacher_moderator"
+ROOM_META_KEY = "__room_meta"
 
 
 class DebatePhase(str, Enum):
@@ -75,6 +76,15 @@ class RoomState:
         playback_gate_started_at: Optional[datetime] = None,
         playback_gate_deadline_at: Optional[datetime] = None,
         pending_post_playback_action: Optional[str] = None,
+        room_mode: str = "teacher_assigned",
+        visibility: str = "public",
+        host_user_id: Optional[str] = None,
+        host_role: Optional[str] = None,
+        scheduled_start_time: Optional[str] = None,
+        checkin_open_time: Optional[str] = None,
+        checkin_close_time: Optional[str] = None,
+        room_status: str = "waiting",
+        moderator_missing: bool = False,
         flow_segments: Optional[List[dict]] = None,
         participants: Optional[List[dict]] = None,
         ai_debaters: Optional[List[dict]] = None,
@@ -117,6 +127,15 @@ class RoomState:
         self.playback_gate_started_at = playback_gate_started_at
         self.playback_gate_deadline_at = playback_gate_deadline_at
         self.pending_post_playback_action = pending_post_playback_action
+        self.room_mode = room_mode
+        self.visibility = visibility
+        self.host_user_id = host_user_id
+        self.host_role = host_role
+        self.scheduled_start_time = scheduled_start_time
+        self.checkin_open_time = checkin_open_time
+        self.checkin_close_time = checkin_close_time
+        self.room_status = room_status
+        self.moderator_missing = moderator_missing
         self.flow_segments = flow_segments or []
         self.participants = participants or []
         self.ai_debaters = ai_debaters or [
@@ -205,6 +224,15 @@ class RoomState:
                 else None
             ),
             "pending_post_playback_action": self.pending_post_playback_action,
+            "room_mode": self.room_mode,
+            "visibility": self.visibility,
+            "host_user_id": self.host_user_id,
+            "host_role": self.host_role,
+            "scheduled_start_time": self.scheduled_start_time,
+            "checkin_open_time": self.checkin_open_time,
+            "checkin_close_time": self.checkin_close_time,
+            "room_status": self.room_status,
+            "moderator_missing": self.moderator_missing,
             "flow_segments": self.flow_segments,
             "participants": self.participants,
             "ai_debaters": self.ai_debaters,
@@ -217,6 +245,48 @@ class DebateRoomManager:
     def __init__(self):
         # 存储房间状态: {room_id: RoomState}
         self.rooms: Dict[str, RoomState] = {}
+
+    @staticmethod
+    def get_room_meta(debate: Debate) -> dict:
+        report = debate.report if isinstance(debate.report, dict) else {}
+        meta = report.get(ROOM_META_KEY)
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    @staticmethod
+    def get_room_mode(debate: Debate) -> str:
+        meta = DebateRoomManager.get_room_meta(debate)
+        return str(getattr(debate, "mode", None) or meta.get("mode") or "teacher_assigned")
+
+    @staticmethod
+    def get_room_visibility(debate: Debate) -> str:
+        meta = DebateRoomManager.get_room_meta(debate)
+        return str(getattr(debate, "visibility", None) or meta.get("visibility") or "private")
+
+    @staticmethod
+    def get_room_host_user_id(debate: Debate) -> Optional[str]:
+        meta = DebateRoomManager.get_room_meta(debate)
+        host_user_id = getattr(debate, "host_user_id", None) or meta.get("host_user_id") or meta.get("moderator_user_id")
+        return str(host_user_id) if host_user_id else None
+
+    @staticmethod
+    def room_datetime_iso(debate: Debate, field_name: str, meta: dict) -> Optional[str]:
+        value = getattr(debate, field_name, None) or meta.get(field_name)
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    @staticmethod
+    def get_room_status(debate: Debate, meta: dict) -> str:
+        reservation_status = str(getattr(debate, "reservation_status", None) or meta.get("reservation_status") or "")
+        if reservation_status == "cancelled" or getattr(debate, "cancelled_at", None):
+            return "cancelled"
+        if str(debate.status) == "completed":
+            return "finished"
+        if str(debate.status) == "in_progress":
+            return "ongoing"
+        return "waiting"
 
     @staticmethod
     def build_teacher_moderator_participant(user: User) -> dict:
@@ -232,15 +302,22 @@ class DebateRoomManager:
 
     @staticmethod
     def build_student_participant(
-        user: User, participation: DebateParticipation
+        user: User, participation: DebateParticipation, debate: Optional[Debate] = None
     ) -> dict:
+        mode = DebateRoomManager.get_room_mode(debate) if debate else "teacher_assigned"
+        can_moderate = bool(getattr(participation, "is_moderator", False))
+        if debate and DebateRoomManager.get_room_host_user_id(debate) == str(user.id):
+            can_moderate = True
         return {
             "user_id": str(user.id),
             "name": user.name,
             "role": str(participation.role),
             "stance": str(participation.stance),
             "user_type": "student",
-            "can_moderate": False,
+            "room_mode": mode,
+            "seat_order": participation.seat_order,
+            "is_room_owner": bool(participation.is_room_owner),
+            "can_moderate": can_moderate,
             "can_speak": True,
         }
 
@@ -270,10 +347,19 @@ class DebateRoomManager:
             raise ValueError(f"Debate {debate_id} not found")
 
         # 创建房间状态
+        meta = self.get_room_meta(debate)
         room_state = RoomState(
             room_id=room_id,
             debate_id=str(debate_uuid),
             current_phase=DebatePhase.WAITING,
+            room_mode=self.get_room_mode(debate),
+            visibility=self.get_room_visibility(debate),
+            host_user_id=self.get_room_host_user_id(debate),
+            host_role=meta.get("host_role"),
+            scheduled_start_time=self.room_datetime_iso(debate, "scheduled_start_time", meta),
+            checkin_open_time=self.room_datetime_iso(debate, "checkin_open_time", meta),
+            checkin_close_time=self.room_datetime_iso(debate, "checkin_close_time", meta),
+            room_status=self.get_room_status(debate, meta),
         )
 
         self.rooms[room_id] = room_state
@@ -328,10 +414,44 @@ class DebateRoomManager:
             select(DebateParticipation).where(
                 DebateParticipation.debate_id == debate_uuid,
                 DebateParticipation.user_id == user_uuid,
+                DebateParticipation.left_at.is_(None),
             )
         ).scalar_one_or_none()
 
-        is_teacher_moderator = str(getattr(debate, "teacher_id", "")) == str(user_uuid)
+        is_teacher_moderator = (
+            str(getattr(debate, "teacher_id", "")) == str(user_uuid)
+            and str(getattr(user, "user_type", "")) in {"teacher", "administrator"}
+        )
+        mode = self.get_room_mode(debate)
+        if mode == "teacher_reserved" and not is_teacher_moderator:
+            invitation = db.execute(
+                select(DebateReservationInvitation).where(
+                    DebateReservationInvitation.debate_id == debate_uuid,
+                    DebateReservationInvitation.student_id == user_uuid,
+                    DebateReservationInvitation.revoked_at.is_(None),
+                )
+            ).scalar_one_or_none()
+            if (
+                self.get_room_status(debate, self.get_room_meta(debate)) == "cancelled"
+                or not invitation
+                or str(invitation.response_status) != "accepted"
+                or str(invitation.attendance_status) != "checked_in"
+                or not participation
+            ):
+                logger.error(
+                    "User %s failed reservation room guard for debate %s",
+                    user_id,
+                    room_state.debate_id,
+                )
+                return False
+        elif mode == "student_lobby":
+            if str(debate.status) == "completed" or self.get_room_status(debate, self.get_room_meta(debate)) == "cancelled":
+                return False
+            if not participation and not is_teacher_moderator:
+                logger.error(
+                    f"User {user_id} is not an active lobby participant of debate {room_state.debate_id}"
+                )
+                return False
 
         if not participation and not is_teacher_moderator:
             logger.error(
@@ -352,9 +472,13 @@ class DebateRoomManager:
         participant_info = (
             self.build_teacher_moderator_participant(user)
             if is_teacher_moderator
-            else self.build_student_participant(user, participation)
+            else self.build_student_participant(user, participation, debate)
         )
         room_state.participants.append(participant_info)
+        if participant_info.get("can_moderate"):
+            room_state.host_user_id = str(participant_info.get("user_id"))
+            room_state.host_role = str(participant_info.get("role"))
+            room_state.moderator_missing = False
 
         logger.info(f"User {user_id} joined room {room_id}")
 
@@ -381,7 +505,100 @@ class DebateRoomManager:
 
         return True
 
-    async def leave_room(self, room_id: str, user_id: str) -> bool:
+    async def transfer_moderator_if_needed(
+        self,
+        room_id: str,
+        departed_participant: Optional[dict],
+        db: Optional[Session] = None,
+    ) -> None:
+        if room_id not in self.rooms or not departed_participant:
+            return
+        room_state = self.rooms[room_id]
+        if not departed_participant.get("can_moderate") or departed_participant.get("user_type") != "student":
+            return
+        if room_state.room_mode != "student_lobby":
+            return
+
+        role_rank = {"debater_2": 0, "debater_3": 1, "debater_4": 2, "debater_1": 3}
+        candidates = [
+            participant
+            for participant in room_state.participants
+            if participant.get("user_type") == "student" and participant.get("can_speak")
+        ]
+        candidates.sort(key=lambda participant: role_rank.get(str(participant.get("role")), 99))
+        if not candidates:
+            room_state.host_user_id = None
+            room_state.host_role = None
+            room_state.moderator_missing = True
+            self._sync_lobby_moderator_to_db(room_state, None, db)
+            await websocket_manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "moderator_missing",
+                    "data": {
+                        "room_id": room_id,
+                        "old_moderator_user_id": departed_participant.get("user_id"),
+                        "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                    },
+                },
+            )
+            return
+
+        next_moderator = candidates[0]
+        for participant in room_state.participants:
+            participant["can_moderate"] = participant.get("user_id") == next_moderator.get("user_id")
+        room_state.host_user_id = str(next_moderator.get("user_id"))
+        room_state.host_role = str(next_moderator.get("role"))
+        room_state.moderator_missing = False
+        self._sync_lobby_moderator_to_db(room_state, str(next_moderator.get("user_id")), db)
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "moderator_transferred",
+                "data": {
+                    "room_id": room_id,
+                    "old_moderator_user_id": departed_participant.get("user_id"),
+                    "new_moderator_user_id": next_moderator.get("user_id"),
+                    "new_moderator_role": next_moderator.get("role"),
+                    "reason": "moderator_left",
+                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                },
+            },
+        )
+
+    @staticmethod
+    def _sync_lobby_moderator_to_db(
+        room_state: RoomState,
+        moderator_user_id: Optional[str],
+        db: Optional[Session],
+    ) -> None:
+        if db is None or room_state.room_mode != "student_lobby":
+            return
+        try:
+            debate_uuid = uuid.UUID(str(room_state.debate_id))
+            moderator_uuid = uuid.UUID(str(moderator_user_id)) if moderator_user_id else None
+        except ValueError:
+            return
+        try:
+            debate = db.execute(select(Debate).where(Debate.id == debate_uuid)).scalar_one_or_none()
+            if debate:
+                debate.host_user_id = moderator_uuid
+            participations = db.execute(
+                select(DebateParticipation).where(
+                    DebateParticipation.debate_id == debate_uuid,
+                    DebateParticipation.left_at.is_(None),
+                )
+            ).scalars().all()
+            for participation in participations:
+                participation.is_moderator = bool(
+                    moderator_uuid and participation.user_id == moderator_uuid
+                )
+            db.commit()
+        except Exception as exc:  # pragma: no cover - realtime best-effort sync
+            db.rollback()
+            logger.warning("Failed to sync lobby moderator to database: %s", exc)
+
+    async def leave_room(self, room_id: str, user_id: str, db: Optional[Session] = None) -> bool:
         """
         离开辩论房间
 
@@ -397,12 +614,19 @@ class DebateRoomManager:
 
         room_state = self.rooms[room_id]
 
+        departed_participant = next(
+            (p for p in room_state.participants if p["user_id"] == user_id),
+            None,
+        )
+
         # 移除参与者
         room_state.participants = [
             p for p in room_state.participants if p["user_id"] != user_id
         ]
 
         logger.info(f"User {user_id} left room {room_id}")
+
+        await self.transfer_moderator_if_needed(room_id, departed_participant, db)
 
         # 广播房间状态更新
         await self.broadcast_state_update(room_id)
@@ -502,6 +726,8 @@ class DebateRoomManager:
 
         if debate:
             debate.status = "in_progress"
+            if self.get_room_mode(debate) == "teacher_reserved":
+                debate.reservation_status = "in_progress"
             debate.start_time = (datetime.utcnow() + timedelta(hours=8))
             db.commit()
 
@@ -517,6 +743,7 @@ class DebateRoomManager:
         room_state.segment_time_remaining = 0
         room_state.speaker_mode = None
         room_state.speaker_options = []
+        room_state.room_status = "ongoing"
         room_state.ai_turn_status = "idle"
         room_state.ai_turn_segment_id = None
         room_state.ai_turn_segment_title = None
@@ -582,6 +809,8 @@ class DebateRoomManager:
 
         if debate:
             debate.status = "completed"
+            if self.get_room_mode(debate) == "teacher_reserved":
+                debate.reservation_status = "completed"
             debate.end_time = (datetime.utcnow() + timedelta(hours=8))
             db.commit()
 
@@ -592,6 +821,7 @@ class DebateRoomManager:
         room_state.segment_time_remaining = 0
         room_state.speaker_mode = None
         room_state.speaker_options = []
+        room_state.room_status = "finished"
         room_state.segment_id = None
         room_state.segment_title = None
         room_state.segment_start_time = None
@@ -750,9 +980,16 @@ class DebateRoomManager:
                 context=context
             )
             
-            # 保存报告到数据库
+            # 保存报告到数据库，保留房间/预约元数据。
             debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one()
-            debate.report = report_data
+            existing_report = debate.report if isinstance(debate.report, dict) else {}
+            if isinstance(report_data, dict):
+                debate.report = {
+                    **report_data,
+                    ROOM_META_KEY: existing_report.get(ROOM_META_KEY),
+                } if existing_report.get(ROOM_META_KEY) else report_data
+            else:
+                debate.report = report_data
             db.commit()
             
             logger.info(f"批量评分和报告生成完成: {debate_id}")

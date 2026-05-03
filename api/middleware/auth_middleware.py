@@ -232,7 +232,7 @@ def check_debate_access(
     Returns:
         是否有权访问
     """
-    from models.debate import Debate, DebateParticipation
+    from models.debate import Debate, DebateParticipation, DebateReservationInvitation
     from models.class_model import Class
     
     # 查询用户
@@ -242,21 +242,34 @@ def check_debate_access(
     
     # 如果是教师，检查辩论是否属于其班级
     if user.user_type == "teacher":
-        debate = db.query(Debate).join(
-            Class, Debate.class_id == Class.id
-        ).filter(
+        debate = db.query(Debate).filter(
             Debate.id == debate_id,
-            Class.teacher_id == user_id
+            Debate.teacher_id == user_id,
         ).first()
+        if not debate:
+            debate = db.query(Debate).join(
+                Class, Debate.class_id == Class.id
+            ).filter(
+                Debate.id == debate_id,
+                Class.teacher_id == user_id
+            ).first()
         return debate is not None
     
     # 如果是学生，检查是否参与了该辩论
     elif user.user_type == "student":
         participation = db.query(DebateParticipation).filter(
             DebateParticipation.debate_id == debate_id,
-            DebateParticipation.user_id == user_id
+            DebateParticipation.user_id == user_id,
+            DebateParticipation.left_at.is_(None),
         ).first()
-        return participation is not None
+        if participation is not None:
+            return True
+        invitation = db.query(DebateReservationInvitation).filter(
+            DebateReservationInvitation.debate_id == debate_id,
+            DebateReservationInvitation.student_id == user_id,
+            DebateReservationInvitation.revoked_at.is_(None),
+        ).first()
+        return invitation is not None
     
     return False
 

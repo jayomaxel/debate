@@ -48,9 +48,24 @@ def _get_room_participant(room_id: str, user_id: str) -> dict | None:
 def _is_teacher_moderator(participant: dict | None) -> bool:
     if not participant:
         return False
-    if bool(participant.get("can_moderate")):
+    if bool(participant.get("can_moderate")) and participant.get("user_type") == "teacher":
         return True
     return str(participant.get("role") or "") == TEACHER_MODERATOR_ROLE
+
+
+def _is_student_lobby_debater_1_moderator(participant: dict | None) -> bool:
+    if not participant:
+        return False
+    return (
+        participant.get("user_type") == "student"
+        and str(participant.get("role") or "") == "debater_1"
+        and str(participant.get("room_mode") or "") == "student_lobby"
+        and bool(participant.get("can_moderate"))
+    )
+
+
+def _can_participant_moderate(participant: dict | None) -> bool:
+    return _is_teacher_moderator(participant) or _is_student_lobby_debater_1_moderator(participant)
 
 
 def _can_participant_speak(participant: dict | None) -> bool:
@@ -277,6 +292,8 @@ async def websocket_debate_endpoint(
                         "data": {
                             "room_id": room_id,
                             "user_id": user_id,
+                            "room_mode": room_state.room_mode,
+                            "room_status": room_state.room_status,
                             "participant": participant,
                             "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
                         },
@@ -375,7 +392,7 @@ async def websocket_debate_endpoint(
         if user_id:
             await websocket_manager.disconnect(user_id, websocket)
             if not websocket_manager.is_user_connected(user_id):
-                await room_manager.leave_room(room_id, user_id)
+                await room_manager.leave_room(room_id, user_id, db)
 
             # 如果房间为空，清理流程控制器
             room_state = room_manager.get_room_state(room_id)
@@ -1494,7 +1511,7 @@ async def handle_start_debate_message(
     )
     if not participant:
         return
-    if not _is_teacher_moderator(participant):
+    if not _can_participant_moderate(participant):
         await _send_moderator_permission_denied(user_id, "开始辩论")
         return
     ok = await room_manager.start_debate(room_id, db)
@@ -1525,7 +1542,7 @@ async def handle_advance_segment_message(
     )
     if not participant:
         return
-    if not _is_teacher_moderator(participant):
+    if not _can_participant_moderate(participant):
         await _send_moderator_permission_denied(user_id, "推进环节")
         return
     ok = await flow_controller.force_advance_segment(room_id, reason="host_advance")
@@ -1556,7 +1573,7 @@ async def handle_end_debate_message(
     )
     if not participant:
         return
-    if not _is_teacher_moderator(participant):
+    if not _can_participant_moderate(participant):
         await _send_moderator_permission_denied(user_id, "结束辩论")
         return
     if room_state.current_phase in (DebatePhase.WAITING, DebatePhase.FINISHED):

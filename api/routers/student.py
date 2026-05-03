@@ -5,7 +5,7 @@ import os
 import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -47,6 +47,24 @@ class SubmitAssessmentRequest(BaseModel):
 
 class JoinDebateRequest(BaseModel):
     invitation_code: str
+
+
+class CreateLobbyRoomRequest(BaseModel):
+    room_name: Optional[str] = None
+    topic: str
+    description: Optional[str] = None
+    capacity: int = 4
+    visibility: str = "public"
+    password: Optional[str] = None
+    allow_spectators: bool = False
+
+
+class JoinLobbyRoomRequest(BaseModel):
+    password: Optional[str] = None
+
+
+class RespondReservationRequest(BaseModel):
+    action: str
 
 
 # API端点
@@ -168,6 +186,187 @@ async def get_assessment(
         "message": "获取成功",
         "data": result
     }
+
+
+@router.get("/lobby/rooms", summary="获取匹配大厅房间列表")
+async def list_lobby_rooms(
+    keyword: Optional[str] = None,
+    visibility: Optional[str] = None,
+    room_status: Optional[str] = Query(None, alias="status"),
+    sort: str = "latest",
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.list_lobby_rooms(
+            db=db,
+            student_id=str(current_user.id),
+            keyword=keyword,
+            visibility=visibility,
+            status=room_status,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/lobby/rooms", summary="创建自发组队房间")
+async def create_lobby_room(
+    request: CreateLobbyRoomRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.create_lobby_room(
+            db=db,
+            student_id=str(current_user.id),
+            room_name=request.room_name,
+            topic=request.topic,
+            description=request.description,
+            capacity=request.capacity,
+            visibility=request.visibility,
+            password=request.password,
+            allow_spectators=request.allow_spectators,
+        )
+        return {"code": 200, "message": "创建成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_409_CONFLICT if "已有未结束" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.get("/lobby/rooms/{room_id}", summary="获取匹配大厅房间详情")
+async def get_lobby_room_detail(
+    room_id: str,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.get_lobby_room_detail(
+            db=db,
+            student_id=str(current_user.id),
+            room_id=room_id,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_403_FORBIDDEN if "无权" in detail else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.post("/lobby/rooms/{room_id}/join", summary="加入匹配大厅房间")
+async def join_lobby_room(
+    room_id: str,
+    request: JoinLobbyRoomRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.join_lobby_room(
+            db=db,
+            student_id=str(current_user.id),
+            room_id=room_id,
+            password=request.password,
+        )
+        return {"code": 200, "message": "加入成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        if "不存在" in detail:
+            http_status = status.HTTP_404_NOT_FOUND
+        elif "已满" in detail or "已开始" in detail or "已结束" in detail:
+            http_status = status.HTTP_409_CONFLICT
+        elif "密码" in detail:
+            http_status = status.HTTP_403_FORBIDDEN
+        else:
+            http_status = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.get("/reservations", summary="获取我的预约辩论赛")
+async def list_my_reservations(
+    reservation_status: Optional[str] = Query(None, alias="status"),
+    include_cancelled: bool = True,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.list_student_reservations(
+            db=db,
+            student_id=str(current_user.id),
+            status=reservation_status,
+            include_cancelled=include_cancelled,
+            page=page,
+            page_size=page_size,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/reservations/{reservation_id}/respond", summary="接受或拒绝预约邀请")
+async def respond_reservation(
+    reservation_id: str,
+    request: RespondReservationRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.respond_reservation_invitation(
+            db=db,
+            student_id=str(current_user.id),
+            reservation_id=reservation_id,
+            action=request.action,
+        )
+        return {"code": 200, "message": "操作成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_409_CONFLICT if "取消" in detail or "过期" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.post("/reservations/{reservation_id}/check-in", summary="预约辩论赛签到")
+async def check_in_reservation(
+    reservation_id: str,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.check_in_reservation(
+            db=db,
+            student_id=str(current_user.id),
+            reservation_id=reservation_id,
+        )
+        return {"code": 200, "message": "签到成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_409_CONFLICT if "签到" in detail or "邀请" in detail or "取消" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.get("/reservation-reminders", summary="获取预约提醒")
+async def list_reservation_reminders(
+    unread_only: bool = False,
+    limit: int = 20,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.list_student_reservation_reminders(
+            db=db,
+            student_id=str(current_user.id),
+            unread_only=unread_only,
+            limit=limit,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/debates", summary="获取可参与的辩论")
