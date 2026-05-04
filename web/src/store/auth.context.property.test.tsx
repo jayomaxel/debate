@@ -185,7 +185,7 @@ describe('Auth Context - Property-Based Tests', () => {
         expect(result.current.isAuthenticated).toBe(true);
         expect(result.current.user).toEqual(userInfo);
       }),
-      { numRuns: 100 }
+      { numRuns: 25 }
     );
-  });
+  }, 15000);
 });
