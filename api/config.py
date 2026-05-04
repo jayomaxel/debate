@@ -8,6 +8,12 @@ from pydantic_settings import BaseSettings
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_PUBLIC_BASE_URL = "https://csidebate.xyz"
+DEFAULT_ALLOWED_ORIGINS = [
+    "https://csidebate.xyz",
+    "http://csidebate.xyz",
+    "http://8.137.182.23:8860",
+]
 
 
 def _parse_env_list(name: str, default: Optional[str] = None) -> list[str]:
@@ -32,7 +38,9 @@ class Settings(BaseSettings):
 
     # 数据库配置（移除生产公网默认地址，开发环境可本地启动）
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    PUBLIC_BASE_URL: str = os.getenv(
+        "PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL
+    ).strip().rstrip("/")
 
     # Redis配置（默认本地，生产必须显式配置）
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
@@ -41,7 +49,9 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
 
     # CORS 配置（生产环境禁止 allow_origins=["*"] 与 allow_credentials=True 同时出现）
-    ALLOWED_ORIGINS: list[str] = _parse_env_list("ALLOWED_ORIGINS", "")
+    ALLOWED_ORIGINS: list[str] = _parse_env_list(
+        "ALLOWED_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)
+    )
 
     # JWT配置（生产必须显式配置 SECRET_KEY）
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")

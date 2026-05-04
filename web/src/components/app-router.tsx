@@ -5,6 +5,8 @@ import AdminDashboard from './admin-dashboard';
 import StudentCommandCenter from './student-command-center';
 import StudentOnboarding from './student-onboarding';
 import DebateMatchResult from './debate-match-result';
+import DebateLobby from './debate-lobby';
+import LobbyRoomWaiting from './lobby-room-waiting';
 import DebateArena from './debate-arena';
 import EnhancedDebateAnalytics from './enhanced-debate-analytics';
 import StudentAnalyticsCenter from './student-analytics-center';
@@ -17,13 +19,17 @@ import { useAuth } from '@/store/auth.context';
 import { debateDebug } from '@/lib/utils';
 
 type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
+type AppPage = 'login' | 'teacher' | 'student' | 'command-center' | 'match' | 'debate' | 'analytics' | 'admin' | 'student-analytics' | 'debate-report' | 'debate-replay' | 'preparation-assistant' | 'lobby' | 'lobby-room';
+type DebateBackPage = 'teacher' | 'match' | 'lobby-room';
 
 // 简单的路由管理组件
 const AppRouter: React.FC = () => {
   const { user } = useAuth();
-  const [currentPage, setCurrentPage] = useState<'login' | 'teacher' | 'student' | 'command-center' | 'match' | 'debate' | 'analytics' | 'admin' | 'student-analytics' | 'debate-report' | 'debate-replay' | 'preparation-assistant'>('login');
+  const [currentPage, setCurrentPage] = useState<AppPage>('login');
   const [userType, setUserType] = useState<'student' | 'teacher' | 'administrator'>('student');
   const [currentDebateId, setCurrentDebateId] = useState<string | undefined>(undefined);
+  const [currentLobbyRoomId, setCurrentLobbyRoomId] = useState<string | undefined>(undefined);
+  const [debateBackPage, setDebateBackPage] = useState<DebateBackPage>('match');
   const [joinedDebate, setJoinedDebate] = useState<Debate | null>(null);
   const [studentNeedsAssessment, setStudentNeedsAssessment] = useState(false);
   const [studentProfileTab, setStudentProfileTab] = useState<'info' | 'password' | 'ability'>('info');
@@ -80,6 +86,7 @@ const AppRouter: React.FC = () => {
               return;
             }
             setCurrentDebateId(debateId);
+            setDebateBackPage('teacher');
             setCurrentPage(page);
           }}
         />;
@@ -112,6 +119,12 @@ const AppRouter: React.FC = () => {
             setCurrentPage('student-analytics');
           }}
           onNavigateToPreparation={() => setCurrentPage('preparation-assistant')}
+          onNavigateToLobby={() => setCurrentPage('lobby')}
+          onEnterLobbyRoom={(roomId) => {
+            setCurrentLobbyRoomId(roomId);
+            setCurrentDebateId(roomId);
+            setCurrentPage('lobby-room');
+          }}
           onLogout={() => {
             setStudentNeedsAssessment(false);
             setStudentProfileTab('info');
@@ -136,14 +149,45 @@ const AppRouter: React.FC = () => {
             if (debateId) {
               setCurrentDebateId(debateId);
             }
+            setDebateBackPage('match');
             setCurrentPage('debate');
           }}
           onCountdownEnd={() => debateDebug('AppRouter', '倒计时结束')}
         />;
+      case 'lobby':
+        return <DebateLobby
+          onBack={() => setCurrentPage('command-center')}
+          onEnterRoom={(roomId) => {
+            setCurrentLobbyRoomId(roomId);
+            setCurrentDebateId(roomId);
+            setCurrentPage('lobby-room');
+          }}
+        />;
+      case 'lobby-room':
+        return currentLobbyRoomId ? (
+          <LobbyRoomWaiting
+            roomId={currentLobbyRoomId}
+            onBack={() => setCurrentPage('lobby')}
+            onEnterDebate={(roomId) => {
+              setCurrentDebateId(roomId);
+              setDebateBackPage('lobby-room');
+              setCurrentPage('debate');
+            }}
+          />
+        ) : (
+          <DebateLobby
+            onBack={() => setCurrentPage('command-center')}
+            onEnterRoom={(roomId) => {
+              setCurrentLobbyRoomId(roomId);
+              setCurrentDebateId(roomId);
+              setCurrentPage('lobby-room');
+            }}
+          />
+        );
       case 'debate':
         return <DebateArena 
           roomId={currentDebateId}
-          onBack={() => userType === 'teacher' ? setCurrentPage('teacher') : setCurrentPage('match')} 
+          onBack={() => setCurrentPage(debateBackPage)} 
           onEndDebate={() => setCurrentPage('analytics')} 
         />;
       case 'analytics':

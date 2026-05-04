@@ -76,6 +76,108 @@ export interface TeacherDashboardStats {
   updated_at: string;
 }
 
+export type ReservationStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'checkin_open'
+  | 'waiting'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+export type ReservationInvitationStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+export type ReservationCheckinStatus = 'not_checked_in' | 'checked_in' | 'absent';
+export type ReservationVisibility = 'public' | 'private';
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface TeacherReservationInvitation {
+  invitation_id: string;
+  student_id: string;
+  invited_by_teacher_id: string;
+  assigned_role?: 'debater_1' | 'debater_2' | 'debater_3' | 'debater_4' | null;
+  assigned_stance?: 'positive' | 'negative' | null;
+  role?: 'debater_1' | 'debater_2' | 'debater_3' | 'debater_4' | null;
+  stance?: 'positive' | 'negative' | null;
+  is_designated_moderator: boolean;
+  is_backup_moderator: boolean;
+  read_status: 'unread' | 'read';
+  response_status: ReservationInvitationStatus;
+  attendance_status: ReservationCheckinStatus;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+  read_at?: string | null;
+  responded_at?: string | null;
+  checked_in_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TeacherReservation {
+  reservation_id: string;
+  room_id: string;
+  topic: string;
+  description?: string | null;
+  duration: number;
+  class_id: string;
+  class_name: string;
+  scheduled_start_time?: string | null;
+  checkin_open_time?: string | null;
+  checkin_close_time?: string | null;
+  visibility: ReservationVisibility;
+  host_user_id?: string | null;
+  status: ReservationStatus;
+  room_status: 'waiting' | 'full' | 'ongoing' | 'finished' | 'cancelled';
+  invitations: Record<string, TeacherReservationInvitation>;
+  invited_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  checked_in_count: number;
+  revoked_count: number;
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
+}
+
+export interface CreateReservationParams {
+  class_id: string;
+  topic: string;
+  duration: number;
+  description?: string;
+  scheduled_start_time: string;
+  checkin_open_time?: string;
+  checkin_close_time?: string;
+  student_ids: string[];
+  visibility: ReservationVisibility;
+  password?: string;
+  host_user_id?: string;
+}
+
+export interface UpdateReservationParams {
+  topic?: string;
+  duration?: number;
+  description?: string;
+  scheduled_start_time?: string;
+  checkin_open_time?: string;
+  checkin_close_time?: string;
+  student_ids?: string[];
+  visibility?: ReservationVisibility;
+  password?: string;
+  host_user_id?: string;
+}
+
+export interface TeacherReservationQuery {
+  class_id?: string;
+  status?: ReservationStatus | 'all';
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  page_size?: number;
+}
+
 export interface TeacherDebateSupportDocument {
   id: string;
   filename: string;
@@ -190,6 +292,67 @@ class TeacherService {
       return await api.get<TeacherDashboardStats>('/api/teacher/dashboard');
     } catch (error) {
       console.error('[TeacherService] Get dashboard stats failed:', error);
+      throw error;
+    }
+  }
+
+  static async createReservationDebate(params: CreateReservationParams): Promise<TeacherReservation> {
+    try {
+      return await api.post<TeacherReservation>('/api/teacher/reservations', params);
+    } catch (error) {
+      console.error('[TeacherService] Create reservation debate failed:', error);
+      throw error;
+    }
+  }
+
+  static async updateReservationDebate(
+    reservationId: string,
+    params: UpdateReservationParams
+  ): Promise<TeacherReservation> {
+    try {
+      return await api.put<TeacherReservation>(`/api/teacher/reservations/${reservationId}`, params);
+    } catch (error) {
+      console.error('[TeacherService] Update reservation debate failed:', error);
+      throw error;
+    }
+  }
+
+  static async cancelReservationDebate(
+    reservationId: string,
+    cancelReason?: string
+  ): Promise<TeacherReservation> {
+    try {
+      return await api.post<TeacherReservation>(`/api/teacher/reservations/${reservationId}/cancel`, {
+        cancel_reason: cancelReason,
+      });
+    } catch (error) {
+      console.error('[TeacherService] Cancel reservation debate failed:', error);
+      throw error;
+    }
+  }
+
+  static async getReservationDebates(
+    params: TeacherReservationQuery = {}
+  ): Promise<PaginatedResponse<TeacherReservation>> {
+    try {
+      const { status, ...rest } = params;
+      return await api.get<PaginatedResponse<TeacherReservation>>('/api/teacher/reservations', {
+        params: {
+          ...rest,
+          ...(status && status !== 'all' ? { status } : {}),
+        },
+      });
+    } catch (error) {
+      console.error('[TeacherService] Get reservation debates failed:', error);
+      throw error;
+    }
+  }
+
+  static async getReservationDetail(reservationId: string): Promise<TeacherReservation> {
+    try {
+      return await api.get<TeacherReservation>(`/api/teacher/reservations/${reservationId}`);
+    } catch (error) {
+      console.error('[TeacherService] Get reservation detail failed:', error);
       throw error;
     }
   }

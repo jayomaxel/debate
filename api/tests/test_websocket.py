@@ -1014,6 +1014,86 @@ def test_non_moderator_cannot_start_advance_or_end_debate():
     ]
 
 
+def test_student_lobby_debater_1_moderator_can_start_debate(monkeypatch):
+    from routers import websocket as ws
+
+    room_id = "test_room_student_lobby_moderator_start_001"
+    user_id = str(uuid.uuid4())
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.WAITING,
+        room_mode="student_lobby",
+    )
+    room_state.participants = [
+        {
+            "user_id": user_id,
+            "role": "debater_1",
+            "name": "一号辩手",
+            "user_type": "student",
+            "room_mode": "student_lobby",
+            "can_moderate": True,
+            "can_speak": True,
+        }
+    ]
+    room_manager.rooms[room_id] = room_state
+
+    calls = []
+    sent = []
+
+    async def _fake_start_debate(_room_id, _db):
+        calls.append((_room_id, _db))
+        return True
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_start_debate = ws.room_manager.start_debate
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.room_manager.start_debate = _fake_start_debate
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(ws.handle_start_debate_message(room_id, user_id, {}, object()))
+    finally:
+        ws.room_manager.start_debate = orig_start_debate
+        ws.websocket_manager.send_to_user = orig_send
+        room_manager.rooms.pop(room_id, None)
+
+    assert calls and calls[0][0] == room_id
+    assert not [message for message in sent if message.get("type") == "permission_denied"]
+
+
+def test_request_recording_returns_denied_when_room_state_missing():
+    from routers import websocket as ws
+
+    room_id = "test_room_missing_for_recording_001"
+    user_id = str(uuid.uuid4())
+    room_manager.rooms.pop(room_id, None)
+    sent = []
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    orig_send = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_request_recording_message(
+                room_id=room_id,
+                user_id=user_id,
+                data={"request_id": "req-missing"},
+                db=None,
+            )
+        )
+    finally:
+        ws.websocket_manager.send_to_user = orig_send
+
+    assert sent[-1]["type"] == "recording_permission"
+    assert sent[-1]["data"]["request_id"] == "req-missing"
+    assert sent[-1]["data"]["allowed"] is False
+    assert "辩论房间尚未建立" in sent[-1]["data"]["message"]
+
+
 def test_teacher_moderator_can_end_debate_on_last_segment(monkeypatch):
     from routers import websocket as ws
 

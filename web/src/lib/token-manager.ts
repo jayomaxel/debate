@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getApiBaseUrl } from './runtime-url';
 
 export interface TokenData {
   access_token: string;
@@ -29,19 +30,6 @@ const REFRESH_TOKEN_KEY = 'refresh_token';
 const TOKEN_TYPE_KEY = 'token_type';
 const TOKEN_EXPIRES_AT_KEY = 'token_expires_at';
 const USER_INFO_KEY = 'user_info';
-
-type ImportMetaWithEnv = ImportMeta & {
-  env?: {
-    VITE_API_BASE_URL?: string;
-  };
-};
-
-const getApiBaseUrl = () => {
-  const envBase = (
-    (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
-  ).replace(/\/+$/, '');
-  return envBase;
-};
 
 const unwrapResponseData = <T>(payload: unknown): T => {
   if (

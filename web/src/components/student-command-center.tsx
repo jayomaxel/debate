@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import StudentService from '@/services/student.service';
 import UserProfile from '@/components/user-profile';
 import DebateHistoryRecords from '@/components/debate-history-records';
+import StudentReservationList from '@/components/student-reservation-list';
 import type { StudentAnalytics, DebateHistoryItem, Debate, KBDocument } from '@/services/student.service';
 import {
   User,
@@ -29,7 +30,9 @@ import {
   Loader2,
   RefreshCw,
   Settings,
-  Bot
+  Bot,
+  DoorOpen,
+  Users
 } from 'lucide-react';
 
 interface StudentStats {
@@ -93,6 +96,8 @@ interface StudentCommandCenterProps {
   onLogout?: () => void;
   onNavigateToAnalytics?: (tab?: StudentAnalyticsTab) => void;
   onNavigateToPreparation?: () => void;
+  onNavigateToLobby?: () => void;
+  onEnterLobbyRoom?: (roomId: string) => void;
   defaultShowProfile?: boolean;
   defaultProfileTab?: 'info' | 'password' | 'ability';
 }
@@ -107,6 +112,8 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   onLogout,
   onNavigateToAnalytics,
   onNavigateToPreparation,
+  onNavigateToLobby,
+  onEnterLobbyRoom,
   defaultShowProfile = false,
   defaultProfileTab = 'info',
 }) => {
@@ -315,10 +322,21 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   // 加载状态
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-purple-50 flex items-center justify-center">
-        <div className="text-center">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-purple-50 flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
           <Loader2 className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-slate-600">加载中...</p>
+          <p className="text-slate-700 font-medium">学生控制台加载中...</p>
+          <p className="mt-2 text-sm text-slate-500">
+            数据分析、历史记录和知识库会继续加载；匹配大厅入口可先进入。
+          </p>
+          <Button
+            className="mt-6 w-full"
+            disabled={!onNavigateToLobby}
+            onClick={onNavigateToLobby}
+          >
+            <DoorOpen className="mr-2 h-4 w-4" />
+            进入匹配大厅
+          </Button>
         </div>
       </div>
     );
@@ -344,6 +362,15 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
             </div>
 
             <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onNavigateToLobby}
+                className="flex items-center gap-2"
+              >
+                <DoorOpen className="w-4 h-4" />
+                匹配大厅
+              </Button>
               <Button 
                 variant="outline" 
                 size="sm" 
@@ -384,6 +411,23 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         {/* 如果显示个人中心，则渲染个人中心组件 */}
         {showProfile ? (
           <div>
+            <Card className="mb-4 border-emerald-200 bg-emerald-50 shadow-sm">
+              <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 font-semibold text-emerald-900">
+                    <Users className="h-5 w-5 text-emerald-700" />
+                    自发组队与预约辩论
+                  </div>
+                  <p className="mt-1 text-sm text-emerald-800">
+                    匹配大厅、预约辩论赛和待加入房间入口已固定展示，不受个人中心状态影响。
+                  </p>
+                </div>
+                <Button className="shrink-0" onClick={onNavigateToLobby}>
+                  <DoorOpen className="mr-2 h-4 w-4" />
+                  进入匹配大厅
+                </Button>
+              </CardContent>
+            </Card>
             <Button 
               variant="ghost" 
               onClick={() => setShowProfile(false)}
@@ -392,6 +436,9 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               ← 返回控制台
             </Button>
             {user && <UserProfile user={user} initialTab={defaultProfileTab} onUpdate={() => setShowProfile(false)} />}
+            <div className="mt-6">
+              <StudentReservationList onEnterRoom={onEnterLobbyRoom} />
+            </div>
           </div>
         ) : (
           <>
@@ -407,7 +454,8 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
           </div>
 
           {/* 核心行动卡片 */}
-          <Card className="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg mb-6">
+          <div className="grid grid-cols-1 gap-4 mb-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)]">
+          <Card className="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg">
             <CardContent className="p-8">
               <div className="text-center">
                 <div className="flex items-center justify-center gap-3 mb-6">
@@ -442,6 +490,25 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               </div>
             </CardContent>
           </Card>
+
+          <Card className="bg-white border-slate-200 shadow-sm">
+            <CardContent className="flex h-full flex-col justify-between p-8">
+              <div>
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-emerald-100">
+                  <Users className="h-6 w-6 text-emerald-700" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900">匹配大厅</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  自发组队、加入公开房间，或通过密码进入同学创建的私密练习赛。
+                </p>
+              </div>
+              <Button className="mt-6 w-full" size="lg" onClick={onNavigateToLobby}>
+                <DoorOpen className="mr-2 h-5 w-5" />
+                进入匹配大厅
+              </Button>
+            </CardContent>
+          </Card>
+          </div>
 
           {/* 个人数据概览 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -491,6 +558,8 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
             </Card>
           </div>
         </div>
+
+        <StudentReservationList onEnterRoom={onEnterLobbyRoom} />
 
         {/* 历史战绩列表 (全宽) */}
         <div className="mb-8">

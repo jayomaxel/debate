@@ -195,11 +195,6 @@ class ConfigService:
         return os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
     @staticmethod
-    def _is_cpolar_host(hostname: str) -> bool:
-        host = (hostname or "").lower()
-        return host.endswith(".cpolar.cn") or host.endswith(".cpolar.top")
-
-    @staticmethod
     def _is_valid_public_file_url_prefix(url: Optional[str]) -> bool:
         normalized_url = (url or "").strip()
         if not normalized_url:
@@ -231,10 +226,6 @@ class ConfigService:
         if normalized_current == desired_prefix:
             return desired_prefix
         if not cls._is_valid_public_file_url_prefix(normalized_current):
-            return desired_prefix
-
-        current_host = urlparse(normalized_current).hostname or ""
-        if cls._is_cpolar_host(current_host):
             return desired_prefix
 
         return normalized_current

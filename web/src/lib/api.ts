@@ -1,15 +1,8 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import TokenManager from './token-manager';
+import { getApiBaseUrl } from './runtime-url';
 
-type ImportMetaWithEnv = ImportMeta & {
-  env?: {
-    VITE_API_BASE_URL?: string;
-  };
-};
-
-const baseURL = (
-  (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
-).replace(/\/+$/, '');
+const baseURL = getApiBaseUrl();
 
 const client = axios.create({
   baseURL,

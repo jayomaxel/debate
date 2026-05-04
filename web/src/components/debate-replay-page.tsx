@@ -6,6 +6,7 @@ import ParticipantVideo, { Participant } from './participant-video';
 import AIAvatar, { AIAvatar as AIAvatarType } from './ai-avatar';
 import DebateControls from './debate-controls';
 import StudentService, { type DebateDetails, type DebateParticipant } from '@/services/student.service';
+import { getApiOriginBaseUrl } from '@/lib/runtime-url';
 import { AlertCircle, ArrowLeft, Bot, Loader2, Users } from 'lucide-react';
 
 interface DebateReplayPageProps {
@@ -39,10 +40,7 @@ const resolveMediaUrl = (url?: string | null) => {
   if (!trimmed) return undefined;
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
 
-  let base = (((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || '').replace(/\/+$/, '');
-  if (trimmed.startsWith('/uploads') || trimmed.startsWith('uploads/')) {
-    base = base.replace(/\/api\/v1$/, '').replace(/\/api$/, '');
-  }
+  const base = getApiOriginBaseUrl();
 
   if (!base) return trimmed;
   if (trimmed.startsWith('/')) return `${base}${trimmed}`;
@@ -243,4 +241,3 @@ const DebateReplayPage: React.FC<DebateReplayPageProps> = ({ debateId, onBack })
 };
 
 export default DebateReplayPage;
-
