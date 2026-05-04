@@ -304,29 +304,29 @@ const DebateControls: React.FC<DebateControlsProps> = ({
   };
 
   return (
-    <div className="bg-slate-900/95 backdrop-blur-lg border-t border-slate-700/50">
-      <div className="max-w-7xl mx-auto p-4">
-        <Card className="bg-slate-800/50 border-slate-700">
+    <div className="w-full">
+      <div className="student-container pb-5">
+        <Card className="student-card">
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-white font-medium flex items-center gap-2">
+              <h3 className="flex items-center gap-2 font-medium text-slate-900">
                 <MessageSquare className="w-4 h-4" />
                 {title}
               </h3>
               <div className="flex items-center gap-2">
-                <Badge className="bg-emerald-600/30 text-emerald-300 border-emerald-600/50">
+                <Badge className="student-pill">
                   {badgeText}
                 </Badge>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={handleToggleAutoPlay}
-                  className="h-6 px-2 text-xs border-slate-600 text-slate-200 hover:text-white hover:bg-slate-700"
+                  className="student-light-button h-7 px-2 text-xs"
                 >
                   自动播放：{autoPlayEnabled ? '开' : '关'}
                 </Button>
                 {externalPlaybackLock && (
-                  <Badge className="bg-amber-600/30 text-amber-200 border-amber-600/50">
+                  <Badge className="border-amber-200 bg-amber-50 text-amber-800">
                     AI流式播报中
                   </Badge>
                 )}
@@ -334,25 +334,25 @@ const DebateControls: React.FC<DebateControlsProps> = ({
             </div>
 
             {/* 字幕滚动区域 */}
-            <ScrollArea className="h-60 bg-slate-900/50 rounded-lg p-3">
+            <ScrollArea className="h-60 rounded-[14px] border border-[#ece4da] bg-white/70 p-3">
               <div className="space-y-4">
                 {transcript.map((entry) => (
                   <div key={entry.id} className="flex items-start gap-3 group">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <span className={`font-medium text-sm ${
-                          entry.isAI ? 'text-purple-400' : 'text-blue-400'
+                          entry.isAI ? 'text-slate-700' : 'text-slate-900'
                         }`}>
                           {entry.speaker}
                         </span>
-                        <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
+                        <Badge variant="outline" className="student-pill text-xs">
                           {entry.position}
                         </Badge>
                         <span className="text-xs text-slate-500">
                           {formatTime(entry.timestamp)}
                         </span>
                       </div>
-                      <p className="text-slate-300 text-sm leading-relaxed">
+                      <p className="text-sm leading-relaxed text-slate-700">
                         {entry.message}
                       </p>
                       {isTranscriptAudioEntry(entry) && entry.audioUrl && (
@@ -451,13 +451,13 @@ const DebateControls: React.FC<DebateControlsProps> = ({
                   onChange={(e) => setNewMessage(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                   placeholder="输入您的观点或反驳..."
-                  className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="flex-1 rounded-[10px] border border-[#e8dfd4] bg-white/90 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
                   disabled={!canSpeak}
                 />
                 <Button
                   onClick={handleSendMessage}
                   disabled={!canSpeak || !newMessage.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="student-dark-button h-10 px-4"
                 >
                   <Send className="w-4 h-4" />
                 </Button>

@@ -1162,32 +1162,32 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         return {
           label: 'AI思考中',
           detail: `${speakerName} 正在基于最新发言准备回应${waitingSuffix}${waitingHint}`,
-          badgeClassName: 'bg-amber-500/20 text-amber-200 border-amber-400/40',
+          badgeClassName: 'border-amber-200 bg-amber-50 text-amber-800',
         };
       }
       case 'ready':
         return {
           label: 'AI已准备，等待轮次',
           detail: `${speakerName} 已完成草稿准备，目标环节：${segmentLabel}`,
-          badgeClassName: 'bg-sky-500/20 text-sky-200 border-sky-400/40',
+          badgeClassName: 'border-blue-200 bg-blue-50 text-blue-800',
         };
       case 'speaking':
         return {
           label: 'AI正在发言',
           detail: `${speakerName} 正在正式输出`,
-          badgeClassName: 'bg-purple-500/20 text-purple-200 border-purple-400/40',
+          badgeClassName: 'border-[#e0d8ef] bg-[#eae6f6] text-slate-800',
         };
       case 'recomputing':
         return {
           label: 'AI重算中',
           detail: `${speakerName} 正在根据新提交发言重算草稿`,
-          badgeClassName: 'bg-rose-500/20 text-rose-200 border-rose-400/40',
+          badgeClassName: 'border-rose-200 bg-rose-50 text-rose-800',
         };
       default:
         return {
           label: `AI状态：${normalizedStatus}`,
           detail: `${speakerName} 当前目标环节：${segmentLabel}`,
-          badgeClassName: 'bg-slate-500/20 text-slate-200 border-slate-400/40',
+          badgeClassName: 'border-slate-200 bg-slate-50 text-slate-700',
         };
     }
   })();
@@ -1275,7 +1275,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const humanStatusText = humanOnlineCount === 0 ? '等待加入' : humanOnlineCount === 4 ? '在线活跃' : `在线 ${humanOnlineCount}/4`;
 
   return (
-    <div ref={arenaRootRef} className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-purple-900 flex flex-col">
+    <div ref={arenaRootRef} className="flex min-h-screen flex-col overflow-hidden">
       {/* 错误提示 */}
       {error && (
         <div className="fixed top-4 right-4 z-50 max-w-md">
@@ -1310,24 +1310,24 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       {/* 实时字幕 */}
       {subtitle && (
         <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 z-50 max-w-2xl">
-          <div className="bg-black/80 text-white px-6 py-3 rounded-lg text-center">
+          <div className="student-card-muted px-6 py-3 text-center text-slate-900">
             {subtitle}
           </div>
         </div>
       )}
 
       <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="bg-slate-900 text-white border-slate-700">
+        <DialogContent className="rounded-[16px] border-[#d8cdbf] bg-[#fbf5ee] text-slate-900">
           <DialogHeader>
             <DialogTitle>辩论设置</DialogTitle>
           </DialogHeader>
           <div className="space-y-5 py-2">
-            <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-800/70 p-4">
+            <div className="flex items-center justify-between gap-4 rounded-[14px] border border-[#ece4da] bg-white/80 p-4">
               <div>
-                <Label htmlFor="debate-autoplay" className="text-sm font-medium text-white">
+                <Label htmlFor="debate-autoplay" className="text-sm font-medium text-slate-900">
                   AI 语音自动播放
                 </Label>
-                <p className="mt-1 text-xs text-slate-400">
+                <p className="mt-1 text-xs text-slate-500">
                   关闭后，新的 AI 流式语音会被跳过并释放播放等待。
                 </p>
               </div>
@@ -1337,10 +1337,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                 onCheckedChange={setAutoPlayEnabled}
               />
             </div>
-            <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-4 text-sm text-slate-300">
+            <div className="rounded-[14px] border border-[#ece4da] bg-white/80 p-4 text-sm text-slate-700">
               <div className="flex items-center justify-between">
                 <span>流式播放状态</span>
-                <Badge className={hasActiveLiveTtsStream ? 'bg-emerald-600' : 'bg-slate-700'}>
+                <Badge className={hasActiveLiveTtsStream ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'student-pill'}>
                   {hasActiveLiveTtsStream ? '播放中' : '空闲'}
                 </Badge>
               </div>
@@ -1351,14 +1351,14 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
 
       {/* 报告生成中遮罩层 */}
       {isProcessingReport && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center">
-          <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-2xl flex flex-col items-center max-w-md text-center">
-            <Loader2 className="h-12 w-12 text-blue-500 animate-spin mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">正在生成辩论报告</h3>
-            <p className="text-slate-400">
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900/35 backdrop-blur-sm">
+          <div className="student-card flex max-w-md flex-col items-center p-8 text-center">
+            <Loader2 className="mb-4 h-12 w-12 animate-spin text-slate-700" />
+            <h3 className="mb-2 text-xl font-semibold text-slate-900">正在生成辩论报告</h3>
+            <p className="text-slate-600">
               AI裁判正在对整场辩论进行深度分析和评分...
             </p>
-            <p className="text-slate-500 text-sm mt-4">
+            <p className="mt-4 text-sm text-slate-500">
               这可能需要几十秒的时间，请勿关闭页面
             </p>
           </div>
@@ -1368,12 +1368,12 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       {/* 抢麦成功提示 - 显眼的位置 */}
       {isFreeDebate && micActive && (
         <div className="fixed top-24 left-1/2 transform -translate-x-1/2 z-50">
-          <Alert className="bg-purple-100 border-purple-400 shadow-2xl animate-pulse">
-            <Radio className="h-5 w-5 text-purple-600" />
-            <AlertDescription className="text-purple-900 font-bold text-lg">
+          <Alert className="border-[#e0d8ef] bg-[#eae6f6] shadow-[0_18px_40px_rgba(91,80,120,0.16)]">
+            <Radio className="h-5 w-5 text-slate-800" />
+            <AlertDescription className="text-lg font-semibold text-slate-900">
               {micOwnerUserId === currentUserId ? (
                 <span className="flex items-center gap-2">
-                  <span className="inline-block w-3 h-3 bg-purple-600 rounded-full animate-ping"></span>
+                  <span className="inline-block h-3 w-3 rounded-full bg-slate-900"></span>
                   你已抢麦成功！可以开始发言
                 </span>
               ) : (
@@ -1405,9 +1405,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         onToggleAutoPlay={() => setAutoPlayEnabled((prev) => !prev)}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="student-container flex min-h-0 flex-1 flex-col gap-4 pb-5 xl:flex-row xl:overflow-hidden">
         {/* 左侧控制栏 */}
-        <div className="flex-none z-20">
+        <div className="z-20 flex-none">
           <DebateAudioControl
             isMuted={isMuted}
             isVideoOff={isVideoOff}
@@ -1424,22 +1424,22 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         </div>
 
         {/* 主内容区域 */}
-        <div className="flex-1 flex flex-col h-full overflow-y-auto custom-scrollbar">
-          <div className="max-w-7xl mx-auto w-full px-6 pt-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto custom-scrollbar">
+          <div className="w-full">
             {isTeacherModeratorMode && (
-              <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              <div className="mb-4 rounded-[14px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
               </div>
             )}
             {isStudentModeratorMode && (
-              <div className="mb-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              <div className="mb-4 rounded-[14px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
                 当前为学生主持模式。您可以控制辩论流程，同时保留自己的辩手发言入口。
               </div>
             )}
-            <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-4">
+            <div className="student-card-muted p-4">
               <div className="flex items-center justify-between gap-4">
-                <div className="text-sm text-slate-200">
-                  <span className="text-slate-400">当前环节：</span>
+                <div className="text-sm text-slate-700">
+                  <span className="text-slate-500">当前环节：</span>
                   <span className="font-medium">{segmentTitle || phaseLabel(currentPhase)}</span>
                   {typeof segmentIndex === 'number' && (
                     <span className="text-slate-500 ml-2">({segmentIndex + 1}/{effectiveFlowSegments.length})</span>
@@ -1452,7 +1452,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                     variant={isCurrentUserSelectedSpeaker ? 'secondary' : 'default'}
                     disabled={isCurrentUserSelectedSpeaker}
                     onClick={handleSelectSpeaker}
-                    className="shrink-0"
+                    className={isCurrentUserSelectedSpeaker ? 'student-light-button h-9 shrink-0' : 'student-dark-button h-9 shrink-0'}
                   >
                     {isCurrentUserSelectedSpeaker ? '已由我回答' : '选择我来回答'}
                   </Button>
@@ -1467,10 +1467,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                       key={seg.id}
                       className={`px-3 py-2 rounded border text-sm ${
                         active
-                          ? 'bg-blue-600/20 border-blue-500 text-white'
+                          ? 'border-[#d8e7f2] bg-[#e2eef8] text-slate-900'
                           : done
-                          ? 'bg-slate-900/30 border-slate-700 text-slate-400'
-                          : 'bg-slate-900/10 border-slate-700 text-slate-300'
+                          ? 'border-[#ece4da] bg-white/50 text-slate-500'
+                          : 'border-[#ece4da] bg-white/75 text-slate-700'
                       }`}
                     >
                       {seg.title}
@@ -1482,20 +1482,20 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
           </div>
 
           {/* 主对战区域 */}
-          <div className="flex-1 flex items-center justify-center p-6">
-            <div className="w-full max-w-7xl">
+          <div className="flex-1 py-5">
+            <div className="w-full">
               {/* 当前发言者提示 */}
               {currentSpeakerInfo && (
-                <div className="mb-6 text-center">
-                  <div className="inline-flex items-center gap-3 px-6 py-3 bg-slate-800/80 backdrop-blur rounded-full border border-slate-600">
-                    <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
-                    <span className="text-white font-medium">
+                <div className="mb-5 text-center">
+                  <div className="inline-flex items-center gap-3 rounded-full border border-[#ece4da] bg-white/90 px-6 py-3 shadow-[0_12px_28px_rgba(174,154,126,0.08)]">
+                    <div className="h-3 w-3 rounded-full bg-emerald-500" />
+                    <span className="font-medium text-slate-900">
                       {currentSpeakerInfo.name} ({currentSpeakerInfo.position}) 正在发言
                     </span>
                     <Badge className={
                       (currentSpeakerRole?.startsWith('ai_'))
-                        ? 'bg-purple-600/30 text-purple-300 border-purple-600/50'
-                        : 'bg-blue-600/30 text-blue-300 border-blue-600/50'
+                        ? 'border-[#e0d8ef] bg-[#eae6f6] text-slate-800'
+                        : 'border-[#d8e7f2] bg-[#e2eef8] text-slate-800'
                     }>
                       {(currentSpeakerRole?.startsWith('ai_')) ? 'AI' : '人类'}
                     </Badge>
@@ -1503,14 +1503,14 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
                 </div>
               )}
               {aiTurnStatusMeta && (
-                <div className="mb-6 text-center">
-                  <div className="inline-flex flex-col items-center gap-2 px-5 py-3 bg-slate-900/70 backdrop-blur rounded-2xl border border-slate-700">
+                <div className="mb-5 text-center">
+                  <div className="inline-flex flex-col items-center gap-2 rounded-[16px] border border-[#ece4da] bg-white/90 px-5 py-3 shadow-[0_12px_28px_rgba(174,154,126,0.08)]">
                     <Badge className={aiTurnStatusMeta.badgeClassName}>
                       {aiTurnStatusMeta.label}
                     </Badge>
-                    <span className="text-sm text-slate-200">{aiTurnStatusMeta.detail}</span>
+                    <span className="text-sm text-slate-700">{aiTurnStatusMeta.detail}</span>
                     {aiTurnStatus === 'thinking' && aiThinkingElapsedSec >= 60 && (
-                      <span className="text-xs text-amber-300">
+                      <span className="text-xs text-amber-700">
                         已等待 {aiThinkingElapsedSec} 秒，建议检查后端日志是否停在 AI 生成或数据库写入阶段
                       </span>
                     )}
@@ -1519,18 +1519,18 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
               )}
 
               {/* 对战区域 */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                 {/* 左侧：人类团队 */}
                 <div className="space-y-4">
-                  <div className="flex items-center gap-3 mb-4">
-                <Users className="w-6 h-6 text-blue-400" />
-                <h2 className="text-xl font-bold text-white">人类团队</h2>
-                <Badge className="bg-blue-600/30 text-blue-300 border-blue-600/50">
+                  <div className="mb-4 flex items-center gap-3">
+                <Users className="w-6 h-6 text-slate-700" />
+                <h2 className="text-xl font-semibold text-slate-900">人类团队</h2>
+                <Badge className="student-pill">
                   正方
                 </Badge>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {humanTeam.map((participant) => {
                   const isCurrent = participant.id === currentUserId;
                   return (
@@ -1547,31 +1547,31 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
               </div>
 
               {/* 团队统计 */}
-              <div className="mt-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <div className="student-card-soft-blue mt-4 p-4">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">团队信号强度</span>
-                  <span className="text-emerald-400 font-medium">
+                  <span className="text-slate-600">团队信号强度</span>
+                  <span className="font-medium text-slate-900">
                     {humanOnlineCount > 0 ? `${humanAvgSignal}%` : '--'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm mt-2">
-                  <span className="text-slate-400">团队状态</span>
-                  <span className="text-blue-400 font-medium">{humanStatusText}</span>
+                  <span className="text-slate-600">团队状态</span>
+                  <span className="font-medium text-slate-900">{humanStatusText}</span>
                 </div>
               </div>
             </div>
 
             {/* 右侧：AI团队 */}
             <div className="space-y-4">
-              <div className="flex items-center gap-3 mb-4">
-                <Bot className="w-6 h-6 text-purple-400" />
-                <h2 className="text-xl font-bold text-white">AI智能团队</h2>
-                <Badge className="bg-purple-600/30 text-purple-300 border-purple-600/50">
+              <div className="mb-4 flex items-center gap-3">
+                <Bot className="w-6 h-6 text-slate-700" />
+                <h2 className="text-xl font-semibold text-slate-900">AI智能团队</h2>
+                <Badge className="student-pill">
                   反方
                 </Badge>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {aiTeam.map((ai) => (
                   <AIAvatar
                     key={ai.id}
@@ -1582,16 +1582,16 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
               </div>
 
               {/* AI团队统计 */}
-              <div className="mt-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <div className="student-card-soft-lavender mt-4 p-4">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">AI处理能力</span>
-                  <span className="text-emerald-400 font-medium">
+                  <span className="text-slate-600">AI处理能力</span>
+                  <span className="font-medium text-slate-900">
                     {Math.round(aiTeam.reduce((sum, m) => sum + (m.processingPower || 0), 0) / aiTeam.length)}%
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm mt-2">
-                  <span className="text-slate-400">AI策略状态</span>
-                  <span className="text-purple-400 font-medium">
+                  <span className="text-slate-600">AI策略状态</span>
+                  <span className="font-medium text-slate-900">
                     {aiTurnStatusMeta?.label || '待命中'}
                   </span>
                 </div>
@@ -1600,26 +1600,26 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
           </div>
 
           {/* 对战统计信息 */}
-          <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="text-center p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-              <Users className="w-8 h-8 text-blue-400 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-white">4</div>
-              <div className="text-sm text-slate-400">人类参与者</div>
+          <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <div className="student-card-soft-blue p-4 text-center">
+              <Users className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
+              <div className="text-2xl font-semibold text-slate-900">4</div>
+              <div className="text-sm text-slate-600">人类参与者</div>
             </div>
-            <div className="text-center p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-              <Bot className="w-8 h-8 text-purple-400 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-white">4</div>
-              <div className="text-sm text-slate-400">AI 智能体</div>
+            <div className="student-card-soft-lavender p-4 text-center">
+              <Bot className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
+              <div className="text-2xl font-semibold text-slate-900">4</div>
+              <div className="text-sm text-slate-600">AI 智能体</div>
             </div>
-            <div className="text-center p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-              <Target className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-white">92%</div>
-              <div className="text-sm text-slate-400">匹配度</div>
+            <div className="student-card-muted p-4 text-center">
+              <Target className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
+              <div className="text-2xl font-semibold text-slate-900">92%</div>
+              <div className="text-sm text-slate-600">匹配度</div>
             </div>
-            <div className="text-center p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-              <Trophy className="w-8 h-8 text-amber-400 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-white">A+</div>
-              <div className="text-sm text-slate-400">对抗等级</div>
+            <div className="student-card-soft-peach p-4 text-center">
+              <Trophy className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
+              <div className="text-2xl font-semibold text-slate-900">A+</div>
+              <div className="text-sm text-slate-600">对抗等级</div>
             </div>
           </div>
         </div>

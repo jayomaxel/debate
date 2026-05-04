@@ -94,7 +94,7 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
                 <Target className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h1 className="max-w-[34rem] truncate text-lg font-semibold tracking-[-0.03em] text-slate-900">
+                <h1 className="max-w-[34rem] truncate text-lg font-semibold text-slate-900">
                   {topic}
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -134,7 +134,7 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
                 <Clock className="w-5 h-5" />
                 <div className="text-center">
                   <p className="text-xs font-medium">剩余时间</p>
-                  <p className="text-2xl font-semibold tracking-[-0.04em]">
+                  <p className="text-2xl font-semibold">
                     {formatTime(timeRemaining)}
                   </p>
                 </div>
