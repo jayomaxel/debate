@@ -56,8 +56,9 @@ const DebateLobby: React.FC<DebateLobbyProps> = ({ onBack, onEnterRoom }) => {
           page_size: 60,
         });
 
-        setRooms(data.items);
-        setTotal(data.total);
+        const lobbyRooms = data.items.filter((room) => room.mode === 'student_lobby');
+        setRooms(lobbyRooms);
+        setTotal(lobbyRooms.length);
       } catch (err: any) {
         toast({
           variant: 'destructive',

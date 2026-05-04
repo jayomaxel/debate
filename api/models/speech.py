@@ -21,10 +21,17 @@ class Speech(Base):
     speaker_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)  # NULL表示AI
     speaker_type = Column(Enum('human', 'ai', name='speaker_type_enum'), nullable=False)
     speaker_role = Column(String(20), nullable=False)  # debater_1, ai_1, etc.
+    match_state = Column(String(32), nullable=True)
     phase = Column(
         Enum('opening', 'questioning', 'free_debate', 'closing', name='debate_phase_enum'),
         nullable=False
     )
+    side = Column(String(16), nullable=True)
+    speaker_position = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    official_duration_sec = Column(Integer, nullable=True)
+    actual_duration_sec = Column(Integer, nullable=True)
     content = Column(Text, nullable=False)
     audio_url = Column(String(500), nullable=True)
     duration = Column(Integer, nullable=False)  # 秒

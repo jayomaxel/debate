@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
   Clock3,
   Loader2,
@@ -14,7 +15,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import DebateTopicCard from './debate-topic-card';
-import WaitingStatusBar from './waiting-status-bar';
 import StudentService from '@/services/student.service';
 import type { Debate, DebateParticipant } from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
@@ -333,6 +333,17 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
       <section className="student-card px-5 py-6 md:px-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
+            {onBackToLogin ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onBackToLogin}
+                className="student-light-button h-auto px-4 py-2"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                返回上一页
+              </Button>
+            ) : null}
             <h1 className="mt-4 max-w-2xl text-[1.95rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.3rem]">
               先确认你的辩位和参赛名单，四位辩手全部完成准备后会自动进入正式辩论。
             </h1>
@@ -366,9 +377,13 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                 tone="student-card-soft-peach"
               />
               <StatusCard
-                title="下一步"
-                value={debateStarted ? '正在进入正式辩论' : '等待四人全部完成准备'}
-                description={`已完成准备 ${readyCount}/${requiredCount}`}
+                title="准备状态"
+                value={debateStarted ? '已可进入比赛' : '等待全员准备'}
+                description={
+                  debateStarted
+                    ? '四位辩手均已完成准备'
+                    : '四位辩手全部准备完成后自动开赛'
+                }
                 icon={<Sparkles className="h-5 w-5 text-slate-700" />}
                 tone="student-card-soft-lavender"
               />
@@ -414,12 +429,6 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
         </div>
 
         <div className="student-page-aside space-y-5">
-          <WaitingStatusBar
-            hasAssignedRole={!!displayRole}
-            participantCount={participantCount}
-            isReady={debateStarted}
-          />
-
           <section className="student-card px-5 py-6">
             <div className="flex items-center justify-between gap-3">
               <div>

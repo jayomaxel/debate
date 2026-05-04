@@ -71,6 +71,115 @@ def test_create_lobby_room_writes_database_fields(db_session):
     assert participation.seat_order == 1
 
 
+def test_leave_lobby_room_temporary_and_permanent_behaviour(db_session):
+    _, _, students = _teacher_class_and_students(db_session, 2)
+    owner = students[0]
+    teammate = students[1]
+
+    room = DebateService.create_lobby_room(
+        db=db_session,
+        student_id=str(owner.id),
+        room_name="退出链路测试房间",
+        topic="退出后回流逻辑是否严密",
+        capacity=4,
+        visibility="public",
+    )
+
+    DebateService.join_lobby_room(
+        db=db_session,
+        student_id=str(teammate.id),
+        room_id=room["room_id"],
+    )
+
+    temporary_result = DebateService.leave_lobby_room(
+        db=db_session,
+        student_id=str(owner.id),
+        room_id=room["room_id"],
+        permanent=False,
+    )
+    owner_participation = db_session.query(DebateParticipation).filter(
+        DebateParticipation.debate_id == uuid.UUID(room["room_id"]),
+        DebateParticipation.user_id == owner.id,
+    ).one()
+    assert temporary_result["membership_status"] == "joined"
+    assert temporary_result["presence_status"] == "online_out_of_room_page"
+    assert owner_participation.left_at is None
+    assert owner_participation.last_seen_at is not None
+
+    permanent_result = DebateService.leave_lobby_room(
+        db=db_session,
+        student_id=str(owner.id),
+        room_id=room["room_id"],
+        permanent=True,
+    )
+    db_session.refresh(owner_participation)
+    teammate_participation = db_session.query(DebateParticipation).filter(
+        DebateParticipation.debate_id == uuid.UUID(room["room_id"]),
+        DebateParticipation.user_id == teammate.id,
+        DebateParticipation.left_at.is_(None),
+    ).one()
+    assert permanent_result["membership_status"] == "permanently_left"
+    assert permanent_result["presence_status"] == "not_in_room"
+    assert owner_participation.left_at is not None
+    assert teammate_participation.is_room_owner is True
+    assert teammate_participation.is_moderator is True
+
+
+@pytest.mark.asyncio
+async def test_student_lobby_room_is_excluded_from_teacher_debate_list(db_session):
+    teacher, cls, students = _teacher_class_and_students(db_session, 1)
+    student = students[0]
+
+    teacher_debate = await DebateService.create_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic="教师发布辩论",
+        description="teacher debate",
+        duration=30,
+        student_ids=[str(student.id)],
+        status="published",
+    )
+    DebateService.create_lobby_room(
+        db=db_session,
+        student_id=str(student.id),
+        room_name="学生自建房",
+        topic="学生自建辩论",
+        capacity=4,
+        visibility="public",
+    )
+
+    debates = DebateService.get_available_debates(db_session, str(student.id))
+
+    assert [debate["id"] for debate in debates] == [teacher_debate["id"]]
+    assert debates[0]["mode"] == "teacher_assigned"
+    assert debates[0]["room_source"] == "teacher_created"
+
+
+def test_join_debate_by_code_rejects_student_lobby_room(db_session):
+    _, _, students = _teacher_class_and_students(db_session, 1)
+    student = students[0]
+
+    room = DebateService.create_lobby_room(
+        db=db_session,
+        student_id=str(student.id),
+        room_name="学生自建房",
+        topic="学生自建辩论",
+        capacity=4,
+        visibility="public",
+    )
+
+    with pytest.raises(ValueError, match="教师发布"):
+        DebateService.join_debate_by_code(
+            db=db_session,
+            student_id=str(student.id),
+            invitation_code=db_session.query(DebateParticipation)
+            .filter(DebateParticipation.debate_id == uuid.UUID(room["room_id"]))
+            .first()
+            .debate.invitation_code,
+        )
+
+
 @pytest.mark.asyncio
 async def test_reservation_uses_invitation_table_and_checkin_creates_participation(db_session):
     teacher, cls, students = _teacher_class_and_students(db_session, 2)

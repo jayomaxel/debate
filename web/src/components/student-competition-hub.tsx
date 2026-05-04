@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
+  CalendarClock,
   Loader2,
   ShieldCheck,
   Sparkles,
@@ -10,16 +11,21 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import StudentReservationCard from '@/components/student-reservation-card';
 import { useToast } from '@/hooks/use-toast';
 import { useStudentAssessment } from '@/hooks/use-student-assessment';
 import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import StudentService from '@/services/student.service';
-import type { Debate, LobbyRoom } from '@/services/student.service';
+import type { Debate, LobbyRoom, StudentReservation } from '@/services/student.service';
+import {
+  roomStatusLabelMap,
+} from '@/lib/reservation-display';
 
 interface StudentCompetitionHubProps {
   onNavigateToWaiting?: () => void;
   onNavigateToSettings?: (tab?: 'info' | 'password' | 'ability') => void;
   onNavigateToPostMatch?: (debateId: string) => void;
+  onNavigateToLobbyRoom?: (roomId: string) => void;
 }
 
 const roleLabelMap = {
@@ -31,7 +37,11 @@ const roleLabelMap = {
 
 const sortJoinedTeacherDebates = (debates: Debate[]) =>
   debates
-    .filter((debate) => debate.is_joined)
+    .filter(
+      (debate) =>
+        debate.is_joined &&
+        (debate.mode === 'teacher_assigned' || debate.room_source === 'teacher_created')
+    )
     .slice()
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 
@@ -39,6 +49,12 @@ const sortLobbyRooms = (rooms: LobbyRoom[]) =>
   rooms
     .slice()
     .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
+
+const isVisibleCompetitionReservation = (reservation: StudentReservation) =>
+  reservation.status !== 'cancelled' &&
+  reservation.invitation_status !== 'rejected' &&
+  reservation.invitation_status !== 'expired' &&
+  reservation.checkin_status !== 'absent';
 
 const getStatusLabel = (status?: Debate['status']) => {
   switch (status) {
@@ -59,6 +75,7 @@ export default function StudentCompetitionHub({
   onNavigateToWaiting,
   onNavigateToSettings,
   onNavigateToPostMatch,
+  onNavigateToLobbyRoom,
 }: StudentCompetitionHubProps) {
   const { toast } = useToast();
   const { needsAssessment, loading: assessmentLoading } =
@@ -69,6 +86,7 @@ export default function StudentCompetitionHub({
   const [joining, setJoining] = useState(false);
   const [teacherDebates, setTeacherDebates] = useState<Debate[]>([]);
   const [studentLobbyRooms, setStudentLobbyRooms] = useState<LobbyRoom[]>([]);
+  const [teacherReservations, setTeacherReservations] = useState<StudentReservation[]>([]);
 
   const loadCompetitionContext = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -81,15 +99,23 @@ export default function StudentCompetitionHub({
           setLoading(true);
         }
 
-        const [debates, myLobbyRooms] = await Promise.all([
+        const [debates, myLobbyRooms, reservationResponse] = await Promise.all([
           StudentService.getAvailableDebates({
             force: silent,
           }).catch(() => []),
           StudentService.getMyLobbyRooms().catch(() => []),
+          StudentService.getMyReservations({
+            include_cancelled: false,
+            page: 1,
+            page_size: 20,
+          }).catch(() => ({ items: [] as StudentReservation[] })),
         ]);
 
         setTeacherDebates(sortJoinedTeacherDebates(debates));
         setStudentLobbyRooms(sortLobbyRooms(myLobbyRooms));
+        setTeacherReservations(
+          (reservationResponse.items || []).filter(isVisibleCompetitionReservation)
+        );
       } catch (error: any) {
         console.error('[StudentCompetitionHub] Failed to load data:', error);
         if (!silent) {
@@ -135,6 +161,20 @@ export default function StudentCompetitionHub({
 
     return '加入本场辩论';
   }, [activeStudentRoom, activeTeacherDebate, needsAssessment]);
+
+  const handleReservationChanged = useCallback((next: StudentReservation) => {
+    setTeacherReservations((current) => {
+      const remaining = current.filter(
+        (item) => item.reservation_id !== next.reservation_id
+      );
+
+      if (!isVisibleCompetitionReservation(next)) {
+        return remaining;
+      }
+
+      return [next, ...remaining];
+    });
+  }, []);
 
   const handleJoinDebate = async () => {
     if (!canJoin) {
@@ -288,7 +328,7 @@ export default function StudentCompetitionHub({
                             {activeStudentRoom.room_name}
                           </Badge>
                           <Badge className="student-pill">
-                            {activeStudentRoom.status}
+                            {roomStatusLabelMap[activeStudentRoom.status] || activeStudentRoom.status}
                           </Badge>
                           {activeStudentRoom.current_user_role ? (
                             <Badge className="student-pill">
@@ -303,9 +343,7 @@ export default function StudentCompetitionHub({
 
                     <div className="mt-5">
                       <Button
-                        onClick={() =>
-                          window.location.assign(`/student/lobby/rooms/${activeStudentRoom.room_id}`)
-                        }
+                        onClick={() => onNavigateToLobbyRoom?.(activeStudentRoom.room_id)}
                         className="student-dark-button h-auto"
                       >
                         进入我的自主房间
@@ -352,6 +390,38 @@ export default function StudentCompetitionHub({
                   </Button>
                 </div>
               </div>
+            )}
+          </div>
+        </section>
+
+        <section className="student-card px-5 py-6 md:px-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="student-kicker">
+                <CalendarClock className="h-4 w-4" />
+                我的预约辩论
+              </div>
+              <h2 className="mt-3 text-[1.55rem] font-semibold tracking-[-0.04em] text-slate-900">
+                教师预约给我的辩论场次
+              </h2>
+            </div>
+            <Badge className="student-pill">{teacherReservations.length} 场</Badge>
+          </div>
+
+          <div className="mt-5 space-y-3">
+            {teacherReservations.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-sm text-slate-500">
+                当前没有待处理的预约辩论场次。
+              </div>
+            ) : (
+              teacherReservations.map((reservation) => (
+                <StudentReservationCard
+                  key={reservation.reservation_id}
+                  reservation={reservation}
+                  onChanged={handleReservationChanged}
+                  onEnterRoom={(roomId) => onNavigateToLobbyRoom?.(roomId)}
+                />
+              ))
             )}
           </div>
         </section>

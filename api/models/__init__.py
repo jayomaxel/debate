@@ -3,7 +3,7 @@
 """
 from .user import User
 from .class_model import Class
-from .debate import Debate, DebateParticipation, DebateReservationInvitation
+from .debate import Debate, DebateParticipation, DebateReservationInvitation, DebateEventLog
 from .speech import Speech
 from .score import Score
 from .document import Document
@@ -19,6 +19,7 @@ __all__ = [
     "Debate",
     "DebateParticipation",
     "DebateReservationInvitation",
+    "DebateEventLog",
     "Speech",
     "Score",
     "Document",

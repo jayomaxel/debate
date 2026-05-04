@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
+import React, { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import {
-  TrendingUp,
-  TrendingDown,
-  Clock,
-  Zap,
-  Target,
   Award,
+  Bot,
+  Clock,
+  Target,
+  TrendingDown,
+  TrendingUp,
   Users,
-  Bot
+  Zap,
 } from 'lucide-react';
 
 interface StanceDisplayProps {
@@ -21,7 +21,7 @@ interface StanceDisplayProps {
 const StanceDisplay: React.FC<StanceDisplayProps> = ({
   stance,
   topic,
-  onCountdownEnd
+  onCountdownEnd,
 }) => {
   const [countdown, setCountdown] = useState(30);
   const [isPulsing, setIsPulsing] = useState(false);
@@ -41,12 +41,7 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
   }, [onCountdownEnd]);
 
   useEffect(() => {
-    // 最后10秒开始脉冲动画
-    if (countdown <= 10 && countdown > 0) {
-      setIsPulsing(true);
-    } else {
-      setIsPulsing(false);
-    }
+    setIsPulsing(countdown <= 10 && countdown > 0);
   }, [countdown]);
 
   const formatTime = (seconds: number) => {
@@ -69,38 +64,39 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
         color: 'from-emerald-500 to-blue-600',
         bgColor: 'bg-gradient-to-br from-emerald-50 to-blue-50',
         borderColor: 'border-emerald-200',
-        icon: <TrendingUp className="w-8 h-8 text-emerald-600" />,
-        keywords: ['情感计算', '人机交互', '技术进步', '陪伴价值']
-      };
-    } else {
-      return {
-        title: '反方立场',
-        subtitle: '反对建立情感羁绊',
-        color: 'from-red-500 to-orange-600',
-        bgColor: 'bg-gradient-to-br from-red-50 to-orange-50',
-        borderColor: 'border-red-200',
-        icon: <TrendingDown className="w-8 h-8 text-red-600" />,
-        keywords: ['AI伦理', '情感替代风险', '隐私安全', '社会影响']
+        icon: <TrendingUp className="h-8 w-8 text-emerald-600" />,
+        keywords: ['情感计算', '人机交互', '技术进步', '陪伴价值'],
       };
     }
+
+    return {
+      title: '反方立场',
+      subtitle: '反对建立情感羁绊',
+      color: 'from-red-500 to-orange-600',
+      bgColor: 'bg-gradient-to-br from-red-50 to-orange-50',
+      borderColor: 'border-red-200',
+      icon: <TrendingDown className="h-8 w-8 text-red-600" />,
+      keywords: ['AI伦理', '情感替代风险', '隐私安全', '社会影响'],
+    };
   };
 
   const stanceConfig = getStanceConfig();
 
   return (
     <div className="relative">
-      {/* 背景装饰 */}
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 rounded-2xl" />
+      <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50" />
 
-      {/* 主要内容 */}
-      <Card className={`relative ${stanceConfig.bgColor} ${stanceConfig.borderColor} border-2 shadow-2xl overflow-hidden`}>
+      <Card
+        className={`relative overflow-hidden border-2 shadow-2xl ${stanceConfig.bgColor} ${stanceConfig.borderColor}`}
+      >
         <CardContent className="p-8">
-          <div className="text-center space-y-6">
-            {/* 立场标题 */}
+          <div className="space-y-6 text-center">
             <div className="space-y-3">
               <div className="flex items-center justify-center gap-3">
                 {stanceConfig.icon}
-                <h1 className={`text-4xl font-bold bg-gradient-to-r ${stanceConfig.color} bg-clip-text text-transparent`}>
+                <h1
+                  className={`bg-gradient-to-r bg-clip-text text-4xl font-bold text-transparent ${stanceConfig.color}`}
+                >
                   {stanceConfig.title}
                 </h1>
               </div>
@@ -109,22 +105,20 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
               </h2>
             </div>
 
-            {/* 辩题 */}
-            <div className="p-4 bg-white/80 rounded-xl border border-slate-200">
-              <h3 className="text-xl font-medium text-slate-900 mb-2">今日辩题</h3>
+            <div className="rounded-xl border border-slate-200 bg-white/80 p-4">
+              <h3 className="mb-2 text-xl font-medium text-slate-900">今日辩题</h3>
               <p className="text-lg text-slate-700">{topic}</p>
             </div>
 
-            {/* 关键词标签 */}
-            <div className="flex items-center justify-center gap-3 flex-wrap">
-              {stanceConfig.keywords.map((keyword, index) => (
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {stanceConfig.keywords.map((keyword) => (
                 <Badge
-                  key={index}
+                  key={keyword}
                   variant="outline"
                   className={`px-4 py-2 text-sm font-medium ${
                     stance === 'positive'
-                      ? 'border-emerald-300 text-emerald-700 bg-emerald-50'
-                      : 'border-red-300 text-red-700 bg-red-50'
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                      : 'border-red-300 bg-red-50 text-red-700'
                   }`}
                 >
                   {keyword}
@@ -132,10 +126,11 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
               ))}
             </div>
 
-            {/* 倒计时 */}
-            <div className={`relative ${isPulsing ? 'animate-pulse' : ''}`}>
-              <div className={`inline-flex items-center gap-3 px-6 py-4 rounded-xl border-2 ${getCountdownColor()}`}>
-                <Clock className={`w-6 h-6 ${countdown <= 5 ? 'animate-spin' : ''}`} />
+            <div className={isPulsing ? 'animate-pulse' : ''}>
+              <div
+                className={`inline-flex items-center gap-3 rounded-xl border-2 px-6 py-4 ${getCountdownColor()}`}
+              >
+                <Clock className={`h-6 w-6 ${countdown <= 5 ? 'animate-spin' : ''}`} />
                 <div className="text-center">
                   <p className="text-sm font-medium">距离辩论开始还有</p>
                   <p className={`text-3xl font-bold ${countdown <= 5 ? 'animate-pulse' : ''}`}>
@@ -145,11 +140,24 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
               </div>
             </div>
 
-            {/* 准备提示 */}
-            {/* 准备进度条 */}
+            <div className="flex items-center justify-center gap-6 text-sm text-slate-600">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-blue-500" />
+                <span>???????</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4 text-purple-500" />
+                <span>AI?????</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-500" />
+                <span>??????</span>
+              </div>
+            </div>
+
             <div className="w-full max-w-md mx-auto">
               <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
-                <span>准备进度</span>
+                <span>????</span>
                 <span>{Math.max(0, 100 - (countdown * 3.3))}%</span>
               </div>
               <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
@@ -162,11 +170,10 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
               </div>
             </div>
 
-            {/* 辩论角色提示 */}
             <div className="grid grid-cols-4 gap-4 max-w-2xl mx-auto">
               {['一辩立论', '二辩攻辩', '三辩质询', '四辩总结'].map((role, index) => (
-                <div key={index} className="text-center">
-                  <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-white border-2 border-slate-300 flex items-center justify-center">
+                <div key={role} className="text-center">
+                  <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full border-2 border-slate-300 bg-white">
                     <span className="font-bold text-slate-700">{index + 1}</span>
                   </div>
                   <p className="text-xs text-slate-600">{role}</p>
@@ -175,6 +182,13 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
             </div>
           </div>
         </CardContent>
+
+        <div className="absolute left-4 top-4 h-20 w-20 opacity-10">
+          <Target className="h-full w-full text-slate-600" />
+        </div>
+        <div className="absolute bottom-4 right-4 h-20 w-20 opacity-10">
+          <Award className="h-full w-full text-slate-600" />
+        </div>
       </Card>
     </div>
   );

@@ -260,11 +260,12 @@ const AppRouter: React.FC = () => {
   const studentLobbyRoomMatch = matchPath('/student/lobby/rooms/:roomId', pathname);
   if (studentLobbyRoomMatch) {
     const roomId = studentLobbyRoomMatch.params.roomId;
+    const fromCompetition = searchParams.get('from') === 'competition';
 
     return renderStudentPage(
       <LobbyRoomWaiting
         roomId={roomId}
-        onBack={() => navigate('/student/lobby')}
+        onBack={() => navigate(fromCompetition ? '/student/competition' : '/student/lobby')}
         onEnterDebate={(targetRoomId) =>
           navigate(`/student/debates/${targetRoomId}/arena`)
         }
@@ -286,9 +287,12 @@ const AppRouter: React.FC = () => {
   if (studentCompetitionMatch) {
     return renderStudentPage(
       <StudentCompetitionHub
-        onNavigateToWaiting={() => navigate('/student/waiting')}
+        onNavigateToWaiting={() => navigate('/student/waiting?from=competition')}
         onNavigateToPostMatch={(debateId) =>
           navigate(`/student/debates/${debateId}/analytics`)
+        }
+        onNavigateToLobbyRoom={(roomId) =>
+          navigate(`/student/lobby/rooms/${roomId}?from=competition`)
         }
         onNavigateToSettings={(tab = 'ability') =>
           navigate(getStudentSettingsPath(tab))
@@ -324,9 +328,11 @@ const AppRouter: React.FC = () => {
 
   const studentWaitingMatch = matchPath('/student/waiting', pathname);
   if (studentWaitingMatch) {
+    const fromCompetition = searchParams.get('from') === 'competition';
+
     return renderStudentCompetitionPage(
       <StudentOnboarding
-        onBackToLogin={() => navigate('/student')}
+        onBackToLogin={() => back(fromCompetition ? '/student/competition' : '/student')}
         onDebateStart={(debateId) => {
           if (!debateId) {
             return;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import DebateHeader from './debate-header';
 import ParticipantVideo, { Participant } from './participant-video';
 import AIAvatar, { AIAvatar as AIAvatarType } from './ai-avatar';
