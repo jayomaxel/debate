@@ -35,8 +35,8 @@ export default function PublicLayout({
   return (
     <div className="student-theme">
       <div className="student-shell">
-        <header className="sticky top-0 z-40 px-4 py-4 sm:px-6">
-          <div className="student-container">
+        <header className="sticky top-0 z-40">
+          <div className="w-full">
             <div className="student-header-frame flex items-center justify-between gap-4 rounded-none px-5 py-3 sm:px-6">
               <button
                 type="button"

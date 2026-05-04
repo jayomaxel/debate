@@ -62,7 +62,6 @@ import {
   User as UserIcon,
   Pencil,
   X,
-  BrainCircuit,
   ChevronDown,
   ChevronUp,
   CalendarClock,
@@ -1024,18 +1023,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       <div className='student-shell flex h-screen'>
         {/* 侧边栏 */}
         <div className='student-card m-4 w-64 overflow-hidden'>
-          <div className='p-6 border-b border-slate-200'>
-            <div className='flex items-center gap-3'>
-              <div className='student-icon-bubble bg-[#151515] text-white'>
-                <BrainCircuit className='w-6 h-6 text-white' />
-              </div>
-              <div>
-                <h1 className='text-lg font-bold text-slate-900'>碳硅之辩</h1>
-                <p className='text-xs text-slate-500'>教师控制台</p>
-              </div>
-            </div>
-          </div>
-
           <nav className='p-4'>
             {menuItems.map(item => {
               const IconComponent = item.icon;
@@ -1043,7 +1030,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`student-nav-pill w-full justify-start gap-3 mb-1 ${
+                  className={`student-nav-pill mb-1 inline-flex w-full items-center justify-start gap-3 text-left ${
                     activeTab === item.id ? 'student-nav-pill-active' : ''
                   }`}
                 >
@@ -1058,7 +1045,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <div className='border-t border-slate-200 p-4'>
             <button
               onClick={onLogout}
-              className='student-light-button w-full justify-start text-red-600 hover:text-red-700'
+              className='student-light-button inline-flex w-full items-center justify-start gap-3 text-left text-red-600 hover:text-red-700'
             >
               <Settings className='w-5 h-5' />
               <span className='font-medium'>退出登录</span>
@@ -1069,35 +1056,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         {/* 主内容区 */}
         <div className='flex-1 overflow-auto'>
           <div className='student-container py-6 pb-14'>
-            {/* 页面标题和状态看板 */}
-            <section className='student-card px-5 py-6 md:px-6'>
-              <div className='flex flex-wrap items-start justify-between gap-4'>
-                <div>
-                  <div className='student-kicker'>教师控制台</div>
-                  <h1 className='mt-4 text-[2rem] font-semibold leading-[1.06] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]'>
-                    教师控制台
-                  </h1>
-                  <p className='mt-3 text-[15px] leading-7 text-slate-600'>
-                    管理辩论任务，监控学生进度
-                  </p>
-                </div>
-                <div className='flex flex-wrap gap-2'>
-                  <Badge className='student-pill'>
-                    <Users className='w-4 h-4 mr-1' />
-                    {stats.managedStudents} 在管学生
-                  </Badge>
-                  <Badge className='student-pill'>
-                    <Play className='w-4 h-4 mr-1' />
-                    {stats.activeDebates} 进行中
-                  </Badge>
-                  <button type='button' onClick={onLogout} className='student-light-button h-auto'>
-                    退出登录
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <div className='mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
+            <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
               <div className='student-card-soft-blue p-4'>
                 <div className='flex items-center justify-between'>
                   <div>

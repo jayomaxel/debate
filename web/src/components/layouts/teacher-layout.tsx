@@ -2,28 +2,21 @@ import React from 'react';
 import { BrainCircuit } from 'lucide-react';
 import { useAuth } from '@/store/auth.context';
 import { useAppRouter } from '@/lib/router';
-import { cn } from '@/lib/utils';
 import UserMenu from '@/components/user-menu';
 
 interface TeacherLayoutProps {
   children: React.ReactNode;
 }
 
-const navItems = [{ label: '工作台', href: '/teacher' }];
-
-const isItemActive = (pathname: string, href: string) =>
-  pathname === href || pathname.startsWith(`${href}/`);
-
 export default function TeacherLayout({ children }: TeacherLayoutProps) {
   const { user, logout } = useAuth();
-  const { location, navigate } = useAppRouter();
-  const pathname = location.pathname;
+  const { navigate } = useAppRouter();
 
   return (
     <div className="student-theme">
       <div className="student-shell">
-        <header className="sticky top-0 z-40 px-4 py-4 sm:px-6">
-          <div className="student-container">
+        <header className="sticky top-0 z-40">
+          <div className="w-full">
             <div className="student-header-frame flex items-center justify-between gap-4 rounded-none px-5 py-3 sm:px-6">
               <button
                 type="button"
@@ -43,46 +36,12 @@ export default function TeacherLayout({ children }: TeacherLayoutProps) {
                 </div>
               </button>
 
-              <nav className="hidden flex-1 items-center justify-center gap-2 md:flex">
-                {navItems.map((item) => (
-                  <button
-                    key={item.href}
-                    type="button"
-                    className={cn(
-                      'student-nav-pill',
-                      isItemActive(pathname, item.href) && 'student-nav-pill-active'
-                    )}
-                    onClick={() => navigate(item.href)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </nav>
-
               <div className="flex items-center gap-2">
                 {user ? <UserMenu user={user} onLogout={logout} /> : null}
               </div>
             </div>
           </div>
         </header>
-
-        <div className="student-container mt-3 md:hidden">
-          <nav className="student-responsive-nav">
-            {navItems.map((item) => (
-              <button
-                key={item.href}
-                type="button"
-                className={cn(
-                  'student-nav-pill shrink-0',
-                  isItemActive(pathname, item.href) && 'student-nav-pill-active'
-                )}
-                onClick={() => navigate(item.href)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        </div>
 
         <main>{children}</main>
       </div>

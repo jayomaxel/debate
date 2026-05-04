@@ -14,7 +14,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  ArrowRight,
   User,
   GraduationCap,
   Mail,
@@ -22,10 +21,7 @@ import {
   Users,
   ShieldCheck,
   BookOpen,
-  Sparkles,
   BrainCircuit,
-  Target,
-  Award,
   Loader2
 } from 'lucide-react';
 import { useAuth } from '@/store/auth.context';
@@ -73,32 +69,9 @@ const authTabTriggerClass =
 const authSubmitButtonClass =
   'student-dark-button h-auto w-full justify-center py-3';
 
-const portalCards = [
-  {
-    icon: GraduationCap,
-    title: '学生端',
-    description: '登录后进入学生首页、比赛区、备赛区和成长区。',
-    tone: 'student-card-soft-blue',
-  },
-  {
-    icon: BookOpen,
-    title: '教师端',
-    description: '查看班级、学生进度和课堂对局数据。',
-    tone: 'student-card-soft-peach',
-  },
-  {
-    icon: ShieldCheck,
-    title: '管理端',
-    description: '管理账号、班级和平台配置。',
-    tone: 'student-card-soft-lavender',
-  },
-];
+const loginHeroImage =
+  'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80';
 
-const portalSteps = [
-  { value: '01', label: '选择身份', description: '先确认你要进入的工作区。' },
-  { value: '02', label: '输入账号', description: '用账号和密码完成登录。' },
-  { value: '03', label: '进入页面', description: '跳到对应的首页布局。' },
-];
 
 const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
   const { login } = useAuth();
@@ -307,8 +280,8 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
   return (
     <div className="student-theme">
       <div className="student-shell">
-        <header className="sticky top-0 z-40 px-4 py-4 sm:px-6">
-          <div className="student-container">
+        <header className="sticky top-0 z-40">
+          <div className="w-full">
             <div className="student-header-frame flex items-center justify-between gap-4 rounded-none px-5 py-3 sm:px-6">
               <button
                 type="button"
@@ -339,97 +312,33 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
           </div>
         </header>
 
-        <main className="student-container py-6 pb-14">
-          <div className="student-page-split grid gap-6">
-            <section className="space-y-6">
-              <div className="student-card px-6 py-6 md:px-8">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="max-w-2xl space-y-4">
-                    <div className="space-y-3">
-                      <h1 className="text-[2rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]">
-                        选择入口后登录，进入对应工作区。
-                      </h1>
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <Button
-                        className="student-dark-button h-auto"
-                        onClick={() => navigate('/login')}
-                      >
-                        登录 / 注册
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="student-light-button h-auto"
-                        onClick={() => navigate('/')}
-                      >
-                        继续浏览
-                      </Button>
-                    </div>
+        <main className="student-container flex min-h-[calc(100vh-72px)] items-center py-6 pb-14">
+          <Card className="student-card mx-auto grid w-full max-w-[1180px] overflow-hidden border-[#d7ccbf] p-0 shadow-[0_22px_56px_rgba(58,42,28,0.1)] lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,0.96fr)]">
+            <div className="relative min-h-[260px] overflow-hidden bg-slate-100 lg:min-h-[760px]">
+              <img
+                src={loginHeroImage}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/18 to-transparent" />
+              <div className="absolute bottom-0 left-0 right-0 p-6 text-white sm:p-8">
+                <div className="max-w-md">
+                  <div className="text-xs uppercase tracking-[0.22em] text-white/72">
+                    Debate Workspace
                   </div>
-
-                  <div className="student-card-soft-blue min-w-[220px] p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      登录后
-                    </div>
-                    <div className="mt-2 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      自动进入对应身份首页
-                    </div>
-                  </div>
+                  <h1 className="mt-3 text-[2rem] font-semibold leading-tight md:text-[2.4rem]">
+                    碳硅之辩
+                  </h1>
+                  <p className="mt-3 text-sm leading-7 text-white/82">
+                    选择身份，登录后进入对应的学生、教师或管理工作区。
+                  </p>
                 </div>
               </div>
+            </div>
 
-              <div className="grid gap-4 md:grid-cols-3">
-                {portalCards.map((card) => {
-                  const Icon = card.icon;
-
-                  return (
-                    <div key={card.title} className={`${card.tone} p-4`}>
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-3">
-                          <div className="student-icon-bubble text-slate-900">
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-semibold text-slate-900">
-                              {card.title}
-                            </h3>
-                            <p className="mt-1.5 text-sm leading-6 text-slate-600">
-                              {card.description}
-                            </p>
-                          </div>
-                        </div>
-                        <ArrowRight className="h-4 w-4 text-slate-500" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-3">
-                {portalSteps.map((step, index) => (
-                  <div
-                    key={step.value}
-                    className={
-                      index === 1 ? 'student-card-soft-peach p-4' : 'student-card-muted p-4'
-                    }
-                  >
-                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                      {step.value}
-                    </div>
-                    <div className="mt-2 text-[15px] font-semibold text-slate-900">
-                      {step.label}
-                    </div>
-                    <div className="mt-1 text-sm leading-6 text-slate-600">
-                      {step.description}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <div className="w-full">
-              <Card className="student-card border-[#d7ccbf] shadow-[0_18px_46px_rgba(58,42,28,0.08)]">
-                <CardHeader className="text-center pb-4">
+            <div className="flex items-center">
+              <div className="w-full px-5 py-6 sm:px-8 lg:px-10">
+                <CardHeader className="px-0 pb-4 text-left">
                   <CardTitle className="mb-2 text-[1.65rem] font-semibold text-slate-900">
                     {isLogin ? '欢迎登录' : '欢迎注册'}
                   </CardTitle>
@@ -438,7 +347,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                   </CardDescription>
                 </CardHeader>
 
-                <CardContent className="space-y-6">
+                <CardContent className="space-y-6 px-0 pb-0">
                   <div className="flex items-center justify-center gap-4 text-sm">
                     <button
                       type="button"
@@ -868,9 +777,9 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                     )}
                   </Tabs>
                 </CardContent>
-              </Card>
+              </div>
             </div>
-          </div>
+          </Card>
         </main>
       </div>
     </div>

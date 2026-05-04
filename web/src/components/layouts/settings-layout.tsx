@@ -14,9 +14,9 @@ export default function SettingsLayout({
   return (
     <div className="student-theme">
       <div className="student-shell">
-        <header className="px-4 py-4 sm:px-6">
-          <div className="student-container">
-            <div className="student-header-frame flex items-center justify-between rounded-[32px] px-5 py-4 sm:px-6">
+        <header>
+          <div className="w-full">
+            <div className="student-header-frame flex items-center justify-between rounded-none px-5 py-4 sm:px-6">
               <div className="flex items-center gap-3">
                 <Button
                   variant="ghost"

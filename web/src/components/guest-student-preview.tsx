@@ -15,6 +15,7 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
+import debateStartJourney from '@/assets/debate-start-journey.png';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -132,174 +133,75 @@ export default function GuestStudentPreview({
 function GuestHome({ onLogin }: { onLogin: () => void }) {
   const summaryTiles = [
     { label: '能力评估', value: statusPlaceholder, tone: 'student-card-soft-peach' },
-    { label: '已完成正式辩论', value: numberPlaceholder, tone: 'student-card-soft-blue' },
-    { label: '累计参与', value: numberPlaceholder, tone: 'student-card-soft-lavender' },
+    { label: '正式辩论', value: numberPlaceholder, tone: 'student-card-soft-blue' },
+    { label: '累计参与', value: numberPlaceholder, tone: 'student-card-muted' },
     { label: '平均得分', value: numberPlaceholder, tone: 'student-card-muted' },
   ];
 
+  const trustItems = ['AI 备赛助手', '能力成长记录', '同伴匹配辩论', '报告复盘'];
+
   return (
-    <div className="student-container py-6 pb-14">
-      <div className="student-page-split grid gap-5">
-        <div className="space-y-5">
-          <section className="student-card relative overflow-hidden px-5 py-6 md:px-6">
-            <div className="grid gap-5 lg:grid-cols-[1.05fr,0.95fr] xl:grid-cols-[minmax(0,1.05fr),minmax(280px,0.95fr)]">
-              <div className="space-y-4">
-                <div>
-                  <h1 className="student-section-title">欢迎回来，同学</h1>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <Button className="student-dark-button h-auto" onClick={onLogin}>
-                    现在去评估
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="student-light-button h-auto"
-                    onClick={onLogin}
-                  >
-                    打开备赛区
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="student-light-button h-auto"
-                    onClick={onLogin}
-                  >
-                    <DoorOpen className="mr-2 h-4 w-4" />
-                    匹配大厅
-                  </Button>
-                </div>
-              </div>
-
-              <div className="student-card-soft-blue p-5">
-                <div className="mt-2.5 text-[1.65rem] font-semibold tracking-[-0.04em] text-slate-900">
-                  {statusPlaceholder}
-                </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="student-card-muted p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      已完成正式辩论
-                    </div>
-                    <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {numberPlaceholder}
-                    </div>
-                  </div>
-                  <div className="student-card-muted p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      平均得分
-                    </div>
-                    <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {numberPlaceholder}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <div className="mb-8 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
-            <Card className="student-card border-0 shadow-none">
-              <div className="border-b border-black/5 px-6 py-5">
-                <div className="flex items-center gap-2">
-                  <Users className="h-5 w-5 text-blue-600" />
-                  预约辩论赛
-                  <Badge variant="outline">{statusPlaceholder}</Badge>
-                </div>
-              </div>
-              <CardContent className="p-6">
-                <div className="student-dashed-card py-10 text-center text-slate-500">
-                  登录后查看预约记录
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="student-card border-0 shadow-none">
-              <div className="border-b border-black/5 px-6 py-5">
-                <div className="flex items-center gap-2">
-                  <DoorOpen className="h-5 w-5 text-emerald-600" />
-                  待加入房间
-                </div>
-              </div>
-              <CardContent className="p-6">
-                <div className="student-dashed-card py-10 text-center text-slate-500">
-                  登录后查看可加入的房间
-                </div>
-              </CardContent>
-            </Card>
+    <div className="student-container py-8 pb-14 lg:py-10">
+      <section
+        className="student-home-hero"
+        style={{ backgroundImage: `url(${debateStartJourney})` }}
+      >
+        <div className="student-home-copy">
+          <Badge className="student-pill w-fit">Human + AI Debate Studio</Badge>
+          <h1 className="student-hero-title">碳硅之辩</h1>
+          <p className="student-hero-copy">
+            用 AI 备赛、实时辩论和成长报告，把每一次观点交锋都沉淀成可追踪的能力进步。
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button className="student-dark-button h-auto" onClick={onLogin}>
+              开始辩论
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              className="student-light-button h-auto"
+              onClick={onLogin}
+            >
+              打开备赛区
+            </Button>
           </div>
+        </div>
+      </section>
 
-          <section className="student-card px-5 py-6 md:px-6">
+      <section className="student-trust-row">
+        {trustItems.map((item) => (
+          <div key={item} className="student-trust-item">
+            {item}
+          </div>
+        ))}
+      </section>
+
+      <div className="mt-8 space-y-5">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {summaryTiles.map((item) => (
+            <PreviewTile
+              key={item.label}
+              label={item.label}
+              value={item.value}
+              tone={item.tone}
+            />
+          ))}
+        </section>
+
+        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="student-card px-5 py-6 md:px-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 className="mt-3 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-                  最近一场辩论
+                <h2 className="text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950">
+                  去你现在需要的地方
                 </h2>
-              </div>
-              <Button
-                variant="outline"
-                className="student-light-button h-auto"
-                onClick={onLogin}
-              >
-                打开成长区
-              </Button>
-            </div>
-
-            <div className="mt-5">
-              <div className="student-card-soft-peach p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="max-w-2xl">
-                    <div className="text-sm uppercase tracking-[0.18em] text-slate-500">
-                      最近一场
-                    </div>
-                    <div className="mt-2.5 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      登录后查看
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Badge className="student-pill">{statusPlaceholder}</Badge>
-                      <Badge className="student-pill">{statusPlaceholder}</Badge>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <Button
-                      variant="outline"
-                      className="student-light-button h-auto"
-                      onClick={onLogin}
-                    >
-                      查看报告
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="student-light-button h-auto"
-                      onClick={onLogin}
-                    >
-                      查看回放
-                    </Button>
-                  </div>
-                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  登录后继续进入备赛、匹配和成长复盘。
+                </p>
               </div>
             </div>
-          </section>
-        </div>
 
-        <div className="student-page-aside space-y-5">
-          <section className="student-card px-5 py-6">
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {summaryTiles.map((item) => (
-                <PreviewTile
-                  key={item.label}
-                  label={item.label}
-                  value={item.value}
-                  tone={item.tone}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="student-card px-5 py-6">
-            <div className="mt-3 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-              去你现在需要的地方
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
               <PreviewLink
                 icon={<Bot className="h-4 w-4" />}
                 title="备赛区"
@@ -315,19 +217,70 @@ function GuestHome({ onLogin }: { onLogin: () => void }) {
               <PreviewLink
                 icon={<Users className="h-4 w-4" />}
                 title="匹配大厅"
-                tone="student-card-soft-peach"
+                tone="student-card-muted"
                 onClick={onLogin}
               />
+            </div>
+          </div>
+
+          <div className="student-card px-5 py-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950">
+                  最近一场辩论
+                </h2>
+                <div className="mt-2 text-sm text-slate-500">登录后查看</div>
+              </div>
+              <Badge className="student-pill">{statusPlaceholder}</Badge>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
               <Button
                 variant="outline"
+                className="student-light-button h-auto"
                 onClick={onLogin}
-                className="student-light-button h-auto w-full justify-start"
               >
-                <Sparkles className="mr-2 h-4 w-4" />
-                刷新首页摘要
+                查看报告
+              </Button>
+              <Button
+                variant="outline"
+                className="student-light-button h-auto"
+                onClick={onLogin}
+              >
+                查看回放
               </Button>
             </div>
-          </section>
+          </div>
+        </section>
+
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
+          <Card className="student-card border-0 shadow-none">
+            <div className="border-b border-black/5 px-6 py-5">
+              <div className="flex items-center gap-2 text-slate-950">
+                <Users className="h-5 w-5 text-sky-700" />
+                预约辩论赛
+                <Badge variant="outline">{statusPlaceholder}</Badge>
+              </div>
+            </div>
+            <CardContent className="p-6">
+              <div className="student-dashed-card py-10 text-center text-slate-500">
+                登录后查看预约记录
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="student-card border-0 shadow-none">
+            <div className="border-b border-black/5 px-6 py-5">
+              <div className="flex items-center gap-2 text-slate-950">
+                <DoorOpen className="h-5 w-5 text-sky-700" />
+                待加入房间
+              </div>
+            </div>
+            <CardContent className="p-6">
+              <div className="student-dashed-card py-10 text-center text-slate-500">
+                登录后查看可加入的房间
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
