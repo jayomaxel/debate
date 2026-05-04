@@ -1,11 +1,23 @@
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AlertCircle,
+  Key,
+  Loader2,
+  Lock,
+  Save,
+  ShieldCheck,
+  User,
+} from 'lucide-react';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -13,39 +25,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import {
-  Activity,
-  GraduationCap,
-  Key,
-  Loader2,
-  Mail,
-  Phone,
-  Save,
-  ShieldCheck,
-  TrendingUp,
-  User,
-  Users,
-} from 'lucide-react';
+import { useStudentAssessment } from '@/hooks/use-student-assessment';
 import AuthService from '@/services/auth.service';
 import StudentService from '@/services/student.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 import type { UserInfo } from '@/lib/token-manager';
-import type {
-  AssessmentResult,
-  GrowthTrendItem,
-  StudentAnalytics,
-} from '@/services/student.service';
-import { shouldRenderAbilityPortrait } from '@/lib/ability-profile';
+import SkillsAssessmentEditor from './skills-assessment-editor';
 import SkillsRadar, {
-  DEFAULT_SKILLS_EMPTY_STATE_MESSAGE,
-  createEmptySkills,
+  createEditableDefaultSkills,
   mergeAssessmentIntoSkills,
 } from './skills-radar';
+import { hasCompleteAbilityValues } from '@/lib/ability-profile';
+import { formatDebateRole } from '@/lib/student-display';
 
 interface UserProfileProps {
   user: UserInfo;
-  onUpdate?: () => void;
+  onUpdate?: (user: Partial<UserInfo>) => void;
   initialTab?: 'info' | 'password' | 'ability';
 }
 
@@ -57,18 +56,76 @@ interface ClassOption {
   student_count: number;
 }
 
+type SettingsTab = 'info' | 'password' | 'ability';
+
+const tabItems: Array<{
+  key: SettingsTab;
+  label: string;
+  description: string;
+  tone: string;
+}> = [
+  {
+    key: 'info',
+    label: '个人资料',
+    description: '更新昵称、邮箱、手机号和班级信息。',
+    tone: 'student-card-soft-blue',
+  },
+  {
+    key: 'password',
+    label: '账号安全',
+    description: '修改登录密码，维护账户安全。',
+    tone: 'student-card-soft-peach',
+  },
+  {
+    key: 'ability',
+    label: '能力评估',
+    description: '完成或查看你的辩论能力评估。',
+    tone: 'student-card-soft-lavender',
+  },
+];
+
+const DEFAULT_READONLY_MESSAGE =
+  '完成首场正式辩论后，能力评估会自动锁定，仅保留结果展示。';
+
+const DEFAULT_EMPTY_MESSAGE = '还没有可展示的能力评估结果，请先完成评估。';
+
+const normalizeTab = (
+  tab: SettingsTab,
+  isStudent: boolean,
+  isAssessmentLocked: boolean
+): SettingsTab => {
+  if (!isStudent && tab === 'ability') {
+    return 'info';
+  }
+
+  if (isStudent && isAssessmentLocked && tab === 'ability') {
+    return 'info';
+  }
+
+  return tab;
+};
+
+const fieldClassName =
+  'h-12 rounded-[12px] border-black/10 bg-white/80 text-slate-900 placeholder:text-slate-400 focus-visible:ring-black/10';
+
 const UserProfile: React.FC<UserProfileProps> = ({
   user,
   onUpdate,
   initialTab = 'info',
 }) => {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'info' | 'password' | 'ability'>(
-    initialTab
-  );
+  const isStudent = user.user_type === 'student';
+  const {
+    assessment,
+    analytics,
+    needsAssessment,
+    isAssessmentLocked,
+    loading: assessmentLoading,
+    refresh: refreshAssessmentState,
+  } = useStudentAssessment(isStudent);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('info');
   const [loading, setLoading] = useState(false);
   const [classesLoading, setClassesLoading] = useState(false);
-  const [abilityLoading, setAbilityLoading] = useState(false);
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [profileForm, setProfileForm] = useState({
     name: user.name || '',
@@ -82,33 +139,41 @@ const UserProfile: React.FC<UserProfileProps> = ({
     new_password: '',
     confirm_password: '',
   });
-  const [lockedClassId, setLockedClassId] = useState(user.class_id || '');
-  const [analytics, setAnalytics] = useState<StudentAnalytics | null>(null);
-  const [growthTrend, setGrowthTrend] = useState<GrowthTrendItem[]>([]);
-  const [assessmentResult, setAssessmentResult] =
-    useState<AssessmentResult | null>(null);
-  const [skills, setSkills] = useState(createEmptySkills);
+  const [skills, setSkills] = useState(createEditableDefaultSkills);
 
-  const isStudent = user.user_type === 'student';
-  const hasLockedClass = isStudent && Boolean(lockedClassId);
-  const completedDebates = analytics?.completed_debates ?? 0;
-  const averageScore = analytics?.average_score ?? 0;
-  const abilityProfileVisible = shouldRenderAbilityPortrait({
-    completedDebates,
-    skillValues: skills.map((skill) => skill.value),
-    isDefaultAssessment: assessmentResult?.is_default,
-  });
+  const availableTabs = useMemo(
+    () =>
+      tabItems.filter((item) => {
+        if (!isStudent && item.key === 'ability') {
+          return false;
+        }
+
+        if (isStudent && isAssessmentLocked && item.key === 'ability') {
+          return false;
+        }
+
+        return true;
+      }),
+    [isAssessmentLocked, isStudent]
+  );
 
   useEffect(() => {
-    setActiveTab(initialTab);
-  }, [initialTab]);
+    setActiveTab(normalizeTab(initialTab, isStudent, isAssessmentLocked));
+  }, [initialTab, isAssessmentLocked, isStudent]);
+
+  useEffect(() => {
+    if (!isStudent) {
+      return;
+    }
+
+    setSkills(mergeAssessmentIntoSkills(createEditableDefaultSkills(), assessment));
+  }, [assessment, isStudent]);
 
   useEffect(() => {
     void loadProfile();
 
     if (isStudent) {
       void loadClasses();
-      void loadAbilityData();
     }
   }, [isStudent]);
 
@@ -122,10 +187,6 @@ const UserProfile: React.FC<UserProfileProps> = ({
         student_id: profile.student_id || '',
         class_id: profile.class_id || '',
       });
-
-      if (isStudent) {
-        setLockedClassId(profile.class_id || '');
-      }
     } catch (error) {
       console.error('Failed to load profile:', error);
     }
@@ -143,34 +204,6 @@ const UserProfile: React.FC<UserProfileProps> = ({
     }
   };
 
-  const loadAbilityData = async () => {
-    try {
-      setAbilityLoading(true);
-      const [analyticsData, growthData, assessmentData] = await Promise.all([
-        StudentService.getAnalytics(),
-        StudentService.getGrowthTrend(7),
-        StudentService.getAssessment(),
-      ]);
-
-      const mergedSkills = mergeAssessmentIntoSkills(createEmptySkills(), assessmentData);
-      const canUseAbilityData =
-        (analyticsData?.completed_debates ?? 0) > 0 && !assessmentData?.is_default;
-
-      setAnalytics(analyticsData);
-      setGrowthTrend(growthData?.debates || []);
-      setAssessmentResult(assessmentData);
-      setSkills(canUseAbilityData ? mergedSkills : createEmptySkills());
-    } catch (error) {
-      console.error('Failed to load ability data:', error);
-      setAnalytics(null);
-      setGrowthTrend([]);
-      setAssessmentResult(null);
-      setSkills(createEmptySkills());
-    } finally {
-      setAbilityLoading(false);
-    }
-  };
-
   const handleProfileUpdate = async (event: React.FormEvent) => {
     event.preventDefault();
 
@@ -184,17 +217,22 @@ const UserProfile: React.FC<UserProfileProps> = ({
         class_id: isStudent ? profileForm.class_id || undefined : undefined,
       });
 
-      if (isStudent && profileForm.class_id) {
-        setLockedClassId(profileForm.class_id);
-      }
+      const refreshedProfile = await AuthService.getProfile();
+      setProfileForm({
+        name: refreshedProfile.name || '',
+        email: refreshedProfile.email || '',
+        phone: refreshedProfile.phone || '',
+        student_id: refreshedProfile.student_id || '',
+        class_id: refreshedProfile.class_id || '',
+      });
 
       toast({
         variant: 'success',
         title: '保存成功',
-        description: '个人信息已更新',
+        description: '个人资料已更新。',
       });
 
-      onUpdate?.();
+      onUpdate?.(refreshedProfile);
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -212,8 +250,8 @@ const UserProfile: React.FC<UserProfileProps> = ({
     if (passwordForm.new_password !== passwordForm.confirm_password) {
       toast({
         variant: 'destructive',
-        title: '密码不一致',
-        description: '两次输入的新密码不一致',
+        title: '两次密码不一致',
+        description: '请重新确认新密码。',
       });
       return;
     }
@@ -221,8 +259,8 @@ const UserProfile: React.FC<UserProfileProps> = ({
     if (passwordForm.new_password.length < 6) {
       toast({
         variant: 'destructive',
-        title: '密码过短',
-        description: '新密码长度至少为 6 位',
+        title: '新密码过短',
+        description: '密码长度至少需要 6 位。',
       });
       return;
     }
@@ -243,7 +281,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
       toast({
         variant: 'success',
         title: '修改成功',
-        description: '密码已更新',
+        description: '账户密码已更新。',
       });
     } catch (error) {
       toast({
@@ -256,374 +294,457 @@ const UserProfile: React.FC<UserProfileProps> = ({
     }
   };
 
-  const renderAbilitySummary = () => {
-    if (abilityLoading) {
+  const handleAbilitySave = async () => {
+    if (!isStudent || isAssessmentLocked) {
+      return;
+    }
+
+    const values = skills.map((skill) => skill.value);
+    if (!hasCompleteAbilityValues(values)) {
+      toast({
+        variant: 'destructive',
+        title: '评估未完成',
+        description: '请完成 5 个维度的评分后再保存。',
+      });
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await StudentService.submitAssessment({
+        expression_willingness: Number(
+          skills.find((item) => item.key === 'expression_willingness')?.value || 0
+        ),
+        logical_thinking: Number(
+          skills.find((item) => item.key === 'logical_thinking')?.value || 0
+        ),
+        stablecoin_knowledge: Number(
+          skills.find((item) => item.key === 'stablecoin_knowledge')?.value || 0
+        ),
+        financial_knowledge: Number(
+          skills.find((item) => item.key === 'financial_knowledge')?.value || 0
+        ),
+        critical_thinking: Number(
+          skills.find((item) => item.key === 'critical_thinking')?.value || 0
+        ),
+        personality_type: 'balanced',
+      });
+
+      await refreshAssessmentState();
+
+      toast({
+        variant: 'success',
+        title: '评估已保存',
+        description: '你现在可以返回首页加入本场辩论。',
+      });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '保存失败',
+        description: formatErrorMessage(error),
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderInfoPanel = () => (
+    <Card className="student-card">
+      <CardHeader>
+        <CardTitle className="text-slate-900">个人资料</CardTitle>
+        <CardDescription className="leading-7">
+          更新基础信息，保持账户资料完整。
+          {isStudent && needsAssessment
+            ? ' 你还未完成能力评估，比赛区入口仍会保持锁定。'
+            : ''}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleProfileUpdate} className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="account">账号</Label>
+            <Input
+              id="account"
+              value={user.account}
+              disabled
+              className={`${fieldClassName} bg-slate-50`}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="name">姓名</Label>
+            <Input
+              id="name"
+              value={profileForm.name}
+              onChange={(event) =>
+                setProfileForm((prev) => ({ ...prev, name: event.target.value }))
+              }
+              disabled={loading}
+              required
+              className={fieldClassName}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="email">邮箱</Label>
+            <Input
+              id="email"
+              type="email"
+              value={profileForm.email}
+              onChange={(event) =>
+                setProfileForm((prev) => ({ ...prev, email: event.target.value }))
+              }
+              disabled={loading}
+              className={fieldClassName}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="phone">手机号</Label>
+            <Input
+              id="phone"
+              value={profileForm.phone}
+              onChange={(event) =>
+                setProfileForm((prev) => ({ ...prev, phone: event.target.value }))
+              }
+              disabled={loading}
+              className={fieldClassName}
+            />
+          </div>
+
+          {isStudent ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="student_id">学号</Label>
+                <Input
+                  id="student_id"
+                  value={profileForm.student_id}
+                  onChange={(event) =>
+                    setProfileForm((prev) => ({
+                      ...prev,
+                      student_id: event.target.value,
+                    }))
+                  }
+                  disabled={loading}
+                  className={fieldClassName}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>所属班级</Label>
+                {classesLoading ? (
+                  <div className="student-card-muted px-4 py-3 text-sm text-slate-500">
+                    正在加载班级列表...
+                  </div>
+                ) : classes.length > 0 ? (
+                  <Select
+                    value={profileForm.class_id || undefined}
+                    onValueChange={(value) =>
+                      setProfileForm((prev) => ({ ...prev, class_id: value }))
+                    }
+                    disabled={loading}
+                  >
+                    <SelectTrigger className="h-12 rounded-[12px] border-black/10 bg-white/80">
+                      <SelectValue placeholder="请选择班级" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {classes.map((classOption) => (
+                        <SelectItem key={classOption.id} value={classOption.id}>
+                          {classOption.name} - {classOption.teacher_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="student-card-muted px-4 py-3 text-sm text-slate-500">
+                    暂无可选班级
+                  </div>
+                )}
+              </div>
+            </>
+          ) : null}
+
+          <Button
+            type="submit"
+            className="student-dark-button h-auto w-full justify-center"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                保存中...
+              </>
+            ) : (
+              <>
+                <Save className="mr-2 h-4 w-4" />
+                保存修改
+              </>
+            )}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+
+  const renderPasswordPanel = () => (
+    <Card className="student-card">
+      <CardHeader>
+        <CardTitle className="text-slate-900">账号安全</CardTitle>
+        <CardDescription className="leading-7">
+          定期更换密码，降低账户风险。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handlePasswordChange} className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="old_password">当前密码</Label>
+            <Input
+              id="old_password"
+              type="password"
+              value={passwordForm.old_password}
+              onChange={(event) =>
+                setPasswordForm((prev) => ({
+                  ...prev,
+                  old_password: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              className={fieldClassName}
+            />
+          </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Label htmlFor="new_password">新密码</Label>
+            <Input
+              id="new_password"
+              type="password"
+              value={passwordForm.new_password}
+              onChange={(event) =>
+                setPasswordForm((prev) => ({
+                  ...prev,
+                  new_password: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              className={fieldClassName}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="confirm_password">确认新密码</Label>
+            <Input
+              id="confirm_password"
+              type="password"
+              value={passwordForm.confirm_password}
+              onChange={(event) =>
+                setPasswordForm((prev) => ({
+                  ...prev,
+                  confirm_password: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              className={fieldClassName}
+            />
+          </div>
+
+          <Button
+            type="submit"
+            className="student-dark-button h-auto w-full justify-center"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                提交中...
+              </>
+            ) : (
+              <>
+                <Key className="mr-2 h-4 w-4" />
+                更新密码
+              </>
+            )}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+
+  const renderAbilityPanel = (forceReadOnly = false) => {
+    if (!isStudent) {
+      return null;
+    }
+
+    if (assessmentLoading) {
       return (
-        <div className="flex items-center justify-center py-10 text-slate-500">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          正在加载能力评估数据
+        <Card className="student-card">
+          <CardContent className="flex items-center justify-center py-16 text-slate-500">
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+            正在加载能力评估...
+          </CardContent>
+        </Card>
+      );
+    }
+
+    if (isAssessmentLocked || forceReadOnly) {
+      return (
+        <div className="space-y-6">
+          <Alert className="rounded-[14px] border-[#dbc5ad] bg-[#f8efe3] text-slate-900">
+            <Lock className="h-4 w-4" />
+            <AlertDescription>{DEFAULT_READONLY_MESSAGE}</AlertDescription>
+          </Alert>
+          <SkillsRadar
+            studentMode
+            skills={mergeAssessmentIntoSkills(createEditableDefaultSkills(), assessment)}
+            emptyStateMessage={DEFAULT_EMPTY_MESSAGE}
+          />
         </div>
       );
     }
 
     return (
-      <>
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm text-slate-600">
-            {abilityProfileVisible
-              ? '以下画像基于系统记录的真实辩论表现生成，仅用于展示。'
-              : DEFAULT_SKILLS_EMPTY_STATE_MESSAGE}
-          </div>
-          <Badge variant="outline">
-            {abilityProfileVisible ? '已生成画像' : '暂无画像'}
-          </Badge>
-        </div>
+      <div className="space-y-6">
+        <Alert className="rounded-[14px] border-[#d9cdbf] bg-[#f4ede5] text-slate-900">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            {needsAssessment
+              ? '完成能力评估后，首页的“加入本场辩论”入口才会解锁。'
+              : '你已经保存过能力评估，可以继续调整，直到完成首场正式辩论为止。'}
+          </AlertDescription>
+        </Alert>
 
-        <SkillsRadar
-          skills={abilityProfileVisible ? skills : createEmptySkills()}
-          emptyStateMessage={DEFAULT_SKILLS_EMPTY_STATE_MESSAGE}
+        <SkillsAssessmentEditor
+          studentMode
+          skills={skills}
+          onSkillChange={(skillKey, value) =>
+            setSkills((prev) =>
+              prev.map((skill) =>
+                skill.key === skillKey ? { ...skill, value } : skill
+              )
+            )
+          }
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-blue-600" />
-              能力成长概览
-            </CardTitle>
-            <CardDescription>展示最近 7 场辩论的成长趋势与统计摘要</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-lg bg-blue-50 p-4">
-                <div className="text-sm font-medium text-blue-900">综合评分</div>
-                <div className="mt-2 text-2xl font-bold text-blue-600">
-                  {averageScore}
-                </div>
-              </div>
-              <div className="rounded-lg bg-emerald-50 p-4">
-                <div className="text-sm font-medium text-emerald-900">已完成辩论</div>
-                <div className="mt-2 text-2xl font-bold text-emerald-600">
-                  {completedDebates}
-                </div>
-              </div>
-            </div>
-
-            {growthTrend.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                暂无成长趋势数据
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {growthTrend.map((item) => (
-                  <div
-                    key={item.debate_id}
-                    className="rounded-lg border border-slate-200 p-4"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-slate-900">{item.topic}</div>
-                        <div className="text-sm text-slate-500">
-                          {new Date(item.date).toLocaleDateString('zh-CN')}
-                        </div>
-                      </div>
-                      <Badge variant="outline">总分 {item.score}</Badge>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600 md:grid-cols-5">
-                      <div>逻辑 {item.ability_scores.logic}</div>
-                      <div>表达 {item.ability_scores.expression}</div>
-                      <div>反驳 {item.ability_scores.rebuttal}</div>
-                      <div>协作 {item.ability_scores.teamwork}</div>
-                      <div>知识 {item.ability_scores.knowledge}</div>
-                    </div>
+        {assessment?.recommended_role ? (
+          <Card className="student-card-soft-blue">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium text-slate-600">
+                    当前推荐角色
                   </div>
-                ))}
+                  <div className="mt-1 text-lg font-semibold text-slate-950">
+                    {formatDebateRole(assessment.recommended_role)}
+                  </div>
+                  <div className="mt-2 text-sm text-slate-600">
+                    {assessment.role_description}
+                  </div>
+                </div>
+                <Badge className="student-pill">已保存</Badge>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <Button
+          onClick={handleAbilitySave}
+          className="student-dark-button h-auto w-full justify-center"
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              保存中...
+            </>
+          ) : (
+            <>
+              <Save className="mr-2 h-4 w-4" />
+              保存能力评估
+            </>
+          )}
+        </Button>
+
+        {typeof analytics?.completed_debates === 'number' ? (
+          <div className="student-card-muted p-4 text-sm leading-7 text-slate-600">
+            已完成正式辩论：{analytics.completed_debates} 场。完成首场后，这里的评估入口会自动锁定。
+          </div>
+        ) : null}
+      </div>
     );
   };
 
-  return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <div className="flex items-center gap-3">
-        {isStudent ? (
-          <GraduationCap className="h-8 w-8 text-blue-600" />
+  const renderMainPanel = () => {
+    switch (activeTab) {
+      case 'info':
+        return isStudent && isAssessmentLocked ? (
+          <div className="space-y-6">
+            {renderInfoPanel()}
+            {renderAbilityPanel(true)}
+          </div>
         ) : (
-          <ShieldCheck className="h-8 w-8 text-blue-600" />
-        )}
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">个人中心</h1>
-          <p className="text-slate-600">
-            {isStudent ? '学生' : '教师'} - {user.name}
-          </p>
-        </div>
-      </div>
-
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) =>
-          setActiveTab(value as 'info' | 'password' | 'ability')
+          renderInfoPanel()
+        );
+      case 'password':
+        return renderPasswordPanel();
+      case 'ability':
+        return renderAbilityPanel();
+      default:
+        if (isStudent && isAssessmentLocked) {
+          return renderAbilityPanel(true);
         }
-        className="w-full"
-      >
-        <TabsList className={`mb-8 grid w-full ${isStudent ? 'grid-cols-3' : 'grid-cols-2'}`}>
-          <TabsTrigger value="info" className="flex items-center gap-2">
-            <User className="h-4 w-4" />
-            个人信息
-          </TabsTrigger>
-          <TabsTrigger value="password" className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            修改密码
-          </TabsTrigger>
-          {isStudent && (
-            <TabsTrigger value="ability" className="flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              能力评估
-            </TabsTrigger>
-          )}
-        </TabsList>
 
-        <TabsContent value="info">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <User className="h-5 w-5" />
-                基本资料
-              </CardTitle>
-              <CardDescription>查看和编辑您的个人信息</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleProfileUpdate} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="account">账号</Label>
-                  <Input id="account" value={user.account} disabled className="bg-slate-50" />
-                </div>
+        return renderInfoPanel();
+    }
+  };
 
-                <div className="space-y-2">
-                  <Label htmlFor="name">姓名</Label>
-                  <Input
-                    id="name"
-                    value={profileForm.name}
-                    onChange={(event) =>
-                      setProfileForm((prev) => ({ ...prev, name: event.target.value }))
-                    }
-                    disabled={loading}
-                    required
-                  />
-                </div>
+  return (
+    <div className="grid gap-6 lg:grid-cols-[300px,1fr]">
+      <aside className="student-card h-fit px-4 py-4">
+        <div className="mb-4 flex items-center gap-3 px-2">
+          <div className="student-icon-bubble h-12 w-12 bg-[#151515] text-white">
+            {isStudent ? (
+              <User className="h-5 w-5" />
+            ) : (
+              <ShieldCheck className="h-5 w-5" />
+            )}
+          </div>
+          <div>
+            <div className="font-semibold text-slate-900">{user.name}</div>
+            <div className="text-sm text-slate-500">
+              {isStudent ? '学生设置中心' : '教师设置中心'}
+            </div>
+            {isStudent && isAssessmentLocked ? (
+              <div className="mt-1 text-xs text-amber-700">
+                能力评估已锁定，右侧展示只读结果。
+              </div>
+            ) : null}
+          </div>
+        </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="email" className="flex items-center gap-2">
-                    <Mail className="h-4 w-4" />
-                    邮箱
-                  </Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={profileForm.email}
-                    onChange={(event) =>
-                      setProfileForm((prev) => ({ ...prev, email: event.target.value }))
-                    }
-                    disabled={loading}
-                    placeholder={isStudent ? '学生邮箱可选填' : '请输入邮箱'}
-                  />
-                </div>
+        <nav className="space-y-2">
+          {availableTabs.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setActiveTab(item.key)}
+              className={`w-full p-3.5 text-left transition-colors duration-150 ${
+                activeTab === item.key ? item.tone : 'student-card-muted'
+              }`}
+            >
+              <div className="font-medium text-slate-900">{item.label}</div>
+              <div className="mt-1 text-xs leading-6 text-slate-500">
+                {item.description}
+              </div>
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-                <div className="space-y-2">
-                  <Label htmlFor="phone" className="flex items-center gap-2">
-                    <Phone className="h-4 w-4" />
-                    手机号
-                  </Label>
-                  <Input
-                    id="phone"
-                    value={profileForm.phone}
-                    onChange={(event) =>
-                      setProfileForm((prev) => ({ ...prev, phone: event.target.value }))
-                    }
-                    disabled={loading}
-                    placeholder="请输入手机号"
-                  />
-                </div>
-
-                {isStudent && (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="student_id">学号</Label>
-                      <Input
-                        id="student_id"
-                        value={profileForm.student_id}
-                        onChange={(event) =>
-                          setProfileForm((prev) => ({
-                            ...prev,
-                            student_id: event.target.value,
-                          }))
-                        }
-                        disabled={loading}
-                        placeholder="请输入学号"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label className="flex items-center gap-2">
-                        <Users className="h-4 w-4" />
-                        所属班级
-                      </Label>
-                      {classesLoading ? (
-                        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                          正在加载班级列表
-                        </div>
-                      ) : classes.length > 0 ? (
-                        <Select
-                          value={profileForm.class_id || undefined}
-                          onValueChange={(value) =>
-                            setProfileForm((prev) => ({ ...prev, class_id: value }))
-                          }
-                          disabled={loading || hasLockedClass}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="请选择班级" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {classes.map((classOption) => (
-                              <SelectItem key={classOption.id} value={classOption.id}>
-                                {classOption.name} - {classOption.teacher_name} | 学生数：
-                                {classOption.student_count}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                          暂无可选班级
-                        </div>
-                      )}
-                      <p className="text-xs text-slate-500">
-                        {hasLockedClass
-                          ? '班级已锁定，首次选择后不可自行修改。'
-                          : '班级仅能选择一次，请确认后再保存。'}
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                <Button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      保存中
-                    </>
-                  ) : (
-                    <>
-                      <Save className="mr-2 h-4 w-4" />
-                      保存修改
-                    </>
-                  )}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="password">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Key className="h-5 w-5" />
-                安全设置
-              </CardTitle>
-              <CardDescription>定期修改密码以保护账户安全</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handlePasswordChange} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="old_password">当前密码</Label>
-                  <Input
-                    id="old_password"
-                    type="password"
-                    value={passwordForm.old_password}
-                    onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        old_password: event.target.value,
-                      }))
-                    }
-                    disabled={loading}
-                    required
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="space-y-2">
-                  <Label htmlFor="new_password">新密码</Label>
-                  <Input
-                    id="new_password"
-                    type="password"
-                    value={passwordForm.new_password}
-                    onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        new_password: event.target.value,
-                      }))
-                    }
-                    disabled={loading}
-                    required
-                    minLength={6}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="confirm_password">确认新密码</Label>
-                  <Input
-                    id="confirm_password"
-                    type="password"
-                    value={passwordForm.confirm_password}
-                    onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        confirm_password: event.target.value,
-                      }))
-                    }
-                    disabled={loading}
-                    required
-                    minLength={6}
-                  />
-                </div>
-
-                <Button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      修改中
-                    </>
-                  ) : (
-                    <>
-                      <Key className="mr-2 h-4 w-4" />
-                      修改密码
-                    </>
-                  )}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {isStudent && (
-          <TabsContent value="ability" className="space-y-6">
-            {renderAbilitySummary()}
-          </TabsContent>
-        )}
-      </Tabs>
+      <section className="space-y-6">{renderMainPanel()}</section>
     </div>
   );
 };

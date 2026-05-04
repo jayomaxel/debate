@@ -98,7 +98,7 @@ export default class WebSocketClient {
   private readonly maxReconnectAttempts: number;
   private readonly heartbeatInterval: number;
   private readonly onOpen?: () => void;
-  private readonly onClose?: () => void;
+  private readonly onClose?: (event?: CloseEvent) => void;
   private readonly onError?: (error: Event) => void;
 
   constructor(options: WebSocketClientOptions = {}) {

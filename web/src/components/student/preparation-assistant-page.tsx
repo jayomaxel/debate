@@ -1,129 +1,193 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  BookOpen,
+  Bot,
+  Download,
+  FileText,
+  Loader2,
+  MessageSquare,
+  RefreshCw,
+  Plus,
+  Search,
+  Send,
+  User,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Loader2,
-  Send,
-  BookOpen,
-  MessageSquare,
-  Plus,
-  ArrowLeft,
-  FileText,
-  User,
-  Bot
-} from 'lucide-react';
-import StudentService, { type Conversation, type KBSource, type KBSession } from '@/services/student.service';
+import StudentService, {
+  type Conversation,
+  type KBDocument,
+  type KBSession,
+  type KBSource,
+} from '@/services/student.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/store/auth.context';
+import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import TokenManager from '@/lib/token-manager';
 
 interface PreparationAssistantPageProps {
   onBack: () => void;
 }
 
-const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onBack }) => {
+const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
+  onBack,
+}) => {
   const { toast } = useToast();
   const { user } = useAuth();
-  
-  // State
   const [sessions, setSessions] = useState<KBSession[]>([]);
+  const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [documentSearch, setDocumentSearch] = useState('');
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(
+    null
+  );
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [streamingSources, setStreamingSources] = useState<KBSource[]>([]);
-
-  // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingSessionIdRef = useRef<string | null>(null);
 
-  // Load sessions on mount
+  const scrollToBottom = () => {
+    if (!scrollAreaRef.current) {
+      return;
+    }
+
+    const viewport = scrollAreaRef.current.querySelector(
+      '[data-radix-scroll-area-viewport]'
+    );
+
+    if (viewport) {
+      (viewport as HTMLDivElement).scrollTop =
+        (viewport as HTMLDivElement).scrollHeight;
+    }
+  };
+
   useEffect(() => {
-    loadSessions();
+    scrollToBottom();
+  }, [conversations, streamingAnswer]);
+
+  const loadConversationHistory = useCallback(async (sessionId: string) => {
+    try {
+      setLoadingHistory(true);
+      const history = await StudentService.getKBConversationHistory(sessionId);
+      setConversations(Array.isArray(history) ? history.reverse() : []);
+    } catch (error) {
+      console.error('[PreparationAssistantPage] Failed to load history:', error);
+      setConversations([]);
+    } finally {
+      setLoadingHistory(false);
+    }
   }, []);
 
-  // Load history when session changes
+  const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+
+    try {
+      if (silent) {
+        setRefreshing(true);
+      } else {
+        setLoadingSessions(true);
+      }
+
+      const data = await StudentService.getKBSessions();
+      setSessions(data);
+      setCurrentSessionId((previous) => previous || data[0]?.session_id || null);
+    } catch (error) {
+      console.error('[PreparationAssistantPage] Failed to load sessions:', error);
+    } finally {
+      setLoadingSessions(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const loadDocuments = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+
+    try {
+      if (!silent) {
+        setLoadingDocuments(true);
+      }
+
+      const data = await StudentService.getKBDocuments(1, 50);
+      setDocuments(Array.isArray(data.documents) ? data.documents : []);
+    } catch (error) {
+      console.error('[PreparationAssistantPage] Failed to load documents:', error);
+    } finally {
+      setLoadingDocuments(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+    void loadDocuments();
+  }, [loadDocuments, loadSessions]);
+
   useEffect(() => {
     if (currentSessionId) {
       if (pendingSessionIdRef.current === currentSessionId) {
         return;
       }
-      loadConversationHistory(currentSessionId);
-    } else {
-      setConversations([]);
-    }
-  }, [currentSessionId]);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      void loadConversationHistory(currentSessionId);
+      return;
+    }
+
+    setConversations([]);
+  }, [currentSessionId, loadConversationHistory]);
+
+  usePageActivityRefresh(
+    async () => {
+      await loadSessions({ silent: true });
+      await loadDocuments({ silent: true });
+      if (currentSessionId && pendingSessionIdRef.current !== currentSessionId) {
+        await loadConversationHistory(currentSessionId);
       }
+    },
+    {
+      enabled: !loadingSessions,
+      intervalMs: 20000,
     }
-  }, [conversations, streamingAnswer]);
-
-  const loadSessions = async () => {
-    try {
-      const data = await StudentService.getKBSessions();
-      setSessions(data);
-      setCurrentSessionId(prev => prev || data[0]?.session_id || null);
-    } catch (err: any) {
-      console.error('Failed to load sessions:', err);
-    }
-  };
-
-  const loadConversationHistory = async (sessionId: string) => {
-    try {
-      setLoadingHistory(true);
-      const history = await StudentService.getKBConversationHistory(sessionId);
-      if (Array.isArray(history)) {
-        // Reverse history to show oldest first (top) -> newest last (bottom)
-        // Backend returns newest first.
-        setConversations(history.reverse());
-      } else {
-        setConversations([]);
-      }
-    } catch (err: any) {
-      console.error('Failed to load history:', err);
-      setConversations([]);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
+  );
 
   const handleNewChat = () => {
     pendingSessionIdRef.current = null;
     setCurrentSessionId(null);
     setConversations([]);
     setQuestion('');
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
+    inputRef.current?.focus();
   };
 
   const handleSessionSelect = (sessionId: string) => {
-    if (sessionId === currentSessionId) return;
+    if (sessionId === currentSessionId) {
+      return;
+    }
+
     setCurrentSessionId(sessionId);
   };
 
   const handleAskQuestion = async () => {
     const trimmedQuestion = question.trim();
-    if (!trimmedQuestion) return;
+    if (!trimmedQuestion) {
+      return;
+    }
 
-    // If no session, create one ID (will be saved in backend on first message)
     let sessionId = currentSessionId;
     let createdNewSession = false;
+
     if (!sessionId) {
       createdNewSession = true;
-      sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
       pendingSessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
     }
@@ -134,113 +198,128 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
       setStreamingAnswer('');
       setStreamingSources([]);
 
-      // Optimistic update: Add user question
-      const tempUserMsg: Conversation = {
+      const tempMessage: Conversation = {
         id: `temp_${Date.now()}`,
         question: trimmedQuestion,
         answer: '',
         sources: [],
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       };
-      setConversations(prev => [...prev, tempUserMsg]);
 
-      // Prepare for streaming
+      setConversations((previous) => [...previous, tempMessage]);
+
       const token = TokenManager.getAccessToken();
       const response = await fetch('/api/student/kb/ask/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           question: trimmedQuestion,
-          session_id: sessionId
-        })
+          session_id: sessionId,
+        }),
       });
 
       if (!response.ok) {
         throw new Error(`Error: ${response.statusText}`);
       }
 
-      if (!response.body) return;
+      if (!response.body) {
+        return;
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let answerAcc = '';
-      let sourcesAcc: KBSource[] = [];
+      let answerAccumulator = '';
+      let sourcesAccumulator: KBSource[] = [];
+      let reading = true;
 
-      let isReading = true;
-      while (isReading) {
+      while (reading) {
         const { done, value } = await reader.read();
         if (done) {
-          isReading = false;
+          reading = false;
           continue;
         }
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
+        const segments = buffer.split('\n\n');
+        buffer = segments.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            try {
-              const event = JSON.parse(dataStr);
-              if (event.type === 'sources') {
-                sourcesAcc = Array.isArray(event.data) ? event.data : [];
-                setStreamingSources(sourcesAcc);
-              } else if (event.type === 'answer') {
-                const content = typeof event.content === 'string' ? event.content : '';
-                answerAcc += content;
-                setStreamingAnswer(answerAcc);
-              } else if (event.type === 'done') {
-                pendingSessionIdRef.current = null;
-                setConversations(prev => {
-                  const newArr = [...prev];
-                  const lastIdx = newArr.length - 1;
-                  if (lastIdx >= 0) {
-                    newArr[lastIdx] = {
-                      ...newArr[lastIdx],
-                      id: event.id,
-                      answer: answerAcc,
-                      sources: sourcesAcc
-                    };
-                  }
-                  return newArr;
-                });
+        for (const segment of segments) {
+          if (!segment.startsWith('data: ')) {
+            continue;
+          }
 
-                if (!sessions.find(s => s.session_id === sessionId)) {
-                  loadSessions();
-                }
-              } else if (event.type === 'error') {
-                toast({
-                  variant: 'destructive',
-                  title: '生成出错',
-                  description: event.message
-                });
-              }
-            } catch (e) {
-              console.error('Error parsing SSE:', e);
+          const payload = segment.slice(6);
+
+          try {
+            const event = JSON.parse(payload);
+
+            if (event.type === 'sources') {
+              sourcesAccumulator = Array.isArray(event.data) ? event.data : [];
+              setStreamingSources(sourcesAccumulator);
+              continue;
             }
+
+            if (event.type === 'answer') {
+              const content =
+                typeof event.content === 'string' ? event.content : '';
+              answerAccumulator += content;
+              setStreamingAnswer(answerAccumulator);
+              continue;
+            }
+
+            if (event.type === 'done') {
+              pendingSessionIdRef.current = null;
+              setConversations((previous) => {
+                const next = [...previous];
+                const lastIndex = next.length - 1;
+                if (lastIndex >= 0) {
+                  next[lastIndex] = {
+                    ...next[lastIndex],
+                    id: event.id,
+                    answer: answerAccumulator,
+                    sources: sourcesAccumulator,
+                  };
+                }
+                return next;
+              });
+
+              if (!sessions.find((item) => item.session_id === sessionId)) {
+                void loadSessions({ silent: true });
+              }
+              continue;
+            }
+
+            if (event.type === 'error') {
+              toast({
+                variant: 'destructive',
+                title: '生成出错',
+                description: event.message,
+              });
+            }
+          } catch (parseError) {
+            console.error('[PreparationAssistantPage] Error parsing SSE:', parseError);
           }
         }
       }
-      setConversations(prev => {
-        const newArr = [...prev];
-        const lastIdx = newArr.length - 1;
-        if (lastIdx >= 0) {
-          newArr[lastIdx] = {
-            ...newArr[lastIdx],
-            answer: answerAcc,
-            sources: sourcesAcc
+
+      setConversations((previous) => {
+        const next = [...previous];
+        const lastIndex = next.length - 1;
+        if (lastIndex >= 0) {
+          next[lastIndex] = {
+            ...next[lastIndex],
+            answer: answerAccumulator,
+            sources: sourcesAccumulator,
           };
         }
-        return newArr;
+        return next;
       });
-
-    } catch (err: any) {
-      console.error('Failed to ask question:', err);
+    } catch (error: any) {
+      console.error('[PreparationAssistantPage] Failed to ask question:', error);
       if (createdNewSession) {
         pendingSessionIdRef.current = null;
         setCurrentSessionId(null);
@@ -248,10 +327,9 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
       toast({
         variant: 'destructive',
         title: '提问失败',
-        description: formatErrorMessage(err),
+        description: formatErrorMessage(error),
       });
-      // Remove temp message
-      setConversations(prev => prev.slice(0, -1));
+      setConversations((previous) => previous.slice(0, -1));
       setQuestion(trimmedQuestion);
     } finally {
       setLoading(false);
@@ -260,50 +338,95 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleAskQuestion();
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleAskQuestion();
     }
   };
 
-  const formatDate = (dateString: string): string => {
+  const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleString('zh-CN', {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
     });
   };
 
-  const renderSources = (sources: KBSource[]) => {
-    if (!sources || sources.length === 0) return null;
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes || bytes <= 0) {
+      return '未知大小';
+    }
+
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(0)} KB`;
+    }
+
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const filteredDocuments = documents.filter((document) => {
+    const keyword = documentSearch.trim().toLowerCase();
+    if (!keyword) {
+      return true;
+    }
 
     return (
-      <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
-        <div className="flex items-center gap-2 mb-2">
-          <Badge className="bg-blue-100 text-blue-700 border-blue-200">
-            <FileText className="w-3 h-3 mr-1" />
+      document.filename.toLowerCase().includes(keyword) ||
+      document.file_type.toLowerCase().includes(keyword)
+    );
+  });
+
+  const handleDownloadDocument = async (document: KBDocument) => {
+    try {
+      setDownloadingDocumentId(document.id);
+      await StudentService.downloadKBDocument(document);
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '下载失败',
+        description: formatErrorMessage(error),
+      });
+    } finally {
+      setDownloadingDocumentId(null);
+    }
+  };
+
+  const renderSources = (sources: KBSource[]) => {
+    if (!sources || sources.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 space-y-3 border-t border-black/5 pt-4">
+        <div className="flex items-center gap-2">
+          <Badge className="student-pill">
+            <FileText className="mr-1 h-3 w-3" />
             参考资料
           </Badge>
-          <span className="text-xs text-slate-500">
-            {sources.length} 个相关文档
-          </span>
+          <span className="text-xs text-slate-500">{sources.length} 份相关文档</span>
         </div>
-        
+
         <div className="grid grid-cols-1 gap-2">
           {sources.map((source, index) => (
-            <div key={index} className="bg-slate-50 rounded p-2 text-xs border border-slate-100">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-medium text-slate-700 truncate max-w-[200px]" title={source.document_name}>
+            <div
+              key={`${source.document_id}-${index}`}
+              className="rounded-[14px] border border-black/5 bg-white/75 p-3 text-xs shadow-[0_10px_25px_rgba(15,23,42,0.04)]"
+            >
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <span
+                  className="max-w-[220px] truncate font-medium text-slate-800"
+                  title={source.document_name}
+                >
                   {source.document_name}
                 </span>
                 <span className="text-slate-400">
                   {(source.similarity_score * 100).toFixed(0)}%
                 </span>
               </div>
-              <p className="text-slate-500 line-clamp-1" title={source.excerpt}>
+              <p className="line-clamp-2 text-slate-500" title={source.excerpt}>
                 {source.excerpt}
               </p>
             </div>
@@ -314,224 +437,327 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({ onB
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
-      {/* Left Sidebar */}
-      <div className="w-72 bg-white border-r border-slate-200 flex flex-col">
-        <div className="p-4 border-b border-slate-100">
-          <Button 
-            onClick={onBack} 
-            variant="ghost" 
-            size="sm" 
-            className="mb-4 text-slate-500 hover:text-slate-900 -ml-2"
-          >
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            返回控制台
-          </Button>
-          
-          <Button 
-            onClick={handleNewChat}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            开启新对话
-          </Button>
-        </div>
+    <div className="student-container py-6 pb-12">
+      <div className="grid gap-5 xl:grid-cols-[320px,1fr]">
+        <aside className="student-card flex min-h-[calc(100vh-11rem)] flex-col overflow-hidden">
+          <div className="border-b border-black/5 p-4">
+            <Button
+              onClick={onBack}
+              variant="ghost"
+              size="sm"
+              className="student-light-button mb-4 h-auto px-4 py-2"
+            >
+              <ArrowLeft className="mr-1 h-4 w-4" />
+              返回学生首页
+            </Button>
 
-        <ScrollArea className="flex-1">
-          <div className="p-3 space-y-2">
-            {sessions.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-sm">
-                暂无历史对话
+            <div className="student-card-soft-lavender p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    AI 备赛助手
+                  </div>
+                  <div className="mt-1.5 text-lg font-semibold tracking-[-0.03em] text-slate-900">
+                    开启新对话
+                  </div>
+                </div>
+                <div className="student-icon-bubble h-11 w-11 bg-white text-slate-900">
+                  <Bot className="h-5 w-5" />
+                </div>
               </div>
-            ) : (
-              sessions.map((session) => (
-                <div
-                  key={session.session_id}
-                  onClick={() => handleSessionSelect(session.session_id)}
-                  className={`
-                    p-3 rounded-lg cursor-pointer transition-colors text-left
-                    ${currentSessionId === session.session_id 
-                      ? 'bg-blue-50 border-blue-200 border' 
-                      : 'hover:bg-slate-50 border border-transparent'}
-                  `}
+
+              <div className="mt-4 space-y-3">
+                <Button onClick={handleNewChat} className="student-dark-button h-auto w-full justify-center">
+                  <Plus className="mr-2 h-4 w-4" />
+                  开启新对话
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="student-light-button h-auto w-full justify-center"
+                  onClick={async () => {
+                    await loadSessions({ silent: true });
+                    await loadDocuments({ silent: true });
+                  }}
+                  disabled={refreshing}
                 >
-                  <h4 className={`text-sm font-medium mb-1 truncate ${
-                    currentSessionId === session.session_id ? 'text-blue-700' : 'text-slate-700'
-                  }`}>
-                    {session.title}
-                  </h4>
-                  <div className="flex items-center text-xs text-slate-400">
-                    <MessageSquare className="w-3 h-3 mr-1" />
-                    {formatDate(session.updated_at)}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </ScrollArea>
-        
-        <div className="p-4 border-t border-slate-100 bg-slate-50">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
-              <User className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-900 truncate">{user?.name || 'Student'}</p>
-              <p className="text-xs text-slate-500 truncate">Student Account</p>
+                  {refreshing ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <MessageSquare className="mr-2 h-4 w-4" />
+                  )}
+                  刷新会话
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col h-full relative">
-        {/* Header */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Bot className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-slate-900">备战辅助助手</h1>
-              <p className="text-xs text-slate-500">基于知识库的智能问答系统</p>
-            </div>
-          </div>
-        </header>
-
-        {/* Chat Area */}
-        <ScrollArea ref={scrollAreaRef} className="flex-1 p-6 bg-slate-50/50">
-          <div className="max-w-6xl mx-auto space-y-6 pb-4">
-            {!currentSessionId && conversations.length === 0 ? (
-              <div className="text-center py-20">
-                <div className="w-20 h-20 bg-white rounded-2xl shadow-sm border border-slate-100 flex items-center justify-center mx-auto mb-6">
-                  <BookOpen className="w-10 h-10 text-blue-500" />
-                </div>
-                <h2 className="text-2xl font-bold text-slate-900 mb-3">
-                  你好，我是你的辩论备战助手 👋
-                </h2>
-                <p className="text-slate-500 max-w-md mx-auto mb-8">
-                  我可以帮你查找辩论资料、分析辩题、提供论据建议。
-                  <br />
-                  请在下方输入你的问题，我会基于知识库为你解答。
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
-                  {[
-                    "什么是情感计算？",
-                    "如何反驳'技术中立论'？",
-                    "请列举关于AI伦理风险的论据",
-                    "辩论中的核心论点怎么构建？"
-                  ].map((q, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        setQuestion(q);
-                        // Optional: auto send?
-                      }}
-                      className="p-4 bg-white border border-slate-200 rounded-xl text-left hover:border-blue-300 hover:shadow-sm transition-all text-sm text-slate-700"
-                    >
-                      {q}
-                    </button>
-                  ))}
+          <div className="border-b border-black/5 px-4 py-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">资料库</div>
+                <div className="text-xs text-slate-500">
+                  浏览备赛材料并下载原文件
                 </div>
               </div>
-            ) : loadingHistory ? (
-              <div className="flex items-center justify-center py-20 text-slate-500">
-                <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                正在加载会话记录...
-              </div>
-            ) : conversations.length === 0 ? (
-              <div className="text-center py-20 text-slate-500">
-                当前会话还没有消息，试着从下方继续提问。
-              </div>
-            ) : (
-              conversations.map((conv, idx) => (
-                <React.Fragment key={conv.id || idx}>
-                  {/* User Question */}
-                  <div className="flex justify-end mb-6">
-                    <div className="max-w-[80%]">
-                      <div className="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-5 py-4 shadow-sm">
-                        <p className="text-sm leading-relaxed">{conv.question}</p>
-                      </div>
-                      <div className="text-right mt-1 text-xs text-slate-400 mr-1">
-                        {formatDate(conv.created_at)}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* AI Answer */}
-                  <div className="flex justify-start mb-6">
-                    <div className="flex gap-3 max-w-[85%]">
-                      <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 mt-1">
-                        <Bot className="w-4 h-4 text-blue-600" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-5 py-4 shadow-sm">
-                          {!conv.answer && loading && idx === conversations.length - 1 ? (
-                            <div className="flex items-center gap-2 text-slate-500 text-sm">
-                              {streamingAnswer ? (
-                                <p className="whitespace-pre-wrap leading-relaxed">{streamingAnswer}</p>
-                              ) : (
-                                <>
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                  正在思考中...
-                                </>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-sm text-slate-800">
-                              <p className="whitespace-pre-wrap leading-relaxed">
-                                {loading && idx === conversations.length - 1 && streamingAnswer 
-                                  ? streamingAnswer 
-                                  : conv.answer}
-                              </p>
-                              {/* Show sources if available */}
-                              {loading && idx === conversations.length - 1 && streamingSources.length > 0 
-                                ? renderSources(streamingSources)
-                                : renderSources(conv.sources)}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </React.Fragment>
-              ))
-            )}
-          </div>
-        </ScrollArea>
-
-        {/* Input Area */}
-        <div className="p-6 bg-white border-t border-slate-200">
-          <div className="max-w-6xl mx-auto relative">
-            <Textarea
-              ref={inputRef}
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="在此输入关于辩论的问题..."
-              className="min-h-[100px] pr-24 resize-none text-base p-4 rounded-xl border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-              disabled={loading}
-            />
-            <div className="absolute bottom-4 right-4">
               <Button
-                onClick={handleAskQuestion}
-                disabled={loading || !question.trim()}
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4"
+                variant="ghost"
+                size="sm"
+                onClick={() => void loadDocuments({ silent: true })}
+                disabled={loadingDocuments}
+                className="student-light-button h-auto rounded-[10px] px-3 py-2"
               >
-                {loading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                {loadingDocuments ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <>
-                    发送 <Send className="w-4 h-4 ml-2" />
-                  </>
+                  <RefreshCw className="h-4 w-4" />
                 )}
               </Button>
             </div>
-            <p className="text-xs text-slate-400 mt-2 text-center">
-              内容由AI生成，仅供参考。按 Enter 发送，Shift + Enter 换行。
-            </p>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={documentSearch}
+                onChange={(event) => setDocumentSearch(event.target.value)}
+                placeholder="搜索资料标题"
+                className="w-full rounded-[14px] border border-black/10 bg-white/75 py-3 pl-10 pr-3 text-sm outline-none transition focus:border-black/20"
+              />
+            </div>
+
+            <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
+              {loadingDocuments ? (
+                <div className="student-card-muted px-3 py-6 text-center text-sm text-slate-500">
+                  正在加载资料库...
+                </div>
+              ) : filteredDocuments.length === 0 ? (
+                <div className="student-card-muted px-3 py-6 text-center text-sm text-slate-500">
+                  暂无匹配资料
+                </div>
+              ) : (
+                filteredDocuments.map((document) => (
+                  <div key={document.id} className="student-card-muted p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-slate-900">
+                          {document.filename}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {document.file_type.toUpperCase()} ·{' '}
+                          {formatFileSize(document.file_size)}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="student-light-button h-auto px-3 py-2"
+                        onClick={() => void handleDownloadDocument(document)}
+                        disabled={downloadingDocumentId === document.id}
+                      >
+                        {downloadingDocumentId === document.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-        </div>
+
+          <ScrollArea className="flex-1">
+            <div className="space-y-2 p-3.5">
+              {loadingSessions ? (
+                <div className="py-8 text-center text-sm text-slate-400">
+                  正在加载备赛会话...
+                </div>
+              ) : sessions.length === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-400">
+                  暂无历史会话
+                </div>
+              ) : (
+                sessions.map((session, index) => (
+                  <div
+                    key={session.session_id}
+                    onClick={() => handleSessionSelect(session.session_id)}
+                    className={`cursor-pointer rounded-[12px] border p-3.5 text-left transition-colors duration-150 ${
+                      currentSessionId === session.session_id
+                        ? 'student-card-soft-blue'
+                        : index % 2 === 0
+                        ? 'student-card-muted'
+                        : 'student-card-soft-peach'
+                    }`}
+                  >
+                    <h4 className="mb-1 truncate text-sm font-medium text-slate-800">
+                      {session.title}
+                    </h4>
+                    <div className="flex items-center text-xs text-slate-400">
+                      <MessageSquare className="mr-1 h-3 w-3" />
+                      {formatDate(session.updated_at)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+
+          <div className="border-t border-black/5 bg-white/40 p-4">
+            <div className="student-card-muted flex items-center gap-3 p-4">
+              <div className="student-icon-bubble h-10 w-10 bg-white">
+                <User className="h-4 w-4 text-slate-700" />
+              </div>
+              <div className="min-w-0 flex-1">
+                {user?.name ? (
+                  <p className="truncate text-sm font-medium text-slate-900">
+                    {user.name}
+                  </p>
+                ) : null}
+                <p className="truncate text-xs text-slate-500">备赛区账户</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <section className="student-card flex min-h-[calc(100vh-11rem)] flex-col overflow-hidden">
+          <header className="border-b border-black/5 px-5 py-4">
+            <div className="flex items-start gap-4">
+              <div className="student-icon-bubble h-14 w-14 bg-[#151515] text-white">
+                <Bot className="h-6 w-6" />
+              </div>
+              <div>
+                <div className="student-kicker">备赛助手</div>
+                <h1 className="mt-3 text-[1.95rem] font-semibold tracking-[-0.05em] text-slate-900">
+                  备赛区 AI 助手
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-600">
+                  基于知识库的辩题资料检索、论点梳理和提问辅助，适合在开赛前快速完成结构化准备。
+                </p>
+              </div>
+            </div>
+          </header>
+
+          <ScrollArea ref={scrollAreaRef} className="flex-1 px-5 py-5">
+            <div className="mx-auto max-w-5xl space-y-5 pb-4">
+              {!currentSessionId && conversations.length === 0 ? (
+                <div className="py-10">
+                  <div className="student-card-soft-blue mx-auto max-w-3xl p-6 text-center">
+                    <div className="student-icon-bubble mx-auto h-16 w-16 bg-white text-slate-900">
+                      <BookOpen className="h-9 w-9" />
+                    </div>
+                    <h2 className="mt-5 text-[1.55rem] font-semibold tracking-[-0.04em] text-slate-900">
+                      还没有备赛会话
+                    </h2>
+                    <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-600">
+                      {documents.length > 0
+                        ? '可以先查看左侧资料库，或直接在下方输入问题开始真实会话。'
+                        : '当前还没有可展示的备赛内容，输入问题后会生成真实会话记录。'}
+                    </p>
+                  </div>
+                </div>
+              ) : loadingHistory ? (
+                <div className="flex items-center justify-center py-20 text-slate-500">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  正在加载会话记录...
+                </div>
+              ) : conversations.length === 0 ? (
+                <div className="py-20 text-center text-slate-500">
+                  当前会话还没有消息，试着从下方开始提问。
+                </div>
+              ) : (
+                conversations.map((conversation, index) => (
+                  <React.Fragment key={conversation.id || index}>
+                    <div className="mb-6 flex justify-end">
+                      <div className="max-w-[82%]">
+                        <div className="rounded-[14px] rounded-tr-[8px] bg-[#171717] px-4 py-3 text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)]">
+                          <p className="text-sm leading-8">{conversation.question}</p>
+                        </div>
+                        <div className="mr-2 mt-2 text-right text-xs text-slate-400">
+                          {formatDate(conversation.created_at)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mb-6 flex justify-start">
+                      <div className="flex max-w-[88%] gap-3">
+                        <div className="student-icon-bubble mt-1 h-9 w-9 bg-white text-slate-900">
+                          <Bot className="h-4 w-4" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="rounded-[14px] rounded-tl-[8px] border border-black/5 bg-white/85 px-4 py-3 shadow-[0_12px_24px_rgba(15,23,42,0.05)]">
+                            {!conversation.answer && loading && index === conversations.length - 1 ? (
+                              <div className="text-sm text-slate-500">
+                                {streamingAnswer ? (
+                                  <p className="whitespace-pre-wrap leading-8">
+                                    {streamingAnswer}
+                                  </p>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    正在整理回答...
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-sm text-slate-800">
+                                <p className="whitespace-pre-wrap leading-8">
+                                  {loading &&
+                                  index === conversations.length - 1 &&
+                                  streamingAnswer
+                                    ? streamingAnswer
+                                    : conversation.answer}
+                                </p>
+                                {loading &&
+                                index === conversations.length - 1 &&
+                                streamingSources.length > 0
+                                  ? renderSources(streamingSources)
+                                  : renderSources(conversation.sources)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+
+          <div className="border-t border-black/5 bg-white/45 p-5">
+            <div className="relative mx-auto max-w-5xl">
+              <Textarea
+                ref={inputRef}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="在这里输入关于本场辩论的备赛问题..."
+                className="min-h-[112px] resize-none rounded-[14px] border-black/10 bg-white/85 p-4 pr-24 text-[15px] leading-7 focus:border-black/20 focus:ring-black/10"
+                disabled={loading}
+              />
+              <div className="absolute bottom-4 right-4">
+                <Button
+                  onClick={() => void handleAskQuestion()}
+                  disabled={loading || !question.trim()}
+                  className="student-dark-button h-auto px-5 py-3"
+                >
+                  {loading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      发送
+                      <Send className="ml-2 h-4 w-4" />
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="mt-3 text-center text-xs text-slate-400">
+                内容由 AI 生成，仅供备赛参考。按 Enter 发送，Shift + Enter 换行。
+              </p>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );

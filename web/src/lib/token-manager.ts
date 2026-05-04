@@ -7,6 +7,10 @@ export interface TokenData {
   expires_in?: number;
 }
 
+export interface RefreshTokenResult extends TokenData {
+  user?: UserInfo;
+}
+
 export interface UserInfo {
   id: string;
   account: string;
@@ -27,7 +31,10 @@ const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const TOKEN_TYPE_KEY = 'token_type';
 const TOKEN_EXPIRES_AT_KEY = 'token_expires_at';
+const SESSION_STARTED_AT_KEY = 'session_started_at';
 const USER_INFO_KEY = 'user_info';
+
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type ImportMetaWithEnv = ImportMeta & {
   env?: {
@@ -58,9 +65,15 @@ const unwrapResponseData = <T>(payload: unknown): T => {
 const storageAvailable = () => typeof localStorage !== 'undefined';
 
 class TokenManager {
+  private static refreshPromise: Promise<RefreshTokenResult> | null = null;
+
   static setTokens(tokenData: TokenData): void {
     if (!storageAvailable()) {
       return;
+    }
+
+    if (!localStorage.getItem(SESSION_STARTED_AT_KEY)) {
+      localStorage.setItem(SESSION_STARTED_AT_KEY, String(Date.now()));
     }
 
     localStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
@@ -110,6 +123,19 @@ class TokenManager {
     return Date.now() >= expiresAt - 30_000;
   }
 
+  static isTokenExpiringSoon(windowMs = 90_000): boolean {
+    if (!storageAvailable()) {
+      return true;
+    }
+
+    const expiresAt = Number(localStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
+    if (!expiresAt) {
+      return false;
+    }
+
+    return Date.now() >= expiresAt - windowMs;
+  }
+
   static setUserInfo(userInfo: UserInfo): void {
     if (!storageAvailable()) {
       return;
@@ -145,21 +171,65 @@ class TokenManager {
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(TOKEN_TYPE_KEY);
     localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+    localStorage.removeItem(SESSION_STARTED_AT_KEY);
     localStorage.removeItem(USER_INFO_KEY);
   }
 
-  static async refreshToken(): Promise<TokenData> {
+  static getSessionStartedAt(): number | null {
+    if (!storageAvailable()) {
+      return null;
+    }
+
+    const raw = localStorage.getItem(SESSION_STARTED_AT_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  static isSessionExpired(): boolean {
+    const sessionStartedAt = this.getSessionStartedAt();
+    if (!sessionStartedAt) {
+      return false;
+    }
+
+    return Date.now() - sessionStartedAt >= SESSION_MAX_AGE_MS;
+  }
+
+  static async refreshToken(): Promise<RefreshTokenResult> {
+    if (this.refreshPromise) {
+      return await this.refreshPromise;
+    }
+
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
       throw new Error('No refresh token available');
     }
 
-    const response = await axios.post(`${getApiBaseUrl()}/api/auth/refresh`, {
-      refresh_token: refreshToken,
-    });
-    const tokenData = unwrapResponseData<TokenData>(response.data);
-    this.setTokens(tokenData);
-    return tokenData;
+    if (this.isSessionExpired()) {
+      this.clearAll();
+      throw new Error('Session expired');
+    }
+
+    this.refreshPromise = (async () => {
+      const response = await axios.post(`${getApiBaseUrl()}/api/auth/refresh`, {
+        refresh_token: refreshToken,
+      });
+      const tokenData = unwrapResponseData<RefreshTokenResult>(response.data);
+      this.setTokens(tokenData);
+      if (tokenData.user) {
+        this.setUserInfo(tokenData.user);
+      }
+      return tokenData;
+    })();
+
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
   }
 }
 

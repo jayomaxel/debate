@@ -10,6 +10,8 @@ vi.mock('@/services/student.service', () => ({
   default: {
     getKBSessions: vi.fn(),
     getKBConversationHistory: vi.fn(),
+    getKBDocuments: vi.fn(),
+    downloadKBDocument: vi.fn(),
   },
 }));
 
@@ -51,6 +53,13 @@ describe('PreparationAssistantPage', () => {
     vi.clearAllMocks();
     localStorage.setItem('access_token', 'test-token');
     vi.stubGlobal('fetch', vi.fn());
+    (StudentService.getKBDocuments as any).mockResolvedValue({
+      documents: [],
+      total: 0,
+      page: 1,
+      page_size: 50,
+      total_pages: 0,
+    });
   });
 
   it('loads the latest saved session on entry', async () => {
@@ -77,6 +86,9 @@ describe('PreparationAssistantPage', () => {
       expect(StudentService.getKBConversationHistory).toHaveBeenCalledWith(
         'session-1'
       );
+    });
+    await waitFor(() => {
+      expect(StudentService.getKBDocuments).toHaveBeenCalledWith(1, 50);
     });
 
     await waitFor(() => {
@@ -122,5 +134,42 @@ describe('PreparationAssistantPage', () => {
     });
 
     expect(StudentService.getKBConversationHistory).not.toHaveBeenCalled();
+  });
+
+  it('renders knowledge-base documents and supports downloading them', async () => {
+    (StudentService.getKBSessions as any).mockResolvedValue([]);
+    (StudentService.getKBConversationHistory as any).mockResolvedValue([]);
+    (StudentService.getKBDocuments as any).mockResolvedValue({
+      documents: [
+        {
+          id: 'doc-001',
+          filename: 'AI辩题资料.pdf',
+          file_type: 'pdf',
+          file_size: 204800,
+          upload_status: 'processed',
+          uploaded_by: 'teacher-001',
+          uploaded_at: '2026-05-03T00:00:00Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+
+    render(<PreparationAssistantPage onBack={vi.fn()} />);
+
+    expect(await screen.findByText('AI辩题资料.pdf')).toBeInTheDocument();
+
+    const downloadButtons = screen.getAllByRole('button');
+    fireEvent.click(downloadButtons[downloadButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(StudentService.downloadKBDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'doc-001',
+        })
+      );
+    });
   });
 });

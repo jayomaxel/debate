@@ -4,18 +4,16 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import {
   Clock,
-  Users,
-  Bot,
   MessageSquare,
   TrendingUp,
   BarChart3,
-  PieChart
+  PieChart,
 } from 'lucide-react';
 
 interface SpeakingData {
   name: string;
   role?: string | null;
-  time: number; // 秒
+  time: number;
   percentage: number;
   isAI?: boolean;
   color: string;
@@ -26,10 +24,11 @@ interface SpeakingTimeChartProps {
   totalTime?: number;
   title?: string;
   showComparison?: boolean;
+  studentMode?: boolean;
 }
 
 const mojibakePattern =
-  /[�]|[鑾娉瀛鐧鏇鏁鎴銆锛璇杈鑽閭鏌鐝涓閿楠寮鐢鏂鍥澶浣鈥俓歕篜凪]|[\uE000-\uF8FF]/;
+  /[锟絔|[閼惧▔鐎涢惂閺囬弫閹撮妴閿涚拠鏉堥懡闁弻閻濇稉闁挎瀵悽閺傞崶婢舵担閳ヤ繐姝曠瘻鍑猐|[\uE000-\uF8FF]/;
 
 const getRoleNumber = (role?: string | null) => {
   const match = String(role || '').match(/(?:debater|ai)_(\d+)/);
@@ -40,7 +39,7 @@ const getDisplayName = (item: SpeakingData) => {
   const roleNumber = getRoleNumber(item.role);
 
   if (item.isAI) {
-    return roleNumber ? `AI辩手${roleNumber}` : 'AI辩手';
+    return roleNumber ? `AI 辩手 ${roleNumber}` : 'AI 辩手';
   }
 
   const name = String(item.name || '').trim();
@@ -48,14 +47,18 @@ const getDisplayName = (item: SpeakingData) => {
     return name;
   }
 
-  return roleNumber ? `辩手${roleNumber}` : '辩手';
+  return roleNumber ? `辩手 ${roleNumber}` : '辩手';
 };
+
+const themeCard = (studentMode: boolean) =>
+  studentMode
+    ? 'rounded-[16px] border border-[#d7ccbf] bg-white/88 shadow-[0_14px_34px_rgba(58,42,28,0.07)]'
+    : 'bg-white border-slate-200 shadow-sm';
 
 const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
   data,
-  totalTime = 1800, // 30分钟
-  title = "发言时间分析",
-  showComparison = false
+  title = '发言时间分析',
+  studentMode = false,
 }) => {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -64,96 +67,93 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
   };
 
   const totalSpeakingTime = data.reduce((sum, item) => sum + (item.time || 0), 0);
-  const humanSpeakingTime = data.filter(item => !item.isAI).reduce((sum, item) => sum + (item.time || 0), 0);
-  const aiSpeakingTime = data.filter(item => item.isAI).reduce((sum, item) => sum + (item.time || 0), 0);
- 
-  const humanPercentage = totalSpeakingTime > 0 ? Math.round((humanSpeakingTime / totalSpeakingTime) * 100) : 0;
-  const aiPercentage = totalSpeakingTime > 0 ? Math.round((aiSpeakingTime / totalSpeakingTime) * 100) : 0;
+  const humanSpeakingTime = data
+    .filter((item) => !item.isAI)
+    .reduce((sum, item) => sum + (item.time || 0), 0);
+  const aiSpeakingTime = data
+    .filter((item) => item.isAI)
+    .reduce((sum, item) => sum + (item.time || 0), 0);
+
+  const humanPercentage =
+    totalSpeakingTime > 0 ? Math.round((humanSpeakingTime / totalSpeakingTime) * 100) : 0;
+  const aiPercentage =
+    totalSpeakingTime > 0 ? Math.round((aiSpeakingTime / totalSpeakingTime) * 100) : 0;
 
   const renderPieChart = () => {
-    let currentAngle = -Math.PI / 2; // 从顶部开始
-
+    let currentAngle = -Math.PI / 2;
     return (
       <div className="relative">
         {data.length === 0 ? (
-          <div className="text-center text-sm text-slate-500 py-10">暂无发言数据</div>
+          <div className="py-10 text-center text-sm text-slate-500">暂无发言数据</div>
         ) : (
-        <svg width="200" height="200" className="mx-auto">
-          {/* 饼图扇形 */}
-          {data.map((item, index) => {
-            const angle = (item.percentage / 100) * 2 * Math.PI;
-            const largeArcFlag = angle > Math.PI ? 1 : 0;
+          <svg width="200" height="200" className="mx-auto">
+            {data.map((item, index) => {
+              const angle = (item.percentage / 100) * 2 * Math.PI;
+              const largeArcFlag = angle > Math.PI ? 1 : 0;
+              const x1 = 100 + 80 * Math.cos(currentAngle);
+              const y1 = 100 + 80 * Math.sin(currentAngle);
+              const x2 = 100 + 80 * Math.cos(currentAngle + angle);
+              const y2 = 100 + 80 * Math.sin(currentAngle + angle);
 
-            const x1 = 100 + 80 * Math.cos(currentAngle);
-            const y1 = 100 + 80 * Math.sin(currentAngle);
-            const x2 = 100 + 80 * Math.cos(currentAngle + angle);
-            const y2 = 100 + 80 * Math.sin(currentAngle + angle);
+              const pathData = [
+                'M 100 100',
+                `L ${x1} ${y1}`,
+                `A 80 80 0 ${largeArcFlag} 1 ${x2} ${y2}`,
+                'Z',
+              ].join(' ');
 
-            const pathData = [
-              `M 100 100`,
-              `L ${x1} ${y1}`,
-              `A 80 80 0 ${largeArcFlag} 1 ${x2} ${y2}`,
-              'Z'
-            ].join(' ');
+              currentAngle += angle;
 
-            currentAngle += angle;
-
-            return (
-              <g key={index}>
+              return (
                 <path
+                  key={index}
                   d={pathData}
                   fill={item.color}
                   stroke="white"
                   strokeWidth="2"
-                  className="hover:opacity-80 transition-opacity cursor-pointer"
+                  className="cursor-pointer transition-opacity hover:opacity-80"
                 />
-              </g>
-            );
-          })}
+              );
+            })}
 
-          {/* 中心圆 */}
-          <circle
-            cx="100"
-            cy="100"
-            r="40"
-            fill="white"
-          />
-
-          {/* 中心文字 */}
-          <text
-            x="100"
-            y="95"
-            textAnchor="middle"
-            className="text-lg font-bold fill-slate-900"
-          >
-            {formatTime(totalSpeakingTime)}
-          </text>
-          <text
-            x="100"
-            y="115"
-            textAnchor="middle"
-            className="text-xs text-slate-500"
-          >
-            总发言时间
-          </text>
-        </svg>
+            <circle cx="100" cy="100" r="40" fill="white" />
+            <text
+              x="100"
+              y="95"
+              textAnchor="middle"
+              className="text-lg font-bold fill-slate-900"
+            >
+              {formatTime(totalSpeakingTime)}
+            </text>
+            <text
+              x="100"
+              y="115"
+              textAnchor="middle"
+              className="text-xs fill-slate-500"
+            >
+              总发言时间
+            </text>
+          </svg>
         )}
 
-        {/* 图例 */}
         <div className="mt-4 space-y-2">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-blue-500" />
+              <div className="h-3 w-3 rounded bg-[#171717]" />
               <span>人类团队</span>
             </div>
-            <span className="font-medium">{humanPercentage}% ({formatTime(humanSpeakingTime)})</span>
+            <span className="font-medium">
+              {humanPercentage}% ({formatTime(humanSpeakingTime)})
+            </span>
           </div>
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-purple-500" />
-              <span>AI团队</span>
+              <div className="h-3 w-3 rounded bg-[#b59676]" />
+              <span>AI 团队</span>
             </div>
-            <span className="font-medium">{aiPercentage}% ({formatTime(aiSpeakingTime)})</span>
+            <span className="font-medium">
+              {aiPercentage}% ({formatTime(aiSpeakingTime)})
+            </span>
           </div>
         </div>
       </div>
@@ -162,9 +162,9 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
 
   const renderBarChart = () => {
     if (data.length === 0) {
-      return <div className="text-center text-sm text-slate-500 py-6">暂无发言数据</div>;
+      return <div className="py-6 text-center text-sm text-slate-500">暂无发言数据</div>;
     }
-    const maxTime = Math.max(...data.map(item => item.time));
+    const maxTime = Math.max(...data.map((item) => item.time));
 
     return (
       <div className="space-y-3">
@@ -172,18 +172,9 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
           <div key={index} className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <div className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 rounded"
-                  style={{ backgroundColor: item.color }}
-                />
-                <span className="font-medium text-slate-700">
-                  {getDisplayName(item)}
-                </span>
-                {item.isAI && (
-                  <Badge className="bg-purple-100 text-purple-700 border-purple-300 text-xs">
-                    AI
-                  </Badge>
-                )}
+                <div className="h-3 w-3 rounded" style={{ backgroundColor: item.color }} />
+                <span className="font-medium text-slate-700">{getDisplayName(item)}</span>
+                {item.isAI ? <Badge className="student-pill">AI</Badge> : null}
               </div>
               <div className="text-right">
                 <div className="font-medium text-slate-900">{formatTime(item.time)}</div>
@@ -192,10 +183,7 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
             </div>
             <Progress
               value={(item.time / maxTime) * 100}
-              className="h-2"
-              style={{
-                backgroundColor: '#e2e8f0'
-              }}
+              className="h-2 bg-[#ece3d8] [&>div]:bg-[#171717]"
             />
           </div>
         ))}
@@ -204,98 +192,80 @@ const SpeakingTimeChart: React.FC<SpeakingTimeChartProps> = ({
   };
 
   return (
-    <Card className="bg-white border-slate-200 shadow-sm">
+    <Card className={themeCard(studentMode)}>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
+        <CardTitle className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-blue-600" />
+            <MessageSquare className="h-5 w-5 text-slate-700" />
             {title}
           </div>
           <div className="flex items-center gap-2">
-            <Badge className="bg-blue-100 text-blue-700 border-blue-300">
-              <Clock className="w-3 h-3 mr-1" />
+            <Badge className="student-pill">
+              <Clock className="mr-1 h-3 w-3" />
               {formatTime(totalSpeakingTime)}
             </Badge>
-            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">
-              <BarChart3 className="w-3 h-3 mr-1" />
-              {data.length} 参与者
+            <Badge className="student-pill">
+              <BarChart3 className="mr-1 h-3 w-3" />
+              {data.length} 位参与者
             </Badge>
           </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-6">
-        {/* 总体统计 */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="text-center p-3 bg-slate-50 rounded-lg">
-            <div className="text-xl font-bold text-slate-900">
-              {data.length}
-            </div>
+      <CardContent className="space-y-5">
+        <div className="grid grid-cols-3 gap-3">
+          <div className="student-card-muted p-4 text-center">
+            <div className="text-xl font-bold text-slate-900">{data.length}</div>
             <div className="text-xs text-slate-600">总发言人数</div>
           </div>
-          <div className="text-center p-3 bg-blue-50 rounded-lg">
-            <div className="text-xl font-bold text-blue-600">
-              {humanPercentage}%
-            </div>
+          <div className="student-card-soft-blue p-4 text-center">
+            <div className="text-xl font-bold text-slate-900">{humanPercentage}%</div>
             <div className="text-xs text-slate-600">人类发言占比</div>
           </div>
-          <div className="text-center p-3 bg-purple-50 rounded-lg">
-            <div className="text-xl font-bold text-purple-600">
-              {aiPercentage}%
-            </div>
-            <div className="text-xs text-slate-600">AI发言占比</div>
+          <div className="student-card-soft-lavender p-4 text-center">
+            <div className="text-xl font-bold text-slate-900">{aiPercentage}%</div>
+            <div className="text-xs text-slate-600">AI 发言占比</div>
           </div>
         </div>
 
-        {/* 图表切换 */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-slate-900">发言时间分布</h4>
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <PieChart className="w-4 h-4" />
+              <PieChart className="h-4 w-4" />
               饼图 / 条形图
             </div>
           </div>
 
-          {/* 饼图 */}
-          <div className="border border-slate-200 rounded-lg p-4">
-            {renderPieChart()}
-          </div>
-
-          {/* 条形图 */}
-          <div className="border border-slate-200 rounded-lg p-4">
-            <h4 className="font-medium text-slate-900 mb-4">详细时间分析</h4>
+          <div className="student-card-muted p-4">{renderPieChart()}</div>
+          <div className="student-card-muted p-4">
+            <h4 className="mb-4 font-medium text-slate-900">详细时间分析</h4>
             {renderBarChart()}
           </div>
         </div>
 
-        {/* 发言活跃度分析 */}
-        <div className="border-t border-slate-200 pt-4">
-          <h4 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-            <TrendingUp className="w-4 h-4" />
+        <div className="border-t border-black/5 pt-4">
+          <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-900">
+            <TrendingUp className="h-4 w-4" />
             发言活跃度分析
           </h4>
           <div className="space-y-2">
             {data.length === 0 ? (
-              <div className="text-center text-sm text-slate-500 py-6">暂无发言数据</div>
+              <div className="py-6 text-center text-sm text-slate-500">暂无发言数据</div>
             ) : (
               data
+                .slice()
                 .sort((a, b) => b.time - a.time)
                 .slice(0, 3)
                 .map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-2 bg-slate-50 rounded"
-                  >
+                  <div key={index} className="student-card-muted flex items-center justify-between p-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center">
+                      <div className="student-icon-bubble h-7 w-7 bg-white text-xs font-semibold text-slate-900">
                         {index + 1}
                       </div>
-                      <span className="text-sm font-medium text-slate-700">{getDisplayName(item)}</span>
-                      {item.isAI && (
-                        <Badge className="bg-purple-100 text-purple-700 border-purple-300 text-xs">
-                          AI
-                        </Badge>
-                      )}
+                      <span className="text-sm font-medium text-slate-700">
+                        {getDisplayName(item)}
+                      </span>
+                      {item.isAI ? <Badge className="student-pill">AI</Badge> : null}
                     </div>
                     <div className="text-sm text-slate-600">
                       {formatTime(item.time)} ({item.percentage}%)
