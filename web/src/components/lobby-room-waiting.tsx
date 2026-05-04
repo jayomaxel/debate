@@ -154,6 +154,40 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
   const myChecklist = getCurrentUserChecklist(waitingState, user?.id);
   const onlineRoles = new Set(waitingState?.waiting_status?.online_roles || []);
   const readyRoles = new Set(waitingState?.waiting_status?.ready_roles || []);
+  const currentPresenceStatus =
+    currentPermissions?.presence_status ||
+    (isJoined ? 'online_in_room' : 'not_in_room');
+  const currentReadyStatus =
+    currentPermissions?.ready_status || (readyToStart ? 'ready' : 'not_ready');
+
+  const getMemberPresenceLabel = useCallback(
+    (member?: LobbyRoomMember) => {
+      if (!member) return '等待加入';
+      if (member.ready_status === 'ready' || readyRoles.has(member.role)) return '已准备';
+      if (member.presence_status === 'online_out_of_room_page') return '临时离开';
+      if (member.presence_status === 'not_in_room') return '不在房间';
+      if (
+        member.presence_status === 'online_in_room' ||
+        member.online_status === 'online_in_room' ||
+        onlineRoles.has(member.role)
+      ) {
+        return '在线';
+      }
+      return '离线';
+    },
+    [onlineRoles, readyRoles]
+  );
+
+  const getMemberPresenceBadgeClass = useCallback(
+    (member?: LobbyRoomMember) => {
+      const label = getMemberPresenceLabel(member);
+      if (label === '已准备') return 'bg-emerald-600 text-white';
+      if (label === '临时离开') return 'bg-amber-500 text-white';
+      if (label === '在线') return 'bg-slate-700 text-white';
+      return 'bg-slate-300 text-slate-700';
+    },
+    [getMemberPresenceLabel]
+  );
 
   const memberByRole = useMemo(() => {
     const map = new Map<string, LobbyRoomMember>();
@@ -237,6 +271,34 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
     }
   };
 
+  const handleLeaveRoom = useCallback(
+    async (permanent: boolean) => {
+      if (!room) {
+        return;
+      }
+
+      try {
+        await StudentService.leaveLobbyRoom(room.room_id, { permanent });
+        toast({
+          variant: 'success',
+          title: permanent ? '已退出房间' : '已临时退出',
+          description: permanent
+            ? '你已从该房间移除，若要返回需重新从大厅加入。'
+            : '你仍保留当前席位，稍后可直接返回此房间。',
+        });
+        onBack();
+      } catch (err: any) {
+        toast({
+          variant: 'destructive',
+          title: permanent ? '退出失败' : '临时退出失败',
+          description:
+            err?.response?.data?.detail || err?.message || '请稍后重试',
+        });
+      }
+    },
+    [onBack, room, toast]
+  );
+
   if (loading) {
     return (
       <div className="student-container flex min-h-[70vh] items-center justify-center py-10">
@@ -316,18 +378,34 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                 </Button>
 
                 {isJoined ? (
-                  <Button
-                    onClick={() => onEnterDebate(room.room_id)}
-                    disabled={!debateStarted}
-                    className="student-dark-button h-auto px-5 py-3"
-                  >
-                    {debateStarted && canModerate ? (
-                      <Play className="mr-2 h-4 w-4" />
-                    ) : (
-                      <DoorOpen className="mr-2 h-4 w-4" />
-                    )}
-                    {debateStarted ? '进入辩论' : '等待四人全部准备完成'}
-                  </Button>
+                  <>
+                    <Button
+                      onClick={() => onEnterDebate(room.room_id)}
+                      disabled={!debateStarted}
+                      className="student-dark-button h-auto px-5 py-3"
+                    >
+                      {debateStarted && canModerate ? (
+                        <Play className="mr-2 h-4 w-4" />
+                      ) : (
+                        <DoorOpen className="mr-2 h-4 w-4" />
+                      )}
+                      {debateStarted ? '进入辩论' : '等待四人全部准备完成'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleLeaveRoom(false)}
+                      className="student-light-button h-auto px-5 py-3"
+                    >
+                      临时退出
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleLeaveRoom(true)}
+                      className="h-auto border-red-200 px-5 py-3 text-red-600 hover:bg-red-50"
+                    >
+                      退出房间
+                    </Button>
+                  </>
                 ) : room.visibility === 'private' ? (
                   <Button
                     disabled={!room.can_join}
@@ -410,8 +488,7 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                   ).map((role) => {
                     const member = memberByRole.get(role);
                     const moderator = !!member?.can_moderate;
-                    const online = onlineRoles.has(role);
-                    const ready = readyRoles.has(role);
+                    const presenceLabel = getMemberPresenceLabel(member);
 
                     return (
                       <div
@@ -429,10 +506,10 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                               <Crown className="mr-1 h-3 w-3" />
                               主持
                             </Badge>
-                          ) : ready ? (
-                            <Badge className="bg-emerald-600 text-white">已准备</Badge>
-                          ) : online ? (
-                            <Badge className="bg-slate-700 text-white">在线</Badge>
+                          ) : member ? (
+                            <Badge className={getMemberPresenceBadgeClass(member)}>
+                              {presenceLabel}
+                            </Badge>
                           ) : null}
                         </div>
 
@@ -450,6 +527,9 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                                   ? stanceLabelMap[member.stance]
                                   : '待定'}{' '}
                                 · {member.role_reason || '角色说明待补充'}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                状态：{presenceLabel}
                               </div>
                             </div>
                           </div>
@@ -586,7 +666,15 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                     {isJoined
                       ? `${roleLabel(
                           currentPermissions?.role || room.current_user_role
-                        )}${canModerate ? ' · 主持' : ''}${readyToStart ? ' · 全员已准备' : ''}`
+                        )}${canModerate ? ' · 主持' : ''} · ${
+                          currentPresenceStatus === 'online_out_of_room_page'
+                            ? '临时离开'
+                            : currentPresenceStatus === 'online_in_room'
+                              ? '在房间内'
+                              : '不在房间'
+                        } · ${
+                          currentReadyStatus === 'ready' ? '已准备' : '未准备'
+                        }${readyToStart ? ' · 全员已准备' : ''}`
                       : room.join_block_reason || '尚未加入'}
                   </span>
                 </div>

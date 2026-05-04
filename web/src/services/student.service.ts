@@ -180,6 +180,10 @@ export interface LobbyRoomMember {
   can_speak?: boolean;
   can_moderate?: boolean;
   joined_at?: string | null;
+  membership_status?: 'joined' | 'temporarily_left' | 'permanently_left' | 'kicked' | 'not_joined';
+  presence_status?: 'online_in_room' | 'online_out_of_room_page' | 'offline' | 'not_in_room';
+  online_status?: 'online_in_room' | 'offline';
+  ready_status?: 'not_ready' | 'checklist_in_progress' | 'ready';
 }
 
 export interface LobbyRoomPermissions {
@@ -187,6 +191,9 @@ export interface LobbyRoomPermissions {
   can_speak: boolean;
   can_moderate: boolean;
   is_joined: boolean;
+  membership_status?: LobbyRoomMember['membership_status'];
+  presence_status?: LobbyRoomMember['presence_status'];
+  ready_status?: LobbyRoomMember['ready_status'];
 }
 
 export interface LobbyRoom {
@@ -202,6 +209,9 @@ export interface LobbyRoom {
   host_user_id?: string | null;
   host_name?: string | null;
   mode: DebateMode;
+  room_source?: 'teacher_created' | 'student_created';
+  config_source?: 'teacher_preset' | 'room_owner_preset';
+  preparation_page_type?: 'teacher_reserved_preparation' | 'student_lobby_preparation' | string;
   status: LobbyRoomStatus;
   scheduled_start_time?: string | null;
   allow_spectators: boolean;
@@ -239,6 +249,10 @@ export interface CreateLobbyRoomParams {
 
 export interface JoinLobbyRoomParams {
   password?: string;
+}
+
+export interface LeaveLobbyRoomParams {
+  permanent?: boolean;
 }
 
 export interface StudentReservation {
@@ -659,6 +673,24 @@ class StudentService {
       return await api.post<LobbyRoom>(`/api/student/lobby/rooms/${roomId}/join`, params);
     } catch (error) {
       console.error('[StudentService] Join lobby room failed:', error);
+      throw error;
+    }
+  }
+
+  static async leaveLobbyRoom(
+    roomId: string,
+    params: LeaveLobbyRoomParams = {}
+  ): Promise<{
+    room_id: string;
+    debate_id: string;
+    membership_status: string;
+    presence_status: string;
+    room_source?: string;
+  }> {
+    try {
+      return await api.post(`/api/student/lobby/rooms/${roomId}/leave`, params);
+    } catch (error) {
+      console.error('[StudentService] Leave lobby room failed:', error);
       throw error;
     }
   }

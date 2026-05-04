@@ -138,6 +138,7 @@ const AppRouter: React.FC = () => {
       <DebateFullscreenLayout>
         <DebateArena
           roomId={debateId}
+          onBack={() => back('/teacher')}
           onEndDebate={() =>
             navigate(`/teacher/debates/${debateId}/analytics`, {
               replace: true,

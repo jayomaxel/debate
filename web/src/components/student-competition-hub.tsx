@@ -14,7 +14,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useStudentAssessment } from '@/hooks/use-student-assessment';
 import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import StudentService from '@/services/student.service';
-import type { Debate } from '@/services/student.service';
+import type { Debate, LobbyRoom } from '@/services/student.service';
 
 interface StudentCompetitionHubProps {
   onNavigateToWaiting?: () => void;
@@ -29,11 +29,16 @@ const roleLabelMap = {
   debater_4: '四辩',
 } as const;
 
-const sortJoinedDebates = (debates: Debate[]) =>
+const sortJoinedTeacherDebates = (debates: Debate[]) =>
   debates
     .filter((debate) => debate.is_joined)
     .slice()
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+const sortLobbyRooms = (rooms: LobbyRoom[]) =>
+  rooms
+    .slice()
+    .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
 
 const getStatusLabel = (status?: Debate['status']) => {
   switch (status) {
@@ -62,7 +67,8 @@ export default function StudentCompetitionHub({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [joining, setJoining] = useState(false);
-  const [joinedDebate, setJoinedDebate] = useState<Debate | null>(null);
+  const [teacherDebates, setTeacherDebates] = useState<Debate[]>([]);
+  const [studentLobbyRooms, setStudentLobbyRooms] = useState<LobbyRoom[]>([]);
 
   const loadCompetitionContext = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -75,11 +81,15 @@ export default function StudentCompetitionHub({
           setLoading(true);
         }
 
-        const debates = await StudentService.getAvailableDebates({
-          force: silent,
-        }).catch(() => []);
+        const [debates, myLobbyRooms] = await Promise.all([
+          StudentService.getAvailableDebates({
+            force: silent,
+          }).catch(() => []),
+          StudentService.getMyLobbyRooms().catch(() => []),
+        ]);
 
-        setJoinedDebate(sortJoinedDebates(debates)[0] || null);
+        setTeacherDebates(sortJoinedTeacherDebates(debates));
+        setStudentLobbyRooms(sortLobbyRooms(myLobbyRooms));
       } catch (error: any) {
         console.error('[StudentCompetitionHub] Failed to load data:', error);
         if (!silent) {
@@ -106,38 +116,25 @@ export default function StudentCompetitionHub({
     intervalMs: 12000,
   });
 
+  const activeTeacherDebate = teacherDebates[0] || null;
+  const activeStudentRoom = studentLobbyRooms[0] || null;
+
   const canJoin = !needsAssessment;
   const actionTitle = useMemo(() => {
     if (needsAssessment) {
       return '先完成能力评估';
     }
 
-    if (joinedDebate?.status === 'completed') {
+    if (activeTeacherDebate?.status === 'completed') {
       return '查看赛后分析';
     }
 
-    if (joinedDebate) {
+    if (activeTeacherDebate || activeStudentRoom) {
       return '继续比赛流程';
     }
 
     return '加入本场辩论';
-  }, [joinedDebate, needsAssessment]);
-
-  const actionDescription = useMemo(() => {
-    if (needsAssessment) {
-      return '';
-    }
-
-    if (joinedDebate?.status === 'completed') {
-      return '';
-    }
-
-    if (joinedDebate) {
-      return '';
-    }
-
-    return '';
-  }, [joinedDebate, needsAssessment]);
+  }, [activeStudentRoom, activeTeacherDebate, needsAssessment]);
 
   const handleJoinDebate = async () => {
     if (!canJoin) {
@@ -164,7 +161,7 @@ export default function StudentCompetitionHub({
       const debate = await StudentService.joinDebate({
         invitation_code: invitationCode.trim(),
       });
-      setJoinedDebate(debate);
+      setTeacherDebates((current) => sortJoinedTeacherDebates([debate, ...current]));
       setInvitationCode('');
       onNavigateToWaiting?.();
     } catch (error: any) {
@@ -226,48 +223,97 @@ export default function StudentCompetitionHub({
                   </div>
                 </div>
               </div>
-            ) : joinedDebate ? (
-              <div className="student-card-soft-blue p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <div className="mt-2.5 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {joinedDebate.topic}
+            ) : activeTeacherDebate || activeStudentRoom ? (
+              <div className="space-y-4">
+                {activeTeacherDebate ? (
+                  <div className="student-card-soft-blue p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                          老师安排的比赛
+                        </div>
+                        <div className="mt-2.5 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
+                          {activeTeacherDebate.topic}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Badge className="student-pill">
+                            邀请码 {activeTeacherDebate.invitation_code}
+                          </Badge>
+                          <Badge className="student-pill">
+                            {getStatusLabel(activeTeacherDebate.status)}
+                          </Badge>
+                          {activeTeacherDebate.role ? (
+                            <Badge className="student-pill">
+                              {roleLabelMap[activeTeacherDebate.role]}
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Badge className="student-pill">
-                        邀请码 {joinedDebate.invitation_code}
-                      </Badge>
-                      <Badge className="student-pill">
-                        {getStatusLabel(joinedDebate.status)}
-                      </Badge>
-                      {joinedDebate.role ? (
-                        <Badge className="student-pill">
-                          {roleLabelMap[joinedDebate.role]}
-                        </Badge>
-                      ) : null}
+
+                    <div className="mt-5">
+                      {activeTeacherDebate.status === 'completed' ? (
+                        <Button
+                          onClick={() => onNavigateToPostMatch?.(activeTeacherDebate.id)}
+                          className="student-dark-button h-auto"
+                        >
+                          进入赛后分析页
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={onNavigateToWaiting}
+                          className="student-dark-button h-auto"
+                        >
+                          进入等待与准备页
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </div>
-                </div>
+                ) : null}
 
-                <div className="mt-5">
-                  {joinedDebate.status === 'completed' ? (
-                    <Button
-                      onClick={() => onNavigateToPostMatch?.(joinedDebate.id)}
-                      className="student-dark-button h-auto"
-                    >
-                      进入赛后分析页
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      onClick={onNavigateToWaiting}
-                      className="student-dark-button h-auto"
-                    >
-                      进入等待与准备页
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
+                {activeStudentRoom ? (
+                  <div className="student-card-soft-lavender p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                          我的自主房间
+                        </div>
+                        <div className="mt-2.5 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
+                          {activeStudentRoom.topic}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Badge className="student-pill">
+                            {activeStudentRoom.room_name}
+                          </Badge>
+                          <Badge className="student-pill">
+                            {activeStudentRoom.status}
+                          </Badge>
+                          {activeStudentRoom.current_user_role ? (
+                            <Badge className="student-pill">
+                              {roleLabelMap[
+                                activeStudentRoom.current_user_role as keyof typeof roleLabelMap
+                              ] || activeStudentRoom.current_user_role}
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-5">
+                      <Button
+                        onClick={() =>
+                          window.location.assign(`/student/lobby/rooms/${activeStudentRoom.room_id}`)
+                        }
+                        className="student-dark-button h-auto"
+                      >
+                        进入我的自主房间
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="student-card-soft-lavender p-5">
@@ -322,7 +368,13 @@ export default function StudentCompetitionHub({
               <StatusItem
                 icon={<Users className="h-4 w-4 text-slate-700" />}
                 label="比赛状态"
-                value={joinedDebate ? getStatusLabel(joinedDebate.status) : '未加入'}
+                value={
+                  activeTeacherDebate
+                    ? getStatusLabel(activeTeacherDebate.status)
+                    : activeStudentRoom
+                      ? '自主房间进行中'
+                      : '未加入'
+                }
                 tone="student-card-muted"
               />
               <Button

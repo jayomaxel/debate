@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  ArrowLeft,
   Clock,
   Users,
   Volume2,
@@ -19,6 +20,7 @@ interface DebateHeaderProps {
   currentPhase: string;
   segmentTitle?: string;
   timeRemaining: number;
+  onBack?: () => void;
   canStartDebate?: boolean;
   canAdvanceSegment?: boolean;
   canEndDebate?: boolean;
@@ -37,6 +39,7 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
   currentPhase,
   segmentTitle,
   timeRemaining,
+  onBack,
   canStartDebate,
   canAdvanceSegment,
   canEndDebate,
@@ -88,6 +91,17 @@ const DebateHeader: React.FC<DebateHeaderProps> = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           {/* 左侧：辩题和当前环节 */}
           <div className="flex min-w-0 items-start gap-5">
+            {onBack ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onBack}
+                className="student-light-button h-10 shrink-0 rounded-[12px] px-3"
+              >
+                <ArrowLeft className="mr-1 h-4 w-4" />
+                返回
+              </Button>
+            ) : null}
             {/* 辩题 */}
             <div className="flex min-w-0 items-start gap-3">
               <div className="student-icon-bubble h-11 w-11 shrink-0 bg-[#151515] text-white shadow-[0_14px_30px_rgba(15,23,42,0.18)]">

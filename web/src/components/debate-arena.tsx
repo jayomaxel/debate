@@ -128,7 +128,7 @@ const toAIDebaters = (value: unknown): AIDebater[] =>
     ? value.map(toAIDebater).filter((item): item is AIDebater => item !== null)
     : [];
 
-const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) => {
+const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDebate }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [currentPhase, setCurrentPhase] = useState<string>('waiting');
@@ -1418,6 +1418,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         currentPhase={phaseLabel(currentPhase)}
         segmentTitle={segmentTitle || undefined}
         timeRemaining={timeRemaining}
+        onBack={onBack}
         canStartDebate={canStartDebate}
         canAdvanceSegment={canAdvanceSegment}
         canEndDebate={canEndDebate}

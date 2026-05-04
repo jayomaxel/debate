@@ -36,6 +36,18 @@ class DebateService:
         "debater_3": "反驳对方,抓住漏洞",
         "debater_4": "总结陈词,升华观点",
     }
+
+    @staticmethod
+    def _room_source_value(mode: str) -> str:
+        return "teacher_created" if str(mode) == "teacher_reserved" else "student_created"
+
+    @staticmethod
+    def _config_source_value(mode: str) -> str:
+        return "teacher_preset" if str(mode) == "teacher_reserved" else "room_owner_preset"
+
+    @staticmethod
+    def _preparation_page_type(mode: str) -> str:
+        return "teacher_reserved_preparation" if str(mode) == "teacher_reserved" else "student_lobby_preparation"
     
     @staticmethod
     def generate_invitation_code() -> str:
@@ -425,6 +437,8 @@ class DebateService:
         user: Optional[User],
         debate: Optional[Debate] = None,
         meta: Optional[Dict[str, Any]] = None,
+        online_user_ids: Optional[set[str]] = None,
+        ready_user_ids: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         user_id = str(participation.user_id) if participation.user_id else None
         meta = meta or {}
@@ -433,6 +447,10 @@ class DebateService:
         can_moderate = bool(user_id and host_user_id == user_id)
         if bool(getattr(participation, "is_moderator", False)):
             can_moderate = True
+        online_user_ids = online_user_ids or set()
+        ready_user_ids = ready_user_ids or set()
+        is_online_in_room = bool(user_id and user_id in online_user_ids)
+        is_ready = bool(user_id and user_id in ready_user_ids)
         return {
             "user_id": user_id,
             "name": user.name if user else "",
@@ -445,20 +463,45 @@ class DebateService:
             "can_speak": True,
             "can_moderate": can_moderate,
             "joined_at": participation.joined_at.isoformat() if participation.joined_at else None,
+            "membership_status": "joined",
+            "presence_status": "online_in_room" if is_online_in_room else "online_out_of_room_page",
+            "online_status": "online_in_room" if is_online_in_room else "offline",
+            "ready_status": "ready" if is_ready else "not_ready",
         }
 
     @staticmethod
     def _room_members(db: Session, debate: Debate, meta: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        meta = meta or {}
         participations = db.query(DebateParticipation).filter(
             DebateParticipation.debate_id == debate.id,
             DebateParticipation.left_at.is_(None),
         ).all()
+        room_state = room_manager.get_room_state(str(debate.id))
+        online_user_ids = {
+            str(participant.get("user_id"))
+            for participant in (room_state.participants if room_state else [])
+            if participant.get("user_id")
+        }
+        ready_user_ids = set()
+        if room_state:
+            waiting_status = room_state.get_waiting_status()
+            ready_user_ids = {
+                str(user_id)
+                for user_id in (waiting_status.get("ready_user_ids") or [])
+            }
         user_ids = [p.user_id for p in participations if p.user_id]
         users = db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []
         user_by_id = {u.id: u for u in users}
         role_rank = {role: index for index, role in enumerate(DebateService.ROLE_ORDER)}
         return [
-            DebateService._serialize_participation(p, user_by_id.get(p.user_id), debate, meta)
+            DebateService._serialize_participation(
+                p,
+                user_by_id.get(p.user_id),
+                debate,
+                meta,
+                online_user_ids=online_user_ids,
+                ready_user_ids=ready_user_ids,
+            )
             for p in sorted(participations, key=lambda p: role_rank.get(str(p.role), 99))
         ]
 
@@ -496,12 +539,18 @@ class DebateService:
                 "can_speak": False,
                 "can_moderate": False,
                 "is_joined": False,
+                "membership_status": "not_joined",
+                "presence_status": "not_in_room",
+                "ready_status": "not_ready",
             }
         return {
             "role": current.get("role"),
             "can_speak": bool(current.get("can_speak")),
             "can_moderate": bool(current.get("can_moderate")),
             "is_joined": True,
+            "membership_status": current.get("membership_status", "joined"),
+            "presence_status": current.get("presence_status", "online_in_room"),
+            "ready_status": current.get("ready_status", "not_ready"),
         }
 
     @staticmethod
@@ -512,6 +561,7 @@ class DebateService:
         student_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         meta = DebateService._get_room_meta(debate)
+        mode = DebateService._room_mode(debate, meta)
         participant_count = DebateService._participant_count(db, debate.id)
         realtime_room_state = room_manager.get_room_state(str(debate.id))
         if realtime_room_state:
@@ -533,7 +583,10 @@ class DebateService:
             "has_password": bool(DebateService._join_password_hash(debate, meta)),
             "host_user_id": DebateService._room_host_user_id(debate, meta),
             "host_name": DebateService._get_host_name(db, debate, meta),
-            "mode": DebateService._room_mode(debate, meta),
+            "mode": mode,
+            "room_source": DebateService._room_source_value(mode),
+            "config_source": DebateService._config_source_value(mode),
+            "preparation_page_type": DebateService._preparation_page_type(mode),
             "status": DebateService.resolve_room_status(debate, participant_count),
             "scheduled_start_time": DebateService._debate_datetime_iso(debate, "scheduled_start_time", meta),
             "allow_spectators": bool(getattr(debate, "allow_spectators", False) or meta.get("allow_spectators", False)),
@@ -552,6 +605,78 @@ class DebateService:
             raise ValueError("请输入房间密码")
         if not verify_password(password, str(password_hash)):
             raise ValueError("密码错误或已失效")
+
+    @staticmethod
+    def leave_lobby_room(
+        db: Session,
+        student_id: str,
+        room_id: str,
+        *,
+        permanent: bool,
+    ) -> Dict[str, Any]:
+        DebateService._get_student_with_class(db, student_id)
+        try:
+            room_uuid = uuid.UUID(str(room_id))
+            student_uuid = uuid.UUID(str(student_id))
+        except ValueError as exc:
+            raise ValueError("房间ID格式不正确") from exc
+
+        debate = db.query(Debate).filter(Debate.id == room_uuid).first()
+        if not debate:
+            raise ValueError("房间不存在")
+
+        meta = DebateService._get_room_meta(debate)
+        mode = DebateService._room_mode(debate, meta)
+        if mode not in {"student_lobby", "teacher_reserved"}:
+            raise ValueError("该房间不支持此操作")
+
+        participation = db.query(DebateParticipation).filter(
+            DebateParticipation.debate_id == debate.id,
+            DebateParticipation.user_id == student_uuid,
+            DebateParticipation.left_at.is_(None),
+        ).first()
+        if not participation:
+            raise ValueError("您当前不在该房间中")
+
+        if permanent:
+            now = datetime.utcnow()
+            participation.left_at = now
+            participation.last_seen_at = now
+            participation.is_moderator = False
+            participation.is_room_owner = False
+
+            remaining = db.query(DebateParticipation).filter(
+                DebateParticipation.debate_id == debate.id,
+                DebateParticipation.left_at.is_(None),
+                DebateParticipation.user_id != student_uuid,
+            ).order_by(DebateParticipation.seat_order.asc(), DebateParticipation.joined_at.asc()).all()
+
+            if mode == "student_lobby":
+                next_owner = remaining[0] if remaining else None
+                debate.owner_user_id = next_owner.user_id if next_owner else None
+                debate.host_user_id = next_owner.user_id if next_owner else None
+                for row in remaining:
+                    row.is_room_owner = bool(next_owner and row.user_id == next_owner.user_id)
+                    row.is_moderator = bool(next_owner and row.user_id == next_owner.user_id)
+
+            db.commit()
+            return {
+                "room_id": str(debate.id),
+                "debate_id": str(debate.id),
+                "membership_status": "permanently_left",
+                "presence_status": "not_in_room",
+                "room_source": DebateService._room_source_value(mode),
+            }
+
+        participation.last_seen_at = datetime.utcnow()
+        db.commit()
+        return {
+            "room_id": str(debate.id),
+            "debate_id": str(debate.id),
+            "membership_status": "joined",
+            "presence_status": "online_out_of_room_page",
+            "room_source": DebateService._room_source_value(mode),
+        }
 
     @staticmethod
     def _invitation_payload(

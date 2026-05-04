@@ -7,10 +7,12 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from config import settings
-from database import init_db, init_engine, init_redis
+from database import SessionLocal, get_redis, init_db, init_engine, init_redis
 from logging_config import get_logger, setup_logging
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
 from services.kb_seed_service import KBSeedService
@@ -53,6 +55,33 @@ app.include_router(voice.router)
 
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+
+
+def _database_health() -> tuple[bool, str | None]:
+    """Run a lightweight query to verify database connectivity."""
+    if SessionLocal is None:
+        init_engine()
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return True, None
+    except Exception as exc:  # pragma: no cover - depends on runtime services
+        return False, str(exc)
+    finally:
+        db.close()
+
+
+def _redis_health() -> tuple[str, str | None]:
+    """Return Redis status: connected, disabled, or disconnected."""
+    try:
+        redis_client = get_redis()
+        if redis_client is None:
+            return "disabled", None
+        redis_client.ping()
+        return "connected", None
+    except Exception as exc:  # pragma: no cover - depends on runtime services
+        return "disconnected", str(exc)
 
 
 @app.on_event("startup")
@@ -139,11 +168,14 @@ async def startup_event():
             db.close()
 
         logger.info("Initializing Redis...")
-        redis_client = init_redis()
-        if redis_client is None:
+        init_redis()
+        redis_status, redis_error = _redis_health()
+        if redis_status == "disabled":
             logger.warning("Redis is disabled for this process; cache-backed features will run in degraded mode.")
-        else:
+        elif redis_status == "connected":
             logger.info("Redis connection initialized.")
+        else:
+            logger.warning("Redis connection failed during startup: %s", redis_error)
 
         logger.info("AIDebate API started successfully.")
     except Exception:
@@ -166,7 +198,38 @@ async def root():
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    database_connected, database_error = _database_health()
+    redis_status, redis_error = _redis_health()
+
+    status = "healthy"
+    status_code = 200
+
+    if not database_connected:
+        status = "unhealthy"
+        status_code = 503
+    elif redis_status == "disconnected":
+        status = "degraded"
+
+    payload = {
+        "status": status,
+        "database": {
+            "status": "connected" if database_connected else "disconnected",
+            "url_configured": bool(settings.DATABASE_URL),
+        },
+        "redis": {
+            "status": redis_status,
+            "host": settings.REDIS_HOST,
+            "port": settings.REDIS_PORT,
+        },
+    }
+
+    if database_error:
+        payload["database"]["error"] = database_error
+
+    if redis_error:
+        payload["redis"]["error"] = redis_error
+
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 if __name__ == "__main__":

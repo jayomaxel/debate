@@ -63,6 +63,10 @@ class JoinLobbyRoomRequest(BaseModel):
     password: Optional[str] = None
 
 
+class LeaveLobbyRoomRequest(BaseModel):
+    permanent: bool = False
+
+
 class RespondReservationRequest(BaseModel):
     action: str
 
@@ -282,6 +286,34 @@ async def join_lobby_room(
             http_status = status.HTTP_409_CONFLICT
         elif "密码" in detail:
             http_status = status.HTTP_403_FORBIDDEN
+        else:
+            http_status = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.post("/lobby/rooms/{room_id}/leave", summary="离开匹配大厅房间")
+async def leave_lobby_room(
+    room_id: str,
+    request: LeaveLobbyRoomRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.leave_lobby_room(
+            db=db,
+            student_id=str(current_user.id),
+            room_id=room_id,
+            permanent=request.permanent,
+        )
+        return {"code": 200, "message": "操作成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        if "不存在" in detail:
+            http_status = status.HTTP_404_NOT_FOUND
+        elif "无权" in detail:
+            http_status = status.HTTP_403_FORBIDDEN
+        elif "冲突" in detail or "已开始" in detail or "已结束" in detail:
+            http_status = status.HTTP_409_CONFLICT
         else:
             http_status = status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=http_status, detail=detail)

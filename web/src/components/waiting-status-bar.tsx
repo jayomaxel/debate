@@ -26,26 +26,22 @@ const getStageMeta = (stage: WaitingStage, participantCount: number) => {
       return {
         message: '正在连接本场辩论',
         details: '正在同步房间状态，请稍等片刻。',
-        progress: 20,
       };
     case 'matching':
       return {
         message: '正在确认角色与对阵',
         details: '系统正在确认你的辩位和当前参赛名单。',
-        progress: 48,
       };
     case 'preparing':
       return {
         message: '等待其余参与者并完成准备',
         details: `当前已有 ${participantCount}/4 位同学到场。你可以先查看辩题、整理观点并检查设备。`,
-        progress: Math.min(90, 60 + participantCount * 8),
       };
     case 'ready':
     default:
       return {
         message: '本场辩论可以开始',
         details: '角色和名单已经确认完成，现在可以直接进入正式辩论。',
-        progress: 100,
       };
   }
 };
@@ -55,26 +51,22 @@ const getStageTone = (stage: WaitingStage) => {
     case 'connecting':
       return {
         card: 'student-card-soft-blue',
-        progress: 'bg-slate-900',
         badge: 'student-pill',
       };
     case 'matching':
       return {
         card: 'student-card-soft-peach',
-        progress: 'bg-[#d38352]',
         badge: 'student-pill',
       };
     case 'preparing':
       return {
         card: 'student-card-soft-lavender',
-        progress: 'bg-[#6a5d8f]',
         badge: 'student-pill',
       };
     case 'ready':
     default:
       return {
         card: 'student-card-soft-blue',
-        progress: 'bg-[#14532d]',
         badge: 'student-pill',
       };
   }
@@ -150,19 +142,6 @@ const WaitingStatusBar: React.FC<WaitingStatusBarProps> = ({
             </Badge>
           </div>
           <p className="mt-2 text-sm leading-7 text-slate-600">{stageMeta.details}</p>
-        </div>
-      </div>
-
-      <div className="mt-5 space-y-2">
-        <div className="flex items-center justify-between text-sm text-slate-600">
-          <span>准备进度</span>
-          <span>{stageMeta.progress}%</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-white/80">
-          <div
-            className={`h-full rounded-full transition-all duration-700 ${tone.progress}`}
-            style={{ width: `${stageMeta.progress}%` }}
-          />
         </div>
       </div>
 
