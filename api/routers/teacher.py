@@ -1,7 +1,7 @@
 """
 教师端API路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
@@ -43,6 +43,37 @@ class CreateDebateRequest(BaseModel):
     description: Optional[str] = None
     student_ids: Optional[List[str]] = None
     status: Optional[str] = None
+
+
+class CreateReservationRequest(BaseModel):
+    class_id: str
+    topic: str
+    duration: int
+    description: Optional[str] = None
+    scheduled_start_time: str
+    checkin_open_time: Optional[str] = None
+    checkin_close_time: Optional[str] = None
+    student_ids: List[str]
+    visibility: str = "private"
+    password: Optional[str] = None
+    host_user_id: Optional[str] = None
+
+
+class UpdateReservationRequest(BaseModel):
+    topic: Optional[str] = None
+    duration: Optional[int] = None
+    description: Optional[str] = None
+    scheduled_start_time: Optional[str] = None
+    checkin_open_time: Optional[str] = None
+    checkin_close_time: Optional[str] = None
+    student_ids: Optional[List[str]] = None
+    visibility: Optional[str] = None
+    password: Optional[str] = None
+    host_user_id: Optional[str] = None
+
+
+class CancelReservationRequest(BaseModel):
+    cancel_reason: Optional[str] = None
 
 
 def _serialize_support_document(document: Document) -> dict:
@@ -378,6 +409,138 @@ async def get_debates(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+# ==================== 预约制辩论管理 ====================
+
+@router.post("/reservations", summary="创建预约辩论赛")
+async def create_reservation(
+    request: CreateReservationRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, request.class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+    try:
+        result = await DebateService.create_reservation(
+            db=db,
+            teacher_id=str(current_user.id),
+            class_id=request.class_id,
+            topic=request.topic,
+            duration=request.duration,
+            description=request.description,
+            scheduled_start_time=request.scheduled_start_time,
+            checkin_open_time=request.checkin_open_time,
+            checkin_close_time=request.checkin_close_time,
+            student_ids=request.student_ids,
+            visibility=request.visibility,
+            password=request.password,
+            host_user_id=request.host_user_id,
+        )
+        return {"code": 200, "message": "创建成功", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/reservations", summary="获取预约辩论赛列表")
+async def list_reservations(
+    class_id: Optional[str] = None,
+    reservation_status: Optional[str] = Query(None, alias="status"),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.list_teacher_reservations(
+            db=db,
+            teacher_id=str(current_user.id),
+            class_id=class_id,
+            status=reservation_status,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_403_FORBIDDEN if "无权限" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.get("/reservations/{reservation_id}", summary="获取预约辩论赛详情")
+async def get_reservation(
+    reservation_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.get_teacher_reservation(
+            db=db,
+            teacher_id=str(current_user.id),
+            reservation_id=reservation_id,
+        )
+        return {"code": 200, "message": "获取成功", "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.put("/reservations/{reservation_id}", summary="更新预约辩论赛")
+async def update_reservation(
+    reservation_id: str,
+    request: UpdateReservationRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = await DebateService.update_reservation(
+            db=db,
+            teacher_id=str(current_user.id),
+            reservation_id=reservation_id,
+            topic=request.topic,
+            description=request.description,
+            duration=request.duration,
+            scheduled_start_time=request.scheduled_start_time,
+            checkin_open_time=request.checkin_open_time,
+            checkin_close_time=request.checkin_close_time,
+            student_ids=request.student_ids,
+            visibility=request.visibility,
+            password=request.password,
+            host_user_id=request.host_user_id,
+        )
+        return {"code": 200, "message": "更新成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_409_CONFLICT if "无法" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
+
+
+@router.post("/reservations/{reservation_id}/cancel", summary="取消预约辩论赛")
+async def cancel_reservation(
+    reservation_id: str,
+    request: CancelReservationRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = DebateService.cancel_reservation(
+            db=db,
+            teacher_id=str(current_user.id),
+            reservation_id=reservation_id,
+            cancel_reason=request.cancel_reason,
+        )
+        return {"code": 200, "message": "取消成功", "data": result}
+    except ValueError as e:
+        detail = str(e)
+        http_status = status.HTTP_409_CONFLICT if "无法" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_status, detail=detail)
 
 
 @router.get(

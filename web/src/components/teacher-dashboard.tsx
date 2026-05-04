@@ -34,6 +34,7 @@ import {
 } from '@/lib/debate-description';
 import { debateDebug } from '@/lib/utils';
 import UserProfile from './user-profile';
+import TeacherReservationManagement from './teacher-reservation-management';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
 import type {
@@ -64,6 +65,7 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronUp,
+  CalendarClock,
 } from 'lucide-react';
 
 interface DebateConfig {
@@ -287,6 +289,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const menuItems = [
     { id: 'new', label: '新建辩论', icon: Plus },
+    { id: 'reservations', label: '预约辩论赛', icon: CalendarClock },
     { id: 'history', label: '历史记录', icon: History },
     { id: 'students', label: '学生管理', icon: Users },
     { id: 'profile', label: '个人中心', icon: UserIcon },
@@ -1583,6 +1586,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+
+              <TabsContent value='reservations' className='space-y-6'>
+                <TeacherReservationManagement
+                  classes={classes}
+                  initialClassId={selectedClass}
+                />
               </TabsContent>
 
               <TabsContent value='history'>

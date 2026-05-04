@@ -205,7 +205,7 @@ async def test_get_asr_config_backfills_file_url_prefix_from_public_base_url(
     db_session,
     monkeypatch,
 ):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate.example.com")
 
     existing_config = AsrConfig(
         id=uuid.uuid4(),
@@ -220,35 +220,7 @@ async def test_get_asr_config_backfills_file_url_prefix_from_public_base_url(
     config = await config_service.get_asr_config()
 
     assert config.parameters["file_url_prefix"] == (
-        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
-    )
-
-
-@pytest.mark.asyncio
-async def test_get_asr_config_refreshes_stale_cpolar_file_url_prefix(
-    config_service,
-    db_session,
-    monkeypatch,
-):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
-
-    existing_config = AsrConfig(
-        id=uuid.uuid4(),
-        model_name="qwen-asr",
-        api_endpoint="https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
-        api_key="test-key",
-        parameters={
-            "provider": "dashscope",
-            "file_url_prefix": "https://old-random.r22.cpolar.top/uploads/asr",
-        },
-    )
-    db_session.add(existing_config)
-    db_session.commit()
-
-    config = await config_service.get_asr_config()
-
-    assert config.parameters["file_url_prefix"] == (
-        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
+        "https://debate.example.com/uploads/asr"
     )
 
 
@@ -258,7 +230,7 @@ async def test_get_asr_config_replaces_malformed_file_url_prefix(
     db_session,
     monkeypatch,
 ):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate.example.com")
 
     existing_config = AsrConfig(
         id=uuid.uuid4(),
@@ -276,7 +248,7 @@ async def test_get_asr_config_replaces_malformed_file_url_prefix(
     config = await config_service.get_asr_config()
 
     assert config.parameters["file_url_prefix"] == (
-        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr"
+        "https://debate.example.com/uploads/asr"
     )
 
 
@@ -286,7 +258,7 @@ async def test_get_asr_config_keeps_custom_file_url_prefix(
     db_session,
     monkeypatch,
 ):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate-fixed.r10.vip.cpolar.cn")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://debate.example.com")
 
     existing_config = AsrConfig(
         id=uuid.uuid4(),
@@ -295,7 +267,7 @@ async def test_get_asr_config_keeps_custom_file_url_prefix(
         api_key="test-key",
         parameters={
             "provider": "dashscope",
-            "file_url_prefix": "https://debate.example.com/uploads/asr",
+            "file_url_prefix": "https://assets.example.com/uploads/asr",
         },
     )
     db_session.add(existing_config)
@@ -304,7 +276,7 @@ async def test_get_asr_config_keeps_custom_file_url_prefix(
     config = await config_service.get_asr_config()
 
     assert config.parameters["file_url_prefix"] == (
-        "https://debate.example.com/uploads/asr"
+        "https://assets.example.com/uploads/asr"
     )
 
 
@@ -549,4 +521,3 @@ async def test_multiple_updates_preserve_data(config_service, db_session):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

@@ -5,6 +5,8 @@ import AdminDashboard from './admin-dashboard';
 import StudentCommandCenter from './student-command-center';
 import StudentCompetitionHub from './student-competition-hub';
 import StudentOnboarding from './student-onboarding';
+import DebateLobby from './debate-lobby';
+import LobbyRoomWaiting from './lobby-room-waiting';
 import DebateArena from './debate-arena';
 import EnhancedDebateAnalytics from './enhanced-debate-analytics';
 import StudentAnalyticsCenter from './student-analytics-center';
@@ -254,6 +256,31 @@ const AppRouter: React.FC = () => {
     );
   }
 
+  const studentLobbyRoomMatch = matchPath('/student/lobby/rooms/:roomId', pathname);
+  if (studentLobbyRoomMatch) {
+    const roomId = studentLobbyRoomMatch.params.roomId;
+
+    return renderStudentPage(
+      <LobbyRoomWaiting
+        roomId={roomId}
+        onBack={() => navigate('/student/lobby')}
+        onEnterDebate={(targetRoomId) =>
+          navigate(`/student/debates/${targetRoomId}/arena`)
+        }
+      />
+    );
+  }
+
+  const studentLobbyMatch = matchPath('/student/lobby', pathname);
+  if (studentLobbyMatch) {
+    return renderStudentPage(
+      <DebateLobby
+        onBack={() => navigate('/student')}
+        onEnterRoom={(roomId) => navigate(`/student/lobby/rooms/${roomId}`)}
+      />
+    );
+  }
+
   const studentCompetitionMatch = matchPath('/student/competition', pathname);
   if (studentCompetitionMatch) {
     return renderStudentPage(
@@ -323,6 +350,8 @@ const AppRouter: React.FC = () => {
           navigate(getStudentAnalyticsPath(tab))
         }
         onNavigateToPreparation={() => navigate('/student/preparation')}
+        onNavigateToLobby={() => navigate('/student/lobby')}
+        onEnterLobbyRoom={(roomId) => navigate(`/student/lobby/rooms/${roomId}`)}
         onNavigateToSettings={(tab = 'info') =>
           navigate(getStudentSettingsPath(tab))
         }

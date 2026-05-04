@@ -1,10 +1,12 @@
 import axios from 'axios';
+import { getApiBaseUrl } from './runtime-url';
 
 export interface TokenData {
   access_token: string;
   refresh_token: string;
   token_type?: string;
   expires_in?: number;
+  user?: UserInfo;
 }
 
 export interface RefreshTokenResult extends TokenData {
@@ -32,19 +34,6 @@ const REFRESH_TOKEN_KEY = 'refresh_token';
 const TOKEN_TYPE_KEY = 'token_type';
 const TOKEN_EXPIRES_AT_KEY = 'token_expires_at';
 const USER_INFO_KEY = 'user_info';
-
-type ImportMetaWithEnv = ImportMeta & {
-  env?: {
-    VITE_API_BASE_URL?: string;
-  };
-};
-
-const getApiBaseUrl = () => {
-  const envBase = (
-    (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
-  ).replace(/\/+$/, '');
-  return envBase;
-};
 
 const unwrapResponseData = <T>(payload: unknown): T => {
   if (
@@ -76,6 +65,10 @@ class TokenManager {
     if (tokenData.expires_in) {
       const expiresAt = Date.now() + tokenData.expires_in * 1000;
       localStorage.setItem(TOKEN_EXPIRES_AT_KEY, String(expiresAt));
+    }
+
+    if (tokenData.user) {
+      this.setUserInfo(tokenData.user);
     }
   }
 
@@ -181,11 +174,9 @@ class TokenManager {
       const response = await axios.post(`${getApiBaseUrl()}/api/auth/refresh`, {
         refresh_token: refreshToken,
       });
-      const tokenData = unwrapResponseData<RefreshTokenResult>(response.data);
+
+      const tokenData = unwrapResponseData<TokenData>(response.data);
       this.setTokens(tokenData);
-      if (tokenData.user) {
-        this.setUserInfo(tokenData.user);
-      }
       return tokenData;
     })();
 

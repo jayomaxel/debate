@@ -12,7 +12,8 @@ export default defineConfig({
   },
   server: {
     port: 8860,
-    allowedHosts: ['.cpolar.top', '.cpolar.cn'],
+    strictPort: true,
+    allowedHosts: ['csidebate.xyz', '8.137.182.23'],
     proxy: {
       '/api': {
         target: 'http://localhost:7860',

@@ -51,6 +51,7 @@ class User(Base):
     debate_participations: Mapped[List["DebateParticipation"]] = relationship(
         "DebateParticipation",
         back_populates="user",
+        foreign_keys="DebateParticipation.user_id",
     )
 
     def __repr__(self):

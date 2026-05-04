@@ -10,8 +10,10 @@ import {
   FileText,
   Mail,
   BrainCircuit,
+  Shield,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/store/auth.context';
 import ClassManagement from './admin/class-management';
 import ModelConfiguration from './admin/model-configuration';
 import AsrConfiguration from './admin/asr-configuration';
@@ -21,6 +23,7 @@ import EmailConfiguration from './admin/email-configuration';
 import CozeConfiguration from './admin/coze-configuration';
 import UserManagement from './admin/user-management';
 import DocumentManagement from './admin/document-management';
+import UserProfile from './user-profile';
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -35,7 +38,8 @@ type TabType =
   | 'email'
   | 'coze'
   | 'users'
-  | 'knowledge';
+  | 'knowledge'
+  | 'profile';
 
 const menuItems = [
   { id: 'classes' as TabType, label: '班级管理', icon: BookOpen },
@@ -47,9 +51,23 @@ const menuItems = [
   { id: 'email' as TabType, label: '邮件配置', icon: Mail },
   { id: 'coze' as TabType, label: 'Coze 配置', icon: Bot },
   { id: 'users' as TabType, label: '成员管理', icon: Users },
+  { id: 'profile' as TabType, label: '个人中心', icon: Shield },
 ];
 
-const renderActivePanel = (activeTab: TabType) => {
+const panelDescriptions: Record<TabType, string> = {
+  classes: '管理系统中的所有班级',
+  models: '配置 AI 模型参数',
+  asr: '配置语音识别模型参数',
+  tts: '配置语音合成模型参数',
+  vector: '配置向量嵌入模型参数',
+  email: '配置系统邮件服务',
+  coze: '配置 Coze 代理设置',
+  users: '按教师与学生分类管理系统成员',
+  knowledge: '管理知识库文档与向量化',
+  profile: '维护管理员自己的资料、密码与头像设置',
+};
+
+const renderActivePanel = (activeTab: TabType, user: ReturnType<typeof useAuth>['user']) => {
   if (activeTab === 'classes') return <ClassManagement />;
   if (activeTab === 'models') return <ModelConfiguration />;
   if (activeTab === 'asr') return <AsrConfiguration />;
@@ -58,10 +76,12 @@ const renderActivePanel = (activeTab: TabType) => {
   if (activeTab === 'email') return <EmailConfiguration />;
   if (activeTab === 'knowledge') return <DocumentManagement />;
   if (activeTab === 'coze') return <CozeConfiguration />;
+  if (activeTab === 'profile') return user ? <UserProfile user={user} /> : null;
   return <UserManagement />;
 };
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('classes');
   const activeItem = menuItems.find((item) => item.id === activeTab) || menuItems[0];
 
@@ -74,7 +94,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
               {activeItem.label}
             </h1>
             <p className="student-section-copy mt-3">
-              统一处理平台资源、模型能力、班级和成员配置，保持管理员端和学生端一致的浏览节奏。
+              {panelDescriptions[activeTab]}
             </p>
           </div>
 
@@ -121,7 +141,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
         </aside>
 
         <section className="student-card min-h-[560px] p-4 md:p-6">
-          {renderActivePanel(activeTab)}
+          {renderActivePanel(activeTab, user)}
         </section>
       </div>
     </div>

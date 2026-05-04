@@ -157,7 +157,7 @@ def test_persist_audio_for_dashscope_falls_back_from_invalid_public_prefix(
     monkeypatch.setattr(
         settings,
         "PUBLIC_BASE_URL",
-        "https://debate-fixed.r10.vip.cpolar.cn",
+        "https://debate.example.com",
     )
 
     public_url = asyncio.run(
@@ -170,7 +170,7 @@ def test_persist_audio_for_dashscope_falls_back_from_invalid_public_prefix(
 
     assert public_url is not None
     assert public_url.startswith(
-        "https://debate-fixed.r10.vip.cpolar.cn/uploads/asr/"
+        "https://debate.example.com/uploads/asr/"
     )
 
 
