@@ -12,6 +12,7 @@ vi.mock('../services/auth.service', () => ({
     logout: vi.fn(),
     isAuthenticated: vi.fn(),
     getCurrentUser: vi.fn(),
+    refreshToken: vi.fn(),
   },
 }));
 
@@ -20,6 +21,7 @@ vi.mock('../lib/token-manager', () => ({
     setUserInfo: vi.fn(),
     getUserInfo: vi.fn(),
     getAccessToken: vi.fn(),
+    getRefreshToken: vi.fn(),
     clearAll: vi.fn(),
   },
 }));
@@ -92,6 +94,7 @@ describe('Auth Context - Property-Based Tests', () => {
     vi.mocked(AuthService.getCurrentUser).mockReturnValue(null);
     vi.mocked(TokenManager.getUserInfo).mockReturnValue(null);
     vi.mocked(TokenManager.getAccessToken).mockReturnValue(null);
+    vi.mocked(TokenManager.getRefreshToken).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -174,16 +177,21 @@ describe('Auth Context - Property-Based Tests', () => {
   it('restores the persisted authenticated state on initialization', async () => {
     await fc.assert(
       fc.asyncProperty(userInfoArbitrary, async (userInfo) => {
-        vi.mocked(AuthService.isAuthenticated).mockReturnValue(true);
-        vi.mocked(AuthService.getCurrentUser).mockReturnValue(userInfo);
-        vi.mocked(TokenManager.getUserInfo).mockReturnValue(userInfo);
-        vi.mocked(TokenManager.getAccessToken).mockReturnValue('mock-token');
+        vi.mocked(TokenManager.getRefreshToken).mockReturnValue('refresh-token');
+        vi.mocked(AuthService.refreshToken).mockResolvedValue({
+          access_token: 'new-access-token',
+          refresh_token: 'new-refresh-token',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          user: userInfo,
+        });
 
         const { result } = renderHook(() => useAuth(), { wrapper });
         await waitForHookReady(result);
 
         expect(result.current.isAuthenticated).toBe(true);
         expect(result.current.user).toEqual(userInfo);
+        expect(AuthService.refreshToken).toHaveBeenCalled();
       }),
       { numRuns: 100 }
     );

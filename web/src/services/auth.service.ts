@@ -4,7 +4,11 @@
  */
 
 import { api } from '../lib/api';
-import TokenManager, { type TokenData, type UserInfo } from '../lib/token-manager';
+import TokenManager, {
+  type RefreshTokenResult,
+  type TokenData,
+  type UserInfo,
+} from '../lib/token-manager';
 
 // ==================== 接口定义 ====================
 
@@ -118,14 +122,18 @@ class AuthService {
   /**
    * 用户登出
    */
-  static logout(): void {
+  static logout(options?: { redirect?: boolean; redirectTo?: string }): void {
     try {
       // 清除所有认证数据
       TokenManager.clearAll();
 
+      if (options?.redirect === false) {
+        return;
+      }
+
       // 重定向到登录页
       if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+        window.location.href = options?.redirectTo || '/login';
       }
     } catch (error) {
       console.error('[AuthService] Logout failed:', error);
@@ -190,7 +198,7 @@ class AuthService {
   /**
    * 刷新token
    */
-  static async refreshToken(): Promise<TokenData> {
+  static async refreshToken(): Promise<RefreshTokenResult> {
     try {
       return await TokenManager.refreshToken();
     } catch (error) {

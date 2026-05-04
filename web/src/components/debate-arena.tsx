@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { useAuth } from '@/store/auth.context';
 import { useToast } from '@/hooks/use-toast';
+import { useNavigationBlocker } from '@/lib/router';
 import StudentService from '@/services/student.service';
 import {
   TRANSCRIPT_PENDING_TEXT,
@@ -171,6 +172,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const [roomJoined, setRoomJoined] = useState(false);
   const [participantsLoadError, setParticipantsLoadError] = useState<string | null>(null);
   const [aiThinkingElapsedSec, setAiThinkingElapsedSec] = useState(0);
+  const leaveToastLockRef = useRef(false);
 
   const recordingPermissionWaiters = useRef<Map<string, { resolve: (result: { allowed: boolean; message?: string }) => void; timeoutId: number }>>(new Map());
   const liveTtsPlayerRef = useRef<PcmStreamPlayer | null>(null);
@@ -368,6 +370,48 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     });
     liveTtsPlayerRef.current?.stop();
   }, [autoPlayEnabled, roomId]);
+
+  const shouldWarnBeforeLeave =
+    currentPhase !== 'waiting' && currentPhase !== 'finished';
+  const leaveWarningMessage = '离开将影响当前辩论进程。';
+  const { allowNextNavigation } = useNavigationBlocker({
+    when: shouldWarnBeforeLeave,
+    message: leaveWarningMessage,
+    onBlock: () => {
+      if (leaveToastLockRef.current) {
+        return;
+      }
+
+      leaveToastLockRef.current = true;
+      toast({
+        variant: 'destructive',
+        title: '暂时不能离开辩论',
+        description: leaveWarningMessage,
+      });
+
+      window.setTimeout(() => {
+        leaveToastLockRef.current = false;
+      }, 1000);
+    },
+  });
+
+  useEffect(() => {
+    if (!shouldWarnBeforeLeave) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = leaveWarningMessage;
+      return leaveWarningMessage;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [leaveWarningMessage, shouldWarnBeforeLeave]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -811,6 +855,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         description: data.timestamp ? `结束时间：${String(data.timestamp)}` : undefined,
       });
       setCurrentPhase('finished');
+      allowNextNavigation();
       onEndDebateRef.current?.();
     };
 

@@ -9,6 +9,10 @@ export interface TokenData {
   user?: UserInfo;
 }
 
+export interface RefreshTokenResult extends TokenData {
+  user?: UserInfo;
+}
+
 export interface UserInfo {
   id: string;
   account: string;
@@ -47,6 +51,8 @@ const unwrapResponseData = <T>(payload: unknown): T => {
 const storageAvailable = () => typeof localStorage !== 'undefined';
 
 class TokenManager {
+  private static refreshPromise: Promise<RefreshTokenResult> | null = null;
+
   static setTokens(tokenData: TokenData): void {
     if (!storageAvailable()) {
       return;
@@ -59,6 +65,10 @@ class TokenManager {
     if (tokenData.expires_in) {
       const expiresAt = Date.now() + tokenData.expires_in * 1000;
       localStorage.setItem(TOKEN_EXPIRES_AT_KEY, String(expiresAt));
+    }
+
+    if (tokenData.user) {
+      this.setUserInfo(tokenData.user);
     }
   }
 
@@ -99,6 +109,19 @@ class TokenManager {
     return Date.now() >= expiresAt - 30_000;
   }
 
+  static isTokenExpiringSoon(windowMs = 90_000): boolean {
+    if (!storageAvailable()) {
+      return true;
+    }
+
+    const expiresAt = Number(localStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
+    if (!expiresAt) {
+      return false;
+    }
+
+    return Date.now() >= expiresAt - windowMs;
+  }
+
   static setUserInfo(userInfo: UserInfo): void {
     if (!storageAvailable()) {
       return;
@@ -137,21 +160,31 @@ class TokenManager {
     localStorage.removeItem(USER_INFO_KEY);
   }
 
-  static async refreshToken(): Promise<TokenData> {
+  static async refreshToken(): Promise<RefreshTokenResult> {
+    if (this.refreshPromise) {
+      return await this.refreshPromise;
+    }
+
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
       throw new Error('No refresh token available');
     }
 
-    const response = await axios.post(`${getApiBaseUrl()}/api/auth/refresh`, {
-      refresh_token: refreshToken,
-    });
-    const tokenData = unwrapResponseData<TokenData>(response.data);
-    this.setTokens(tokenData);
-    if (tokenData.user) {
-      this.setUserInfo(tokenData.user);
+    this.refreshPromise = (async () => {
+      const response = await axios.post(`${getApiBaseUrl()}/api/auth/refresh`, {
+        refresh_token: refreshToken,
+      });
+
+      const tokenData = unwrapResponseData<TokenData>(response.data);
+      this.setTokens(tokenData);
+      return tokenData;
+    })();
+
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
     }
-    return tokenData;
   }
 }
 
