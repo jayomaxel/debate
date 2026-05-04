@@ -16,6 +16,7 @@ export type MessageType =
   | 'grab_mic'
   | 'request_recording'
   | 'select_speaker'
+  | 'waiting_checklist_update'
   | 'recording_permission'
   | 'audio_processed'
   | 'permission_denied'

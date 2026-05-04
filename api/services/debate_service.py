@@ -11,6 +11,7 @@ from models.class_model import Class
 from services.assessment_service import AssessmentService
 from services.avatar_service import AvatarService
 from services.config_service import ConfigService
+from services.room_manager import room_manager
 from config import settings
 from logging_config import get_logger
 from utils.security import hash_password, verify_password
@@ -512,6 +513,9 @@ class DebateService:
     ) -> Dict[str, Any]:
         meta = DebateService._get_room_meta(debate)
         participant_count = DebateService._participant_count(db, debate.id)
+        realtime_room_state = room_manager.get_room_state(str(debate.id))
+        if realtime_room_state:
+            participant_count = room_manager.get_waiting_online_count(str(debate.id))
         members = None
         current_permissions = None
         if student_id:

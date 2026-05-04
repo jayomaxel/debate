@@ -305,7 +305,6 @@ const DebateControls: React.FC<DebateControlsProps> = ({
 
   return (
     <div className="w-full">
-      <div className="student-container pb-5">
         <Card className="student-card">
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-3">
@@ -465,7 +464,6 @@ const DebateControls: React.FC<DebateControlsProps> = ({
             )}
           </CardContent>
         </Card>
-      </div>
     </div>
   );
 };

@@ -42,6 +42,7 @@ interface StudentCommandCenterProps {
   onNavigateToSettings?: (tab?: 'info' | 'password' | 'ability') => void;
   onNavigateToLobby?: () => void;
   onEnterLobbyRoom?: (roomId: string) => void;
+  guestMode?: boolean;
 }
 
 const getHistoryOutcomeLabel = (item?: DebateHistoryItem | null) => {
@@ -68,15 +69,17 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   onNavigateToSettings,
   onNavigateToLobby,
   onEnterLobbyRoom,
+  guestMode = false,
 }) => {
   const { toast } = useToast();
   const { navigate } = useAppRouter();
   const { user } = useAuth();
+  const loginRedirect = useCallback(() => navigate('/login'), [navigate]);
 
   const studentName = propStudentName?.trim() || user?.name || '同学';
   const welcomeName = studentName === '同学' ? studentName : `${studentName}同学`;
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!guestMode);
   const [refreshing, setRefreshing] = useState(false);
   const [history, setHistory] = useState<DebateHistoryItem[]>([]);
   const [showAssessmentPrompt, setShowAssessmentPrompt] = useState(false);
@@ -86,7 +89,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
     analytics,
     needsAssessment,
     loading: assessmentLoading,
-  } = useStudentAssessment(true);
+  } = useStudentAssessment(!guestMode);
 
   const completedDebates = analytics?.completed_debates || 0;
   const averageScore = analytics?.average_score || 0;
@@ -121,15 +124,23 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   );
 
   useEffect(() => {
+    if (guestMode) {
+      setLoading(false);
+      setRefreshing(false);
+      setHistory([]);
+      return;
+    }
+
     void loadCommandCenter();
-  }, [loadCommandCenter]);
+  }, [guestMode, loadCommandCenter]);
 
   usePageActivityRefresh(() => loadCommandCenter({ silent: true }), {
-    enabled: !loading,
+    enabled: !guestMode && !loading,
     intervalMs: 15000,
   });
 
   useEffect(() => {
+    if (guestMode) return;
     if (assessmentLoading || !needsAssessment) return;
 
     const shouldShowPrompt = shouldShowAssessmentOnboardingPrompt(user, {
@@ -145,7 +156,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
     if (!dismissed) {
       setShowAssessmentPrompt(true);
     }
-  }, [assessmentLoading, completedDebates, needsAssessment, user]);
+  }, [assessmentLoading, completedDebates, guestMode, needsAssessment, user]);
 
   const dismissPrompt = () => {
     consumeAssessmentOnboardingPrompt(user);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -41,55 +41,6 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
   onToggleMic,
   onToggleVideo
 }) => {
-  const [audioLevel, setAudioLevel] = useState(0);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  // 模拟音频波形
-  useEffect(() => {
-    if (participant.isSpeaking) {
-      const interval = setInterval(() => {
-        setAudioLevel(Math.random() * 100);
-      }, 100);
-      return () => clearInterval(interval);
-    } else {
-      setAudioLevel(0);
-    }
-  }, [participant.isSpeaking]);
-
-  // 绘制音频波形
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const drawWaveform = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (audioLevel > 0) {
-        ctx.strokeStyle = participant.isAI ? '#8b5cf6' : '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-
-        const barCount = 20;
-        const barWidth = canvas.width / barCount;
-
-        for (let i = 0; i < barCount; i++) {
-          const barHeight = (Math.random() * audioLevel / 100) * canvas.height * 0.8;
-          const x = i * barWidth + barWidth / 2;
-          const y = canvas.height / 2 - barHeight / 2;
-
-          ctx.fillRect(x - 1, y, 2, barHeight);
-        }
-
-        ctx.stroke();
-      }
-    };
-
-    drawWaveform();
-  }, [audioLevel, participant.isAI]);
-
   const getSignalColor = (strength?: number) => {
     if (!strength) return 'text-slate-500';
     if (strength >= 80) return 'text-emerald-500';
@@ -100,7 +51,7 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
   const getActiveStyles = () => {
     if (!isActive) return '';
 
-    return 'ring-2 ring-slate-900/15 ring-offset-2 ring-offset-white';
+    return 'translate-y-[-2px] ring-2 ring-[#1f2937]/15 ring-offset-4 ring-offset-[#f8f5f1]';
   };
 
   const getSpeakingStyles = () => {
@@ -111,78 +62,87 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
       : 'border-[#c4dced] bg-[#eef6fb]';
   };
 
+  const isOffline = typeof participant.signalStrength !== 'number';
+
   return (
     <Card className={`
-      relative overflow-hidden transition-all duration-300
-      ${participant.isVideoOff ? 'bg-white/85' : 'bg-white/90'}
+      group relative overflow-hidden rounded-[26px] transition-all duration-300
+      bg-[linear-gradient(145deg,rgba(255,255,255,0.96)_0%,rgba(242,248,252,0.92)_54%,rgba(255,250,245,0.9)_100%)]
       ${getActiveStyles()} ${getSpeakingStyles()}
-      border ${participant.isSpeaking ? '' : 'border-[#ece4da]'}
-      shadow-[0_12px_28px_rgba(174,154,126,0.08)]
+      border ${participant.isSpeaking ? 'border-[#b9d6ea]' : 'border-white/80'}
+      shadow-[0_22px_54px_rgba(82,72,61,0.10)]
     `}>
-      <CardContent className="p-0 h-40">
-        {/* 视频区域 */}
-        <div className="relative h-full">
-          {participant.isVideoOff ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#f8f5f1]">
-              <Avatar className="w-16 h-16">
+      <CardContent className="relative h-[218px] p-5">
+        <div className="pointer-events-none absolute inset-0 opacity-70">
+          <div className="absolute -right-12 -top-14 h-32 w-32 rounded-full bg-[#d8e7f2]" />
+          <div className="absolute -bottom-16 left-8 h-28 w-28 rounded-full bg-[#f9ecde]" />
+        </div>
+
+        <div className="relative flex h-full flex-col">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Badge className="rounded-full border-[#d8e7f2] bg-white/80 text-xs text-slate-700">
+                  正方席位
+                </Badge>
+                {isCurrentUser && (
+                  <Badge className="rounded-full border-slate-900 bg-slate-900 text-xs text-white">
+                    我
+                  </Badge>
+                )}
+              </div>
+              <h3 className="mt-3 truncate text-lg font-semibold tracking-[-0.02em] text-slate-950">
+                {participant.name}
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant="secondary" className="student-pill text-xs">
+                  {participant.position}
+                </Badge>
+                {participant.role === 'captain' && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                    <Crown className="h-3 w-3" />
+                    队长
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${
+              isOffline
+                ? 'border-slate-200 bg-white/70 text-slate-500'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            }`}>
+              <Signal className={`h-3 w-3 ${getSignalColor(participant.signalStrength)}`} />
+              {isOffline ? '未入场' : '在线'}
+            </div>
+          </div>
+
+          <div className="mt-auto flex items-end justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Avatar className={`h-16 w-16 border-4 border-white shadow-[0_16px_34px_rgba(82,72,61,0.14)] ${
+                participant.isSpeaking ? 'ring-4 ring-emerald-100' : ''
+              }`}>
                 <AvatarImage src={participant.avatar} alt={participant.name} />
-                <AvatarFallback className={participant.isAI ? 'bg-[#eae6f6] text-slate-800' : 'bg-[#e2eef8] text-slate-800'}>
-                  {participant.isAI ? (
-                    <div className="text-2xl font-bold">AI</div>
-                  ) : (
-                    <User className="w-8 h-8" />
-                  )}
+                <AvatarFallback className="bg-[#e2eef8] text-slate-800">
+                  <User className="h-8 w-8" />
                 </AvatarFallback>
               </Avatar>
-            </div>
-          ) : (
-            <div className="absolute inset-0 bg-gradient-to-br from-white to-[#f8f5f1]">
-              {/* 模拟视频背景 */}
-              <div className="absolute inset-0 opacity-20">
-                <div className="h-full w-full bg-[#d8e7f2] animate-pulse" />
-              </div>
-
-              {/* 用户信息叠加层 */}
-              <div className="absolute bottom-0 left-0 right-0 border-t border-white/80 bg-white/90 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium text-slate-900">
-                      {participant.name}
-                    </span>
-                    {participant.role === 'captain' && (
-                      <Crown className="w-4 h-4 text-amber-600" />
-                    )}
-                    <Badge variant="secondary" className="student-pill text-xs">
-                      {participant.position}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Signal className={`w-3 h-3 ${getSignalColor(participant.signalStrength)}`} />
-                  </div>
-                </div>
+              <div>
+                <p className="text-xs text-slate-500">当前状态</p>
+                <p className={`mt-1 text-sm font-semibold ${
+                  participant.isSpeaking ? 'text-emerald-700' : isOffline ? 'text-slate-500' : 'text-slate-900'
+                }`}>
+                  {participant.isSpeaking ? '正在发言' : isOffline ? '等待入场' : '准备中'}
+                </p>
               </div>
             </div>
-          )}
 
-          {/* 音频波形覆盖层 */}
-          {participant.isSpeaking && (
-            <canvas
-              ref={canvasRef}
-              width={200}
-              height={40}
-              className="absolute top-2 left-2 right-2 h-10 pointer-events-none opacity-80"
-            />
-          )}
-
-          {/* 发言指示器 */}
-          {participant.isSpeaking && (
-            <div className="absolute top-2 right-2">
-              <div className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="text-xs font-medium text-emerald-800">发言中</span>
+            {participant.isSpeaking && (
+              <div className="rounded-full border border-emerald-200 bg-white/88 px-3 py-1 text-xs font-semibold text-emerald-700 shadow-sm">
+                Live
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* AI 标识 */}
           {participant.isAI && (
@@ -195,7 +155,7 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
 
           {/* 控制按钮 */}
           {isCurrentUser && (
-            <div className="absolute bottom-14 left-0 right-0 flex justify-center gap-2 opacity-0 hover:opacity-100 transition-opacity">
+            <div className="absolute bottom-5 right-5 flex justify-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
               <Button
                 size="sm"
                 variant="secondary"
@@ -229,9 +189,9 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
 
           {/* 静音状态指示 */}
           {participant.isMuted && !isCurrentUser && (
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-600/90">
-                <MicOff className="w-6 h-6 text-white" />
+            <div className="absolute bottom-5 right-5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-600/90 shadow-sm">
+                <MicOff className="h-4 w-4 text-white" />
               </div>
             </div>
           )}

@@ -145,41 +145,45 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   };
 
   return (
-    <div className="student-card flex w-full flex-col items-center gap-5 px-4 py-5 xl:h-full xl:w-[220px]">
+    <div className="student-card flex w-full flex-col gap-5 px-5 py-5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Action</p>
+        <h3 className="mt-1 text-lg font-semibold text-slate-900">发言操作台</h3>
+        <p className="mt-1 text-sm leading-6 text-slate-500">
+          抢麦、录音和结束发言集中在这里，轮到你时直接按主按钮即可。
+        </p>
+      </div>
+
       {/* 顶部状态图标 */}
-      <div className="flex gap-4 w-full justify-center">
+      <div className="grid grid-cols-2 gap-3">
         <div className="relative group">
           <Button
             onClick={onToggleMic}
             size="icon"
-            className={`rounded-xl w-10 h-10 shadow-lg transition-all duration-300 ${
+            className={`h-12 w-full rounded-[14px] shadow-sm transition-all duration-300 ${
               isMuted
                 ? 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
                 : 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
             }`}
           >
             {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            <span className="ml-2 text-sm font-semibold">{isMuted ? '麦克风关' : '麦克风开'}</span>
           </Button>
-          <span className="pointer-events-none absolute -bottom-8 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded border border-[#ece4da] bg-white px-2 py-1 text-xs text-slate-700 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
-            {isMuted ? '麦克风已关' : '麦克风已开'}
-          </span>
         </div>
 
         <div className="relative group">
           <Button
             onClick={onToggleVideo}
             size="icon"
-            className={`rounded-xl w-10 h-10 shadow-lg transition-all duration-300 ${
+            className={`h-12 w-full rounded-[14px] shadow-sm transition-all duration-300 ${
               isVideoOff
                 ? 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
                 : 'border border-[#d8e7f2] bg-[#e2eef8] text-slate-800 hover:bg-[#d6e8f6]'
             }`}
           >
             {isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+            <span className="ml-2 text-sm font-semibold">{isVideoOff ? '摄像头关' : '摄像头开'}</span>
           </Button>
-          <span className="pointer-events-none absolute -bottom-8 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded border border-[#ece4da] bg-white px-2 py-1 text-xs text-slate-700 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
-            {isVideoOff ? '摄像头已关' : '摄像头已开'}
-          </span>
         </div>
       </div>
 
@@ -187,8 +191,9 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
 
       {/* 状态提示文本 */}
       {micStatusText && (
-        <div className="student-card-muted w-full px-3 py-3 text-center">
-          <p className="text-xs font-medium leading-relaxed text-slate-700">
+        <div className="rounded-[16px] border border-[#ece4da] bg-[#fbf7f1] px-4 py-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">当前状态</p>
+          <p className="mt-2 text-sm font-medium leading-relaxed text-slate-800">
             {micStatusText}
           </p>
         </div>
@@ -204,12 +209,12 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       )}
 
       {/* 核心操作区 */}
-      <div className="mt-2 flex w-full flex-col gap-3">
+      <div className="flex w-full flex-col gap-3">
         {/* 抢麦按钮 - 移到这里，更显眼 */}
         {showSpeakingControls && canGrabMic && (
           <Button
             onClick={handleGrabMic}
-            className="h-12 w-full rounded-[10px] border border-[#e0d8ef] bg-[#171717] text-white shadow-[0_14px_30px_rgba(15,23,42,0.18)] transition-colors hover:bg-[#2a2a2a]"
+            className="h-14 w-full rounded-[14px] border border-[#e0d8ef] bg-[#171717] text-white shadow-[0_18px_38px_rgba(15,23,42,0.2)] transition-colors hover:bg-[#2a2a2a]"
           >
             <Radio className="w-5 h-5 text-white" />
             <span className="text-sm font-semibold text-white">抢麦发言</span>
@@ -226,7 +231,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
             if (!allowed) return;
             await handleStartRecording();
           }}
-          className={`flex h-12 w-full items-center justify-center gap-2 rounded-[10px] shadow-sm transition-colors ${
+          className={`flex h-14 w-full items-center justify-center gap-2 rounded-[14px] shadow-sm transition-colors ${
             isRecording
               ? 'border border-red-200 bg-red-600 text-white hover:bg-red-700'
               : 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
@@ -247,7 +252,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
 
         {showSpeakingControls && <Button
           onClick={handleEndTurn}
-          className="flex h-12 w-full items-center justify-center gap-2 rounded-[10px] border border-[#f0d6c0] bg-[#f9ecde] text-slate-900 shadow-sm transition-colors hover:bg-[#f5e2cf]"
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-[14px] border border-[#f0d6c0] bg-[#f9ecde] text-slate-900 shadow-sm transition-colors hover:bg-[#f5e2cf]"
         >
           <div className="w-5 h-5 flex items-center justify-center border-2 border-current rounded-sm p-0.5">
             <div className="w-full h-full bg-current rounded-[1px]" />

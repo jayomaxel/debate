@@ -30,8 +30,6 @@ import { buildDebateWebSocketUrl, type MessageType } from '@/lib/websocket-clien
 import {
   Users,
   Bot,
-  Trophy,
-  Target,
   AlertCircle,
   Loader2,
   Radio
@@ -1273,9 +1271,37 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const humanOnlineCount = humanOnlineMembers.length;
   const humanAvgSignal = humanOnlineCount > 0 ? Math.round(humanOnlineMembers.reduce((sum, m) => sum + (m.signalStrength || 0), 0) / humanOnlineCount) : 0;
   const humanStatusText = humanOnlineCount === 0 ? '等待加入' : humanOnlineCount === 4 ? '在线活跃' : `在线 ${humanOnlineCount}/4`;
+  const aiAvgProcessing = Math.round(aiTeam.reduce((sum, m) => sum + (m.processingPower || 0), 0) / Math.max(aiTeam.length, 1));
+  const debateProgressPercent =
+    typeof segmentIndex === 'number' && effectiveFlowSegments.length > 0
+      ? Math.min(100, Math.max(4, ((segmentIndex + 1) / effectiveFlowSegments.length) * 100))
+      : currentPhase === 'waiting'
+      ? 4
+      : currentPhase === 'finished'
+      ? 100
+      : 12;
+  const currentActionTitle = isTeacherModeratorMode
+    ? '主持观察中'
+    : canSpeak
+    ? '轮到你发言'
+    : canGrabMic
+    ? '可以抢麦'
+    : freeDebateNextSide === 'ai'
+    ? '等待 AI 回应'
+    : '等待轮次';
+  const currentActionDescription = isTeacherModeratorMode
+    ? '教师模式下只保留流程控制和记录查看，学生发言入口已关闭。'
+    : canSpeak
+    ? '你已经拥有当前发言权，可以录音发言，也可以用文字补充观点。'
+    : canGrabMic
+    ? '自由辩论当前无人持麦，点击抢麦后即可开始发言。'
+    : micStatusText || '请关注顶部流程和当前发言席位，轮到你时操作区会高亮。';
 
   return (
-    <div ref={arenaRootRef} className="flex min-h-screen flex-col overflow-hidden">
+    <div
+      ref={arenaRootRef}
+      className="relative flex min-h-screen flex-col overflow-hidden bg-[radial-gradient(circle_at_8%_10%,rgba(216,231,242,0.78),transparent_25%),radial-gradient(circle_at_90%_18%,rgba(249,236,222,0.82),transparent_24%),linear-gradient(180deg,#fbf7f1_0%,#f8f5f1_52%,#f7f1ea_100%)]"
+    >
       {/* 错误提示 */}
       {error && (
         <div className="fixed top-4 right-4 z-50 max-w-md">
@@ -1405,9 +1431,199 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         onToggleAutoPlay={() => setAutoPlayEnabled((prev) => !prev)}
       />
 
-      <div className="student-container flex min-h-0 flex-1 flex-col gap-4 pb-5 xl:flex-row xl:overflow-hidden">
-        {/* 左侧控制栏 */}
-        <div className="z-20 flex-none">
+      <div className="student-container grid min-h-0 flex-1 gap-5 pb-6 xl:grid-cols-[minmax(0,1fr)_390px] xl:overflow-hidden">
+        <main className="flex min-h-0 flex-col gap-5 overflow-y-auto pr-1 custom-scrollbar">
+          {isTeacherModeratorMode && (
+            <div className="rounded-[18px] border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800">
+              当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
+            </div>
+          )}
+          {isStudentModeratorMode && (
+            <div className="rounded-[18px] border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800">
+              当前为学生主持模式。您可以控制辩论流程，同时保留自己的辩手发言入口。
+            </div>
+          )}
+
+          <section className="student-card overflow-hidden p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Live Stage</p>
+                <h2 className="mt-2 truncate text-2xl font-semibold tracking-[-0.03em] text-slate-950">
+                  {segmentTitle || phaseLabel(currentPhase)}
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  {typeof segmentIndex === 'number'
+                    ? `流程 ${segmentIndex + 1}/${effectiveFlowSegments.length}`
+                    : '等待流程同步'}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[520px]">
+                <div className="rounded-[16px] border border-[#d8e7f2] bg-[#e2eef8]/80 p-3">
+                  <div className="text-xs text-slate-500">正方在线</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{humanOnlineCount}/4</div>
+                </div>
+                <div className="rounded-[16px] border border-[#e0d8ef] bg-[#eae6f6]/80 p-3">
+                  <div className="text-xs text-slate-500">AI 状态</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-slate-900">{aiTurnStatusMeta?.label || '待命中'}</div>
+                </div>
+                <div className="rounded-[16px] border border-[#ece4da] bg-white/80 p-3">
+                  <div className="text-xs text-slate-500">信号</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{humanOnlineCount > 0 ? `${humanAvgSignal}%` : '--'}</div>
+                </div>
+                <div className="rounded-[16px] border border-[#f0d6c0] bg-[#f9ecde]/80 p-3">
+                  <div className="text-xs text-slate-500">AI 负载</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{aiAvgProcessing}%</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#ede4da]">
+              <div
+                className="h-full rounded-full bg-[#171717] transition-all duration-700"
+                style={{ width: `${debateProgressPercent}%` }}
+              />
+            </div>
+          </section>
+
+          {(currentSpeakerInfo || aiTurnStatusMeta) && (
+            <section className="grid gap-4 lg:grid-cols-2">
+              {currentSpeakerInfo && (
+                <div className="student-card-muted flex items-center gap-4 p-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+                    <div className="h-3 w-3 rounded-full bg-emerald-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Now Speaking</p>
+                    <p className="mt-1 truncate font-semibold text-slate-900">
+                      {currentSpeakerInfo.name} ({currentSpeakerInfo.position})
+                    </p>
+                  </div>
+                  <Badge className={(currentSpeakerRole?.startsWith('ai_')) ? 'border-[#e0d8ef] bg-[#eae6f6] text-slate-800' : 'border-[#d8e7f2] bg-[#e2eef8] text-slate-800'}>
+                    {(currentSpeakerRole?.startsWith('ai_')) ? 'AI' : '人类'}
+                  </Badge>
+                </div>
+              )}
+              {aiTurnStatusMeta && (
+                <div className="student-card-muted p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Badge className={aiTurnStatusMeta.badgeClassName}>
+                      {aiTurnStatusMeta.label}
+                    </Badge>
+                    <span className="text-sm text-slate-700">{aiTurnStatusMeta.detail}</span>
+                  </div>
+                  {aiTurnStatus === 'thinking' && aiThinkingElapsedSec >= 60 && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      已等待 {aiThinkingElapsedSec} 秒，建议检查后端日志是否停在 AI 生成或数据库写入阶段
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Users className="h-6 w-6 text-slate-700" />
+                  <h2 className="text-xl font-semibold text-slate-900">人类团队</h2>
+                </div>
+                <Badge className="student-pill">正方 · {humanStatusText}</Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {humanTeam.map((participant) => {
+                  const isCurrent = participant.id === currentUserId;
+                  return (
+                    <ParticipantVideo
+                      key={participant.id}
+                      participant={participant}
+                      isActive={!!participant.isSpeaking}
+                      isCurrentUser={isCurrent}
+                      onToggleMic={isCurrent ? handleToggleMic : undefined}
+                      onToggleVideo={isCurrent ? handleToggleVideo : undefined}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Bot className="h-6 w-6 text-slate-700" />
+                  <h2 className="text-xl font-semibold text-slate-900">AI 智能团队</h2>
+                </div>
+                <Badge className="student-pill">反方 · {aiTurnStatusMeta?.label || '待命中'}</Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {aiTeam.map((ai) => (
+                  <AIAvatar
+                    key={ai.id}
+                    ai={ai}
+                    isActive={!!ai.isSpeaking}
+                  />
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="student-card-muted p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">流程卡片</p>
+                <p className="mt-1 text-xs text-slate-500">当前环节会高亮，已完成环节自动弱化。</p>
+              </div>
+              {canSelectCurrentUserSpeaker && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={isCurrentUserSelectedSpeaker ? 'secondary' : 'default'}
+                  disabled={isCurrentUserSelectedSpeaker}
+                  onClick={handleSelectSpeaker}
+                  className={isCurrentUserSelectedSpeaker ? 'student-light-button h-9 shrink-0' : 'student-dark-button h-9 shrink-0'}
+                >
+                  {isCurrentUserSelectedSpeaker ? '已由我回答' : '选择我来回答'}
+                </Button>
+              )}
+            </div>
+            <div className="mt-4 grid max-h-[154px] grid-cols-1 gap-2 overflow-y-auto pr-2 custom-scrollbar md:grid-cols-2">
+              {effectiveFlowSegments.map((seg, idx) => {
+                const active = !!segmentId && seg.id === segmentId;
+                const done = typeof segmentIndex === 'number' && idx < segmentIndex;
+                return (
+                  <div
+                    key={seg.id}
+                    className={`rounded-[12px] border px-3 py-2 text-sm ${
+                      active
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-[0_12px_28px_rgba(15,23,42,0.16)]'
+                        : done
+                        ? 'border-[#ece4da] bg-white/50 text-slate-400'
+                        : 'border-[#ece4da] bg-white/75 text-slate-700'
+                    }`}
+                  >
+                    {seg.title}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </main>
+
+        <aside className="flex min-h-0 flex-col gap-4 xl:overflow-y-auto xl:pr-1 custom-scrollbar">
+          <section className={`rounded-[22px] border p-5 shadow-[0_20px_46px_rgba(174,154,126,0.12)] ${
+            canSpeak || canGrabMic
+              ? 'border-slate-900 bg-white'
+              : 'border-[#ece4da] bg-white/88 backdrop-blur'
+          }`}>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Next Move</p>
+            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
+              {currentActionTitle}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {currentActionDescription}
+            </p>
+          </section>
+
           <DebateAudioControl
             isMuted={isMuted}
             isVideoOff={isVideoOff}
@@ -1421,225 +1637,23 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
             onGrabMic={handleGrabMic}
             onEndTurn={handleEndTurn}
           />
-        </div>
 
-        {/* 主内容区域 */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto custom-scrollbar">
-          <div className="w-full">
-            {isTeacherModeratorMode && (
-              <div className="mb-4 rounded-[14px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
-              </div>
-            )}
-            {isStudentModeratorMode && (
-              <div className="mb-4 rounded-[14px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                当前为学生主持模式。您可以控制辩论流程，同时保留自己的辩手发言入口。
-              </div>
-            )}
-            <div className="student-card-muted p-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="text-sm text-slate-700">
-                  <span className="text-slate-500">当前环节：</span>
-                  <span className="font-medium">{segmentTitle || phaseLabel(currentPhase)}</span>
-                  {typeof segmentIndex === 'number' && (
-                    <span className="text-slate-500 ml-2">({segmentIndex + 1}/{effectiveFlowSegments.length})</span>
-                  )}
-                </div>
-                {canSelectCurrentUserSpeaker && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={isCurrentUserSelectedSpeaker ? 'secondary' : 'default'}
-                    disabled={isCurrentUserSelectedSpeaker}
-                    onClick={handleSelectSpeaker}
-                    className={isCurrentUserSelectedSpeaker ? 'student-light-button h-9 shrink-0' : 'student-dark-button h-9 shrink-0'}
-                  >
-                    {isCurrentUserSelectedSpeaker ? '已由我回答' : '选择我来回答'}
-                  </Button>
-                )}
-              </div>
-              <div className="mt-3 max-h-[120px] overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-2 pr-2 custom-scrollbar">
-                {effectiveFlowSegments.map((seg, idx) => {
-                  const active = !!segmentId && seg.id === segmentId;
-                  const done = typeof segmentIndex === 'number' && idx < segmentIndex;
-                  return (
-                    <div
-                      key={seg.id}
-                      className={`px-3 py-2 rounded border text-sm ${
-                        active
-                          ? 'border-[#d8e7f2] bg-[#e2eef8] text-slate-900'
-                          : done
-                          ? 'border-[#ece4da] bg-white/50 text-slate-500'
-                          : 'border-[#ece4da] bg-white/75 text-slate-700'
-                      }`}
-                    >
-                      {seg.title}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* 主对战区域 */}
-          <div className="flex-1 py-5">
-            <div className="w-full">
-              {/* 当前发言者提示 */}
-              {currentSpeakerInfo && (
-                <div className="mb-5 text-center">
-                  <div className="inline-flex items-center gap-3 rounded-full border border-[#ece4da] bg-white/90 px-6 py-3 shadow-[0_12px_28px_rgba(174,154,126,0.08)]">
-                    <div className="h-3 w-3 rounded-full bg-emerald-500" />
-                    <span className="font-medium text-slate-900">
-                      {currentSpeakerInfo.name} ({currentSpeakerInfo.position}) 正在发言
-                    </span>
-                    <Badge className={
-                      (currentSpeakerRole?.startsWith('ai_'))
-                        ? 'border-[#e0d8ef] bg-[#eae6f6] text-slate-800'
-                        : 'border-[#d8e7f2] bg-[#e2eef8] text-slate-800'
-                    }>
-                      {(currentSpeakerRole?.startsWith('ai_')) ? 'AI' : '人类'}
-                    </Badge>
-                  </div>
-                </div>
-              )}
-              {aiTurnStatusMeta && (
-                <div className="mb-5 text-center">
-                  <div className="inline-flex flex-col items-center gap-2 rounded-[16px] border border-[#ece4da] bg-white/90 px-5 py-3 shadow-[0_12px_28px_rgba(174,154,126,0.08)]">
-                    <Badge className={aiTurnStatusMeta.badgeClassName}>
-                      {aiTurnStatusMeta.label}
-                    </Badge>
-                    <span className="text-sm text-slate-700">{aiTurnStatusMeta.detail}</span>
-                    {aiTurnStatus === 'thinking' && aiThinkingElapsedSec >= 60 && (
-                      <span className="text-xs text-amber-700">
-                        已等待 {aiThinkingElapsedSec} 秒，建议检查后端日志是否停在 AI 生成或数据库写入阶段
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* 对战区域 */}
-              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                {/* 左侧：人类团队 */}
-                <div className="space-y-4">
-                  <div className="mb-4 flex items-center gap-3">
-                <Users className="w-6 h-6 text-slate-700" />
-                <h2 className="text-xl font-semibold text-slate-900">人类团队</h2>
-                <Badge className="student-pill">
-                  正方
-                </Badge>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {humanTeam.map((participant) => {
-                  const isCurrent = participant.id === currentUserId;
-                  return (
-                  <ParticipantVideo
-                    key={participant.id}
-                    participant={participant}
-                    isActive={!!participant.isSpeaking}
-                    isCurrentUser={isCurrent}
-                    onToggleMic={isCurrent ? handleToggleMic : undefined}
-                    onToggleVideo={isCurrent ? handleToggleVideo : undefined}
-                  />
-                  );
-                })}
-              </div>
-
-              {/* 团队统计 */}
-              <div className="student-card-soft-blue mt-4 p-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-600">团队信号强度</span>
-                  <span className="font-medium text-slate-900">
-                    {humanOnlineCount > 0 ? `${humanAvgSignal}%` : '--'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm mt-2">
-                  <span className="text-slate-600">团队状态</span>
-                  <span className="font-medium text-slate-900">{humanStatusText}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* 右侧：AI团队 */}
-            <div className="space-y-4">
-              <div className="mb-4 flex items-center gap-3">
-                <Bot className="w-6 h-6 text-slate-700" />
-                <h2 className="text-xl font-semibold text-slate-900">AI智能团队</h2>
-                <Badge className="student-pill">
-                  反方
-                </Badge>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {aiTeam.map((ai) => (
-                  <AIAvatar
-                    key={ai.id}
-                    ai={ai}
-                    isActive={!!ai.isSpeaking}
-                  />
-                ))}
-              </div>
-
-              {/* AI团队统计 */}
-              <div className="student-card-soft-lavender mt-4 p-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-600">AI处理能力</span>
-                  <span className="font-medium text-slate-900">
-                    {Math.round(aiTeam.reduce((sum, m) => sum + (m.processingPower || 0), 0) / aiTeam.length)}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm mt-2">
-                  <span className="text-slate-600">AI策略状态</span>
-                  <span className="font-medium text-slate-900">
-                    {aiTurnStatusMeta?.label || '待命中'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 对战统计信息 */}
-          <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
-            <div className="student-card-soft-blue p-4 text-center">
-              <Users className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
-              <div className="text-2xl font-semibold text-slate-900">4</div>
-              <div className="text-sm text-slate-600">人类参与者</div>
-            </div>
-            <div className="student-card-soft-lavender p-4 text-center">
-              <Bot className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
-              <div className="text-2xl font-semibold text-slate-900">4</div>
-              <div className="text-sm text-slate-600">AI 智能体</div>
-            </div>
-            <div className="student-card-muted p-4 text-center">
-              <Target className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
-              <div className="text-2xl font-semibold text-slate-900">92%</div>
-              <div className="text-sm text-slate-600">匹配度</div>
-            </div>
-            <div className="student-card-soft-peach p-4 text-center">
-              <Trophy className="mx-auto mb-2 h-8 w-8 text-slate-700/60" />
-              <div className="text-2xl font-semibold text-slate-900">A+</div>
-              <div className="text-sm text-slate-600">对抗等级</div>
-            </div>
-          </div>
-        </div>
+          <DebateControls
+            canSpeak={canSpeak}
+            showInput={!isTeacherModeratorMode}
+            onSendMessage={handleSendMessage}
+            transcript={transcript}
+            title="赛场发言流"
+            badgeText={`${transcript.length} 条记录`}
+            autoPlayEnabled={autoPlayEnabled}
+            onAutoPlayEnabledChange={setAutoPlayEnabled}
+            externalPlaybackLock={hasActiveLiveTtsStream}
+            suppressAutoPlayEntryIds={streamedSpeechEntryIds}
+            onSpeechPlaybackEvent={(payload) => sendSpeechPlaybackEvent(payload)}
+          />
+        </aside>
       </div>
     </div>
-  </div>
-
-  {/* 底部控制区域 */}
-  <DebateControls
-    canSpeak={canSpeak}
-    showInput={!isTeacherModeratorMode}
-    onSendMessage={handleSendMessage}
-    transcript={transcript}
-    autoPlayEnabled={autoPlayEnabled}
-    onAutoPlayEnabledChange={setAutoPlayEnabled}
-    externalPlaybackLock={hasActiveLiveTtsStream}
-    suppressAutoPlayEntryIds={streamedSpeechEntryIds}
-    onSpeechPlaybackEvent={(payload) => sendSpeechPlaybackEvent(payload)}
-  />
-</div>
   );
 };
 

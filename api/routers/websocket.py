@@ -355,6 +355,11 @@ async def websocket_debate_endpoint(
                 # 选择本段发言者（用于可选回答段）
                 await handle_select_speaker_message(room_id, user_id, message_data, db)
 
+            elif message_type == "waiting_checklist_update":
+                await handle_waiting_checklist_update_message(
+                    room_id, user_id, message_data, db
+                )
+
             elif message_type == "start_debate":
                 await handle_start_debate_message(room_id, user_id, message_data, db)
 
@@ -1556,6 +1561,10 @@ async def handle_start_debate_message(
     if not _can_participant_moderate(participant):
         await _send_moderator_permission_denied(user_id, "开始辩论")
         return
+    waiting_block_reason = room_manager.get_waiting_block_reason(room_id)
+    if waiting_block_reason:
+        await _send_permission_denied(user_id, waiting_block_reason)
+        return
     ok = await room_manager.start_debate(room_id, db)
     if not ok:
         await websocket_manager.send_to_user(
@@ -1567,6 +1576,34 @@ async def handle_start_debate_message(
                     "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
                 },
             },
+        )
+
+
+async def handle_waiting_checklist_update_message(
+    room_id: str,
+    user_id: str,
+    data: dict,
+    db: Session,
+) -> None:
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        await websocket_manager.send_to_user(
+            user_id,
+            {
+                "type": "error",
+                "data": {
+                    "message": "Invalid waiting checklist payload.",
+                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                },
+            },
+        )
+        return
+
+    ok = await room_manager.update_waiting_checklist(room_id, user_id, items, db)
+    if not ok:
+        await _send_permission_denied(
+            user_id,
+            "Unable to update preparation checklist in this waiting room.",
         )
 
 

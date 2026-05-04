@@ -3,7 +3,7 @@
 负责管理辩论房间的创建、状态同步、成员管理
 """
 
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
 import asyncio
@@ -20,6 +20,9 @@ logger = get_logger(__name__)
 
 TEACHER_MODERATOR_ROLE = "teacher_moderator"
 ROOM_META_KEY = "__room_meta"
+ROOM_ROLE_ORDER = ("debater_1", "debater_2", "debater_3", "debater_4")
+WAITING_CHECKLIST_ITEM_COUNT = 4
+WAITING_CHECKLIST_META_KEY = "waiting_checklists"
 
 
 class DebatePhase(str, Enum):
@@ -76,6 +79,9 @@ class RoomState:
         playback_gate_started_at: Optional[datetime] = None,
         playback_gate_deadline_at: Optional[datetime] = None,
         pending_post_playback_action: Optional[str] = None,
+        room_capacity: int = 4,
+        required_roles: Optional[List[str]] = None,
+        waiting_checklists: Optional[Dict[str, dict]] = None,
         room_mode: str = "teacher_assigned",
         visibility: str = "public",
         host_user_id: Optional[str] = None,
@@ -127,6 +133,11 @@ class RoomState:
         self.playback_gate_started_at = playback_gate_started_at
         self.playback_gate_deadline_at = playback_gate_deadline_at
         self.pending_post_playback_action = pending_post_playback_action
+        self.room_capacity = room_capacity
+        self.required_roles = required_roles or list(
+            ROOM_ROLE_ORDER[: max(1, min(len(ROOM_ROLE_ORDER), int(room_capacity or 4)))]
+        )
+        self.waiting_checklists = waiting_checklists or {}
         self.room_mode = room_mode
         self.visibility = visibility
         self.host_user_id = host_user_id
@@ -164,6 +175,150 @@ class RoomState:
                 "name": "AI辩手4",
             },
         ]
+
+    @staticmethod
+    def normalize_role(role: object | None) -> Optional[str]:
+        value = str(role or "").strip()
+        if not value:
+            return None
+        for candidate in ROOM_ROLE_ORDER:
+            if value == candidate or value.endswith(f".{candidate}"):
+                return candidate
+        return None
+
+    @staticmethod
+    def normalize_checklist_items(items: object | None) -> List[bool]:
+        raw_items = list(items) if isinstance(items, (list, tuple)) else []
+        normalized = [bool(item) for item in raw_items[:WAITING_CHECKLIST_ITEM_COUNT]]
+        if len(normalized) < WAITING_CHECKLIST_ITEM_COUNT:
+            normalized.extend(
+                [False] * (WAITING_CHECKLIST_ITEM_COUNT - len(normalized))
+            )
+        return normalized
+
+    def get_required_roles(self) -> List[str]:
+        roles: List[str] = []
+        for role in self.required_roles or []:
+            normalized = self.normalize_role(role)
+            if normalized and normalized not in roles:
+                roles.append(normalized)
+        if roles:
+            return roles
+
+        try:
+            room_capacity = int(self.room_capacity or len(ROOM_ROLE_ORDER))
+        except Exception:
+            room_capacity = len(ROOM_ROLE_ORDER)
+        room_capacity = max(1, min(len(ROOM_ROLE_ORDER), room_capacity))
+        return list(ROOM_ROLE_ORDER[:room_capacity])
+
+    def get_waiting_participants_by_role(self) -> Dict[str, dict]:
+        participants_by_role: Dict[str, dict] = {}
+        required_roles = set(self.get_required_roles())
+
+        for participant in self.participants or []:
+            role = self.normalize_role(participant.get("role"))
+            if not role or role not in required_roles:
+                continue
+            if participant.get("user_type") == "teacher":
+                continue
+            if participant.get("can_speak") is False:
+                continue
+            participants_by_role[role] = participant
+
+        return participants_by_role
+
+    def serialize_waiting_checklists(self) -> Dict[str, dict]:
+        serialized: Dict[str, dict] = {}
+        participant_by_user_id = {
+            str(participant.get("user_id")): participant
+            for participant in self.participants or []
+            if participant.get("user_id")
+        }
+        required_roles = set(self.get_required_roles())
+
+        for raw_user_id, raw_entry in (self.waiting_checklists or {}).items():
+            user_id = str(raw_user_id or "").strip()
+            if not user_id:
+                continue
+
+            entry = raw_entry if isinstance(raw_entry, dict) else {"items": raw_entry}
+            participant = participant_by_user_id.get(user_id)
+            role = self.normalize_role(
+                (participant or {}).get("role") or entry.get("role")
+            )
+            if role and role not in required_roles:
+                continue
+
+            items = self.normalize_checklist_items(entry.get("items"))
+            serialized[user_id] = {
+                "items": items,
+                "ready": all(items),
+                "completed_count": sum(1 for item in items if item),
+                "updated_at": entry.get("updated_at"),
+                "role": role,
+                "name": (participant or {}).get("name") or entry.get("name"),
+                "online": bool(participant),
+            }
+
+        for role, participant in self.get_waiting_participants_by_role().items():
+            user_id = str(participant.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            existing = serialized.get(user_id) or {
+                "items": [False] * WAITING_CHECKLIST_ITEM_COUNT,
+                "ready": False,
+                "completed_count": 0,
+                "updated_at": None,
+            }
+            existing["role"] = role
+            existing["name"] = participant.get("name")
+            existing["online"] = True
+            serialized[user_id] = existing
+
+        return serialized
+
+    def get_waiting_status(self) -> dict:
+        required_roles = self.get_required_roles()
+        participants_by_role = self.get_waiting_participants_by_role()
+        waiting_checklists = self.serialize_waiting_checklists()
+
+        online_roles: List[str] = []
+        ready_roles: List[str] = []
+        online_user_ids: List[str] = []
+        ready_user_ids: List[str] = []
+
+        for role in required_roles:
+            participant = participants_by_role.get(role)
+            if not participant:
+                continue
+            user_id = str(participant.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            online_roles.append(role)
+            online_user_ids.append(user_id)
+            if waiting_checklists.get(user_id, {}).get("ready") is True:
+                ready_roles.append(role)
+                ready_user_ids.append(user_id)
+
+        missing_roles = [role for role in required_roles if role not in online_roles]
+        all_online = len(online_roles) == len(required_roles) and not missing_roles
+        ready_to_start = all_online and len(ready_roles) == len(required_roles)
+
+        return {
+            "required_roles": required_roles,
+            "required_count": len(required_roles),
+            "online_count": len(online_roles),
+            "ready_count": len(ready_roles),
+            "online_roles": online_roles,
+            "ready_roles": ready_roles,
+            "online_user_ids": online_user_ids,
+            "ready_user_ids": ready_user_ids,
+            "missing_roles": missing_roles,
+            "all_online": all_online,
+            "all_ready": ready_to_start,
+            "ready_to_start": ready_to_start,
+        }
 
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -232,6 +387,10 @@ class RoomState:
             "checkin_open_time": self.checkin_open_time,
             "checkin_close_time": self.checkin_close_time,
             "room_status": self.room_status,
+            "room_capacity": self.room_capacity,
+            "required_roles": self.get_required_roles(),
+            "waiting_checklists": self.serialize_waiting_checklists(),
+            "waiting_status": self.get_waiting_status(),
             "moderator_missing": self.moderator_missing,
             "flow_segments": self.flow_segments,
             "participants": self.participants,
@@ -263,10 +422,47 @@ class DebateRoomManager:
         return str(getattr(debate, "visibility", None) or meta.get("visibility") or "private")
 
     @staticmethod
+    def get_room_capacity(debate: Debate, meta: Optional[dict] = None) -> int:
+        meta = meta or DebateRoomManager.get_room_meta(debate)
+        try:
+            value = int(
+                getattr(debate, "capacity", None)
+                or meta.get("capacity")
+                or len(ROOM_ROLE_ORDER)
+            )
+        except Exception:
+            value = len(ROOM_ROLE_ORDER)
+        return max(1, min(len(ROOM_ROLE_ORDER), value))
+
+    @staticmethod
     def get_room_host_user_id(debate: Debate) -> Optional[str]:
         meta = DebateRoomManager.get_room_meta(debate)
         host_user_id = getattr(debate, "host_user_id", None) or meta.get("host_user_id") or meta.get("moderator_user_id")
         return str(host_user_id) if host_user_id else None
+
+    @staticmethod
+    def get_persisted_waiting_checklists(meta: dict) -> Dict[str, dict]:
+        raw_checklists = meta.get(WAITING_CHECKLIST_META_KEY)
+        if not isinstance(raw_checklists, dict):
+            return {}
+
+        normalized: Dict[str, dict] = {}
+        for raw_user_id, raw_entry in raw_checklists.items():
+            user_id = str(raw_user_id or "").strip()
+            if not user_id:
+                continue
+
+            entry = raw_entry if isinstance(raw_entry, dict) else {"items": raw_entry}
+            items = RoomState.normalize_checklist_items(entry.get("items"))
+            normalized[user_id] = {
+                "items": items,
+                "ready": all(items),
+                "updated_at": entry.get("updated_at"),
+                "role": RoomState.normalize_role(entry.get("role")),
+                "name": entry.get("name"),
+            }
+
+        return normalized
 
     @staticmethod
     def room_datetime_iso(debate: Debate, field_name: str, meta: dict) -> Optional[str]:
@@ -321,6 +517,198 @@ class DebateRoomManager:
             "can_speak": True,
         }
 
+    def _sync_waiting_checklists_with_participants(self, room_state: RoomState) -> None:
+        required_roles = set(room_state.get_required_roles())
+        normalized: Dict[str, dict] = {}
+
+        for raw_user_id, raw_entry in (room_state.waiting_checklists or {}).items():
+            user_id = str(raw_user_id or "").strip()
+            if not user_id:
+                continue
+
+            entry = raw_entry if isinstance(raw_entry, dict) else {"items": raw_entry}
+            role = RoomState.normalize_role(entry.get("role"))
+            if role and role not in required_roles:
+                continue
+
+            items = RoomState.normalize_checklist_items(entry.get("items"))
+            normalized[user_id] = {
+                "items": items,
+                "ready": all(items),
+                "updated_at": entry.get("updated_at"),
+                "role": role,
+                "name": entry.get("name"),
+            }
+
+        for participant in room_state.participants or []:
+            user_id = str(participant.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            if participant.get("user_type") == "teacher":
+                continue
+            if participant.get("can_speak") is False:
+                continue
+
+            role = RoomState.normalize_role(participant.get("role"))
+            if not role or role not in required_roles:
+                continue
+
+            existing = normalized.get(user_id) or {}
+            items = RoomState.normalize_checklist_items(existing.get("items"))
+            normalized[user_id] = {
+                "items": items,
+                "ready": all(items),
+                "updated_at": existing.get("updated_at"),
+                "role": role,
+                "name": participant.get("name") or existing.get("name"),
+            }
+
+        room_state.waiting_checklists = normalized
+
+    def _serialize_waiting_checklists_for_meta(self, room_state: RoomState) -> Dict[str, dict]:
+        self._sync_waiting_checklists_with_participants(room_state)
+
+        serialized: Dict[str, dict] = {}
+        for user_id, entry in (room_state.waiting_checklists or {}).items():
+            serialized[user_id] = {
+                "items": RoomState.normalize_checklist_items(entry.get("items")),
+                "updated_at": entry.get("updated_at"),
+                "role": RoomState.normalize_role(entry.get("role")),
+                "name": entry.get("name"),
+            }
+
+        return serialized
+
+    def _persist_waiting_checklists(self, room_state: RoomState, db: Optional[Session]) -> None:
+        if db is None:
+            return
+
+        try:
+            debate_uuid = uuid.UUID(str(room_state.debate_id))
+        except ValueError:
+            return
+
+        try:
+            debate = db.execute(
+                select(Debate).where(Debate.id == debate_uuid)
+            ).scalar_one_or_none()
+            if not debate:
+                return
+
+            report = dict(debate.report) if isinstance(debate.report, dict) else {}
+            meta = self.get_room_meta(debate)
+            meta[WAITING_CHECKLIST_META_KEY] = self._serialize_waiting_checklists_for_meta(
+                room_state
+            )
+            report[ROOM_META_KEY] = meta
+            debate.report = report
+            db.commit()
+        except Exception as exc:  # pragma: no cover - realtime best-effort sync
+            db.rollback()
+            logger.warning("Failed to persist waiting checklist state: %s", exc)
+
+    def get_waiting_online_count(self, room_id: str) -> int:
+        room_state = self.get_room_state(room_id)
+        if not room_state:
+            return 0
+
+        self._sync_waiting_checklists_with_participants(room_state)
+        waiting_status = room_state.get_waiting_status()
+        try:
+            return int(waiting_status.get("online_count") or 0)
+        except Exception:
+            return 0
+
+    def is_waiting_ready(self, room_id: str) -> bool:
+        room_state = self.get_room_state(room_id)
+        if not room_state:
+            return False
+
+        self._sync_waiting_checklists_with_participants(room_state)
+        return bool(room_state.get_waiting_status().get("ready_to_start"))
+
+    def get_waiting_block_reason(self, room_id: str) -> Optional[str]:
+        room_state = self.get_room_state(room_id)
+        if not room_state:
+            return "Waiting room not found."
+
+        if room_state.current_phase != DebatePhase.WAITING:
+            return "Debate has already started."
+
+        self._sync_waiting_checklists_with_participants(room_state)
+        waiting_status = room_state.get_waiting_status()
+        required_count = int(waiting_status.get("required_count") or 0)
+        online_count = int(waiting_status.get("online_count") or 0)
+        ready_count = int(waiting_status.get("ready_count") or 0)
+
+        if not waiting_status.get("all_online"):
+            return (
+                f"Waiting for all participants to enter the room "
+                f"({online_count}/{required_count})."
+            )
+
+        if not waiting_status.get("ready_to_start"):
+            return (
+                f"Waiting for all participants to finish preparation "
+                f"({ready_count}/{required_count})."
+            )
+
+        return None
+
+    async def maybe_start_debate(self, room_id: str, db: Session) -> bool:
+        room_state = self.get_room_state(room_id)
+        if not room_state or room_state.current_phase != DebatePhase.WAITING:
+            return False
+        if not self.is_waiting_ready(room_id):
+            return False
+        return await self.start_debate(room_id, db)
+
+    async def update_waiting_checklist(
+        self,
+        room_id: str,
+        user_id: str,
+        items: object,
+        db: Session,
+    ) -> bool:
+        room_state = self.get_room_state(room_id)
+        if not room_state:
+            return False
+
+        participant = next(
+            (
+                p
+                for p in room_state.participants
+                if str(p.get("user_id") or "").strip() == str(user_id)
+            ),
+            None,
+        )
+        if not participant:
+            return False
+        if participant.get("user_type") == "teacher":
+            return False
+        if participant.get("can_speak") is False:
+            return False
+
+        role = RoomState.normalize_role(participant.get("role"))
+        if role not in set(room_state.get_required_roles()):
+            return False
+
+        normalized_items = RoomState.normalize_checklist_items(items)
+        existing = (room_state.waiting_checklists or {}).get(str(user_id), {})
+        room_state.waiting_checklists[str(user_id)] = {
+            "items": normalized_items,
+            "ready": all(normalized_items),
+            "updated_at": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+            "role": role or existing.get("role"),
+            "name": participant.get("name") or existing.get("name"),
+        }
+
+        self._sync_waiting_checklists_with_participants(room_state)
+        self._persist_waiting_checklists(room_state, db)
+        await self.broadcast_state_update(room_id)
+        await self.maybe_start_debate(room_id, db)
+        return True
+
     async def create_room(self, room_id: str, debate_id: str, db: Session) -> RoomState:
         """
         创建辩论房间
@@ -348,10 +736,14 @@ class DebateRoomManager:
 
         # 创建房间状态
         meta = self.get_room_meta(debate)
+        room_capacity = self.get_room_capacity(debate, meta)
         room_state = RoomState(
             room_id=room_id,
             debate_id=str(debate_uuid),
             current_phase=DebatePhase.WAITING,
+            room_capacity=room_capacity,
+            required_roles=list(ROOM_ROLE_ORDER[:room_capacity]),
+            waiting_checklists=self.get_persisted_waiting_checklists(meta),
             room_mode=self.get_room_mode(debate),
             visibility=self.get_room_visibility(debate),
             host_user_id=self.get_room_host_user_id(debate),
@@ -362,6 +754,7 @@ class DebateRoomManager:
             room_status=self.get_room_status(debate, meta),
         )
 
+        self._sync_waiting_checklists_with_participants(room_state)
         self.rooms[room_id] = room_state
 
         logger.info(f"Created room {room_id} for debate {debate_id}")
@@ -462,6 +855,7 @@ class DebateRoomManager:
         # 检查用户是否已在房间
         if any(p["user_id"] == user_id for p in room_state.participants):
             logger.info(f"User {user_id} already in room {room_id}")
+            self._sync_waiting_checklists_with_participants(room_state)
             # 即使已在房间，也发送当前状态
             await websocket_manager.send_to_user(
                 user_id, {"type": "state_update", "data": room_state.to_dict()}
@@ -479,6 +873,8 @@ class DebateRoomManager:
             room_state.host_user_id = str(participant_info.get("user_id"))
             room_state.host_role = str(participant_info.get("role"))
             room_state.moderator_missing = False
+        self._sync_waiting_checklists_with_participants(room_state)
+        self._persist_waiting_checklists(room_state, db)
 
         logger.info(f"User {user_id} joined room {room_id}")
 
@@ -502,6 +898,7 @@ class DebateRoomManager:
 
         # 3. 广播房间状态更新给所有人
         await self.broadcast_state_update(room_id)
+        await self.maybe_start_debate(room_id, db)
 
         return True
 
@@ -623,6 +1020,8 @@ class DebateRoomManager:
         room_state.participants = [
             p for p in room_state.participants if p["user_id"] != user_id
         ]
+        self._sync_waiting_checklists_with_participants(room_state)
+        self._persist_waiting_checklists(room_state, db)
 
         logger.info(f"User {user_id} left room {room_id}")
 
@@ -717,6 +1116,14 @@ class DebateRoomManager:
             logger.error(f"Invalid debate UUID: {room_state.debate_id}")
             return False
         if room_state.current_phase != DebatePhase.WAITING:
+            return False
+        self._sync_waiting_checklists_with_participants(room_state)
+        if not self.is_waiting_ready(room_id):
+            logger.info(
+                "Debate in room %s cannot start yet: %s",
+                room_id,
+                self.get_waiting_block_reason(room_id),
+            )
             return False
 
         # 更新辩论状态
@@ -1040,6 +1447,7 @@ class DebateRoomManager:
             return
 
         room_state = self.rooms[room_id]
+        self._sync_waiting_checklists_with_participants(room_state)
 
         await websocket_manager.broadcast_to_room(
             room_id, {"type": "state_update", "data": room_state.to_dict()}

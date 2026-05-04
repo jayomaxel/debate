@@ -1,9 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import JoinPrivateRoomDialog from '@/components/join-private-room-dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useWebSocket } from '@/hooks/use-websocket';
+import { useAuth } from '@/store/auth.context';
 import {
   formatDateTime,
   formatRelativeStart,
@@ -12,6 +15,14 @@ import {
   stanceLabelMap,
   statusBadgeClass,
 } from '@/lib/reservation-display';
+import {
+  getCurrentUserChecklist,
+  getRealtimeParticipantCount,
+  getWaitingReadyToStart,
+  hasDebateStarted,
+  parseWaitingRoomState,
+  type WaitingRoomState,
+} from '@/lib/waiting-room';
 import StudentService, {
   type LobbyRoom,
   type LobbyRoomMember,
@@ -43,17 +54,27 @@ const memberSort = (a: LobbyRoomMember, b: LobbyRoomMember) =>
 const roomInfoCardClassName =
   'student-card overflow-hidden border-0 shadow-none';
 
+const readinessChecklist = [
+  '确认你自己的辩位和本场辩题已经同步。',
+  '快速阅读背景资料，并整理 2 到 3 个核心观点。',
+  '准备好支撑论据，并至少想好一条对对方的预判回应。',
+  '检查麦克风、耳机和网络连接，比赛开始后尽量不要离场。',
+];
+
 const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
   roomId,
   onBack,
   onEnterDebate,
 }) => {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [room, setRoom] = useState<LobbyRoom | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [joining, setJoining] = useState(false);
   const [joinPrivateOpen, setJoinPrivateOpen] = useState(false);
+  const [waitingState, setWaitingState] = useState<WaitingRoomState | null>(null);
+  const navigateTriggeredRef = useRef(false);
 
   const loadRoom = useCallback(
     async (mode: 'initial' | 'manual' | 'poll' = 'manual') => {
@@ -100,12 +121,95 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
   const isJoined =
     !!currentPermissions?.is_joined || !!room?.is_current_user_joined;
   const canModerate = !!currentPermissions?.can_moderate;
+  const currentUserRole = currentPermissions?.role || room?.current_user_role || null;
+  const websocketRoomId = isJoined && room?.room_id ? room.room_id : null;
+  const { send, on, off } = useWebSocket(websocketRoomId, {
+    onError: (error) => {
+      console.error('[LobbyRoomWaiting] websocket error:', error);
+    },
+  });
+
+  useEffect(() => {
+    const handleStateUpdate = (data: Record<string, unknown>) => {
+      const nextState = parseWaitingRoomState(data);
+      if (nextState) {
+        setWaitingState(nextState);
+      }
+    };
+
+    on('state_update', handleStateUpdate);
+    return () => {
+      off('state_update', handleStateUpdate);
+    };
+  }, [off, on]);
+
+  const participantCount = getRealtimeParticipantCount(
+    waitingState,
+    room?.current_count || 0
+  );
+  const debateStarted = hasDebateStarted(waitingState) || room?.status === 'ongoing';
+  const readyToStart = getWaitingReadyToStart(waitingState);
+  const readyCount = waitingState?.waiting_status?.ready_count ?? 0;
+  const requiredCount = waitingState?.waiting_status?.required_count ?? room?.capacity ?? 4;
+  const myChecklist = getCurrentUserChecklist(waitingState, user?.id);
+  const onlineRoles = new Set(waitingState?.waiting_status?.online_roles || []);
+  const readyRoles = new Set(waitingState?.waiting_status?.ready_roles || []);
 
   const memberByRole = useMemo(() => {
     const map = new Map<string, LobbyRoomMember>();
     members.forEach((member) => map.set(member.role, member));
     return map;
   }, [members]);
+
+  const handleChecklistToggle = useCallback(
+    (index: number, checked: boolean) => {
+      if (!isJoined || !user?.id || !currentUserRole) {
+        return;
+      }
+
+      const nextItems = [...myChecklist];
+      nextItems[index] = checked;
+
+      setWaitingState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          waiting_checklists: {
+            ...(current.waiting_checklists || {}),
+            [user.id]: {
+              ...(current.waiting_checklists?.[user.id] || {
+                completed_count: 0,
+                ready: false,
+              }),
+              items: nextItems,
+              completed_count: nextItems.filter(Boolean).length,
+              ready: nextItems.every(Boolean),
+              role: currentUserRole,
+              name:
+                room?.members?.find((member) => member.user_id === user.id)?.name ||
+                user.name,
+              online: true,
+            },
+          },
+        };
+      });
+
+      send('waiting_checklist_update', { items: nextItems });
+    },
+    [currentUserRole, isJoined, myChecklist, room?.members, send, user?.id, user?.name]
+  );
+
+  useEffect(() => {
+    if (!debateStarted || !room?.room_id || navigateTriggeredRef.current) {
+      return;
+    }
+
+    navigateTriggeredRef.current = true;
+    onEnterDebate(room.room_id);
+  }, [debateStarted, onEnterDebate, room?.room_id]);
 
   const handleJoinPublic = async () => {
     if (!room) return;
@@ -158,7 +262,7 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
 
   const occupancy = Math.min(
     100,
-    (room.current_count / Math.max(room.capacity, 1)) * 100
+    (participantCount / Math.max(room.capacity, 1)) * 100
   );
 
   return (
@@ -214,14 +318,15 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                 {isJoined ? (
                   <Button
                     onClick={() => onEnterDebate(room.room_id)}
+                    disabled={!debateStarted}
                     className="student-dark-button h-auto px-5 py-3"
                   >
-                    {canModerate ? (
+                    {debateStarted && canModerate ? (
                       <Play className="mr-2 h-4 w-4" />
                     ) : (
                       <DoorOpen className="mr-2 h-4 w-4" />
                     )}
-                    {canModerate ? '进入辩论并开始' : '进入辩论'}
+                    {debateStarted ? '进入辩论' : '等待四人全部准备完成'}
                   </Button>
                 ) : room.visibility === 'private' ? (
                   <Button
@@ -251,18 +356,18 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
 
             <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
               <div className="student-card-soft-blue p-5">
-                <div className="text-sm text-slate-500">已入座人数</div>
+                <div className="text-sm text-slate-500">在线人数</div>
                 <div className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-slate-900">
-                  {room.current_count}
+                  {participantCount}
                   <span className="ml-1 text-sm font-medium text-slate-500">
                     / {room.capacity}
                   </span>
                 </div>
               </div>
               <div className="student-card-soft-peach p-5">
-                <div className="text-sm text-slate-500">剩余席位</div>
+                <div className="text-sm text-slate-500">已准备人数</div>
                 <div className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-slate-900">
-                  {room.available_roles?.length || 0}
+                  {readyCount}
                 </div>
               </div>
               <div className="student-card-soft-lavender p-5">
@@ -290,12 +395,12 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                 </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
                   <span>
-                    当前进度：{room.current_count}/{room.capacity}
+                    当前进度：{participantCount}/{room.capacity}
                   </span>
                   <span>
-                    {room.available_roles?.length
-                      ? `剩余 ${room.available_roles.length} 个席位`
-                      : '席位已满'}
+                    {readyCount > 0
+                      ? `已完成准备 ${readyCount}/${requiredCount}`
+                      : '等待所有辩手进入并完成准备'}
                   </span>
                 </div>
 
@@ -305,6 +410,8 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                   ).map((role) => {
                     const member = memberByRole.get(role);
                     const moderator = !!member?.can_moderate;
+                    const online = onlineRoles.has(role);
+                    const ready = readyRoles.has(role);
 
                     return (
                       <div
@@ -320,8 +427,12 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                           {moderator ? (
                             <Badge className="bg-amber-500 text-white">
                               <Crown className="mr-1 h-3 w-3" />
-                              主持人
+                              主持
                             </Badge>
+                          ) : ready ? (
+                            <Badge className="bg-emerald-600 text-white">已准备</Badge>
+                          ) : online ? (
+                            <Badge className="bg-slate-700 text-white">在线</Badge>
                           ) : null}
                         </div>
 
@@ -353,6 +464,50 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                 </div>
               </CardContent>
             </Card>
+
+            {isJoined ? (
+              <section className="student-card px-5 py-5 md:px-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      准备清单
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      四位辩手都完成全部准备后，会自动进入比赛界面。
+                    </p>
+                  </div>
+                  <Badge className="student-pill">
+                    {myChecklist.filter(Boolean).length}/{readinessChecklist.length}
+                  </Badge>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {readinessChecklist.map((item, index) => (
+                    <label
+                      key={item}
+                      className={`flex items-start gap-3 rounded-2xl border px-4 py-3 transition ${
+                        currentUserRole
+                          ? 'cursor-pointer border-slate-200 hover:border-slate-300'
+                          : 'cursor-not-allowed border-slate-100 opacity-70'
+                      }`}
+                    >
+                      <Checkbox
+                        checked={myChecklist[index]}
+                        disabled={!currentUserRole}
+                        onCheckedChange={(checked) =>
+                          handleChecklistToggle(index, checked === true)
+                        }
+                        className="mt-1"
+                      />
+                      <span className="text-sm leading-7 text-slate-600">{item}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4 text-sm text-slate-500">
+                  当前已有 {readyCount}/{requiredCount} 位辩手完成全部准备。
+                  {readyToStart ? ' 即将自动进入比赛。' : ''}
+                </div>
+              </section>
+            ) : null}
 
             {room.description ? (
               <section className="student-card-soft-lavender px-5 py-5 md:px-6">
@@ -431,7 +586,7 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                     {isJoined
                       ? `${roleLabel(
                           currentPermissions?.role || room.current_user_role
-                        )}${canModerate ? ' · 主持' : ''}`
+                        )}${canModerate ? ' · 主持' : ''}${readyToStart ? ' · 全员已准备' : ''}`
                       : room.join_block_reason || '尚未加入'}
                   </span>
                 </div>

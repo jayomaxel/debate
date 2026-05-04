@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1036,6 +1036,46 @@ def test_student_lobby_debater_1_moderator_can_start_debate(monkeypatch):
             "can_speak": True,
         }
     ]
+    room_state.participants.extend(
+        [
+            {
+                "user_id": str(uuid.uuid4()),
+                "role": "debater_2",
+                "name": "二号辩手",
+                "user_type": "student",
+                "room_mode": "student_lobby",
+                "can_moderate": False,
+                "can_speak": True,
+            },
+            {
+                "user_id": str(uuid.uuid4()),
+                "role": "debater_3",
+                "name": "三号辩手",
+                "user_type": "student",
+                "room_mode": "student_lobby",
+                "can_moderate": False,
+                "can_speak": True,
+            },
+            {
+                "user_id": str(uuid.uuid4()),
+                "role": "debater_4",
+                "name": "四号辩手",
+                "user_type": "student",
+                "room_mode": "student_lobby",
+                "can_moderate": False,
+                "can_speak": True,
+            },
+        ]
+    )
+    room_state.waiting_checklists = {
+        participant["user_id"]: {
+            "items": [True, True, True, True],
+            "ready": True,
+            "role": participant["role"],
+            "name": participant["name"],
+        }
+        for participant in room_state.participants
+    }
     room_manager.rooms[room_id] = room_state
 
     calls = []

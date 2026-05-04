@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
-  CheckCircle2,
   Clock3,
   Loader2,
   ShieldCheck,
@@ -13,12 +12,21 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import DebateTopicCard from './debate-topic-card';
 import WaitingStatusBar from './waiting-status-bar';
 import StudentService from '@/services/student.service';
 import type { Debate, DebateParticipant } from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
 import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
+import { useWebSocket } from '@/hooks/use-websocket';
+import {
+  getCurrentUserChecklist,
+  getRealtimeParticipantCount,
+  hasDebateStarted,
+  parseWaitingRoomState,
+  type WaitingRoomState,
+} from '@/lib/waiting-room';
 
 interface StudentOnboardingProps {
   initialDebate?: Debate | null;
@@ -37,10 +45,10 @@ const roleLabel: Record<DebateRole, string> = {
 };
 
 const roleDescription: Record<DebateRole, string> = {
-  debater_1: '负责立论陈词，先建立本方框架与价值主张。',
-  debater_2: '负责攻辩推进，用问题和追击拆解对方论证。',
-  debater_3: '负责质询与回应，在交锋里补强团队论证。',
-  debater_4: '负责总结陈词，提炼全场优势并完成收束。',
+  debater_1: '负责立论陈词，先建立本方框架与核心主张。',
+  debater_2: '负责推进攻辩，用问题与追问拆解对方论证。',
+  debater_3: '负责质询与回应，在交锋中补强团队论证。',
+  debater_4: '负责总结陈词，提炼全场重点并完成收束。',
 };
 
 const statusPriority: Record<Debate['status'], number> = {
@@ -49,6 +57,13 @@ const statusPriority: Record<Debate['status'], number> = {
   draft: 2,
   completed: 3,
 };
+
+const readinessChecklist = [
+  '确认你的辩位与本场辩题已经同步。',
+  '快速阅读背景资料，并整理 2 到 3 个核心观点。',
+  '准备一组支撑论据，并至少想好一条对对方的预判回应。',
+  '检查麦克风、耳机和网络连接，比赛开始后尽量不要离场。',
+];
 
 const sortJoinedDebates = (debates: Debate[]) =>
   debates
@@ -90,13 +105,6 @@ const getHumanParticipants = (participants?: DebateParticipant[] | null) => {
   return participants.filter((participant) => !!participant.role);
 };
 
-const readinessChecklist = [
-  '确认你的辩位与本场辩题是否已经同步。',
-  '阅读辩题背景资料，先整理 2 到 3 个核心论点。',
-  '准备一组支持论据和至少一条对对方的预判反驳。',
-  '检查麦克风、耳机和网络连接，正式开始后尽量不要离场。',
-];
-
 const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   initialDebate,
   onDebateStart,
@@ -111,6 +119,8 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   const [joinedDebate, setJoinedDebate] = useState<Debate | null>(
     initialDebate || null
   );
+  const [waitingState, setWaitingState] = useState<WaitingRoomState | null>(null);
+  const navigateTriggeredRef = useRef(false);
 
   const loadWaitingContext = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -159,7 +169,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
         setJoinedDebate(debate);
       } catch (loadError: any) {
         console.error('[StudentOnboarding] Failed to load waiting context:', loadError);
-        setError(loadError?.message || '等待与准备页加载失败，请稍后重试。');
+        setError(loadError?.message || '等待页加载失败，请稍后重试。');
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -177,13 +187,88 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
     intervalMs: 12000,
   });
 
+  const roomId = joinedDebate?.id ?? null;
+  const { isConnected, send, on, off } = useWebSocket(roomId, {
+    onError: () => {
+      setError((current) => current ?? '实时房间同步失败，请稍后刷新重试。');
+    },
+  });
+
+  useEffect(() => {
+    const handleStateUpdate = (data: Record<string, unknown>) => {
+      const nextState = parseWaitingRoomState(data);
+      if (nextState) {
+        setWaitingState(nextState);
+      }
+    };
+
+    on('state_update', handleStateUpdate);
+    return () => {
+      off('state_update', handleStateUpdate);
+    };
+  }, [off, on]);
+
   const assignedRole = joinedDebate?.role;
   const displayRole = isDebateRole(assignedRole) ? assignedRole : null;
   const participants = getHumanParticipants(joinedDebate?.participants);
-  const participantCount = getParticipantCount(joinedDebate);
-  const canStartDebate =
-    joinedDebate?.status === 'in_progress' ||
-    (joinedDebate?.status === 'published' && !!displayRole);
+  const fallbackParticipantCount = getParticipantCount(joinedDebate);
+  const participantCount = getRealtimeParticipantCount(
+    waitingState,
+    fallbackParticipantCount
+  );
+  const myChecklist = getCurrentUserChecklist(waitingState, user?.id);
+  const debateStarted =
+    joinedDebate?.status === 'in_progress' || hasDebateStarted(waitingState);
+  const readyCount = waitingState?.waiting_status?.ready_count ?? 0;
+  const requiredCount = waitingState?.waiting_status?.required_count ?? 4;
+
+  const handleChecklistToggle = useCallback(
+    (index: number, checked: boolean) => {
+      if (!displayRole || !user?.id) {
+        return;
+      }
+
+      const nextItems = [...myChecklist];
+      nextItems[index] = checked;
+
+      setWaitingState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          waiting_checklists: {
+            ...(current.waiting_checklists || {}),
+            [user.id]: {
+              ...(current.waiting_checklists?.[user.id] || {
+                completed_count: 0,
+                ready: false,
+              }),
+              items: nextItems,
+              completed_count: nextItems.filter(Boolean).length,
+              ready: nextItems.every(Boolean),
+              role: displayRole,
+              name: user.name,
+              online: true,
+            },
+          },
+        };
+      });
+
+      send('waiting_checklist_update', { items: nextItems });
+    },
+    [displayRole, myChecklist, send, user?.id, user?.name]
+  );
+
+  useEffect(() => {
+    if (!joinedDebate?.id || !debateStarted || navigateTriggeredRef.current) {
+      return;
+    }
+
+    navigateTriggeredRef.current = true;
+    onDebateStart?.(joinedDebate.id);
+  }, [debateStarted, joinedDebate?.id, onDebateStart]);
 
   const rosterCards = useMemo(() => {
     const rosterByRole = new Map<string, DebateParticipant>();
@@ -210,7 +295,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
       <div className="student-container flex min-h-[70vh] items-center justify-center py-10">
         <div className="student-card min-w-[280px] px-8 py-10 text-center">
           <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-slate-700" />
-          <p className="text-slate-600">正在加载等待与准备页...</p>
+          <p className="text-slate-600">正在加载等待与准备页面...</p>
         </div>
       </div>
     );
@@ -249,14 +334,14 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <h1 className="mt-4 max-w-2xl text-[1.95rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.3rem]">
-              先确认你的辩位和参赛名单，准备好后进入正式辩论。
+              先确认你的辩位和参赛名单，四位辩手全部完成准备后会自动进入正式辩论。
             </h1>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Badge className="student-pill">邀请码 {joinedDebate.invitation_code}</Badge>
             <Badge className="student-pill">
-              {joinedDebate.status === 'in_progress' ? '已开赛' : '等待开赛'}
+              {debateStarted ? '比赛已启动' : '等待全员准备'}
             </Badge>
           </div>
         </div>
@@ -274,16 +359,16 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                 tone="student-card-soft-blue"
               />
               <StatusCard
-                title="人类参与者"
+                title="在线人数"
                 value={`${participantCount}/4`}
-                description=""
+                description={isConnected ? '实时同步当前在线候场人数' : '正在连接房间实时状态'}
                 icon={<Users className="h-5 w-5 text-slate-700" />}
                 tone="student-card-soft-peach"
               />
               <StatusCard
                 title="下一步"
-                value={canStartDebate ? '进入正式辩论' : '继续等待与准备'}
-                description=""
+                value={debateStarted ? '正在进入正式辩论' : '等待四人全部完成准备'}
+                description={`已完成准备 ${readyCount}/${requiredCount}`}
                 icon={<Sparkles className="h-5 w-5 text-slate-700" />}
                 tone="student-card-soft-lavender"
               />
@@ -317,7 +402,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                     {isMe ? <Badge className="student-pill">我的位置</Badge> : null}
                   </div>
                   <div className="mt-3 text-sm font-medium text-slate-900">
-                    {participant?.name || '等待该辩位同步参与者'}
+                    {participant?.name || '等待该辩位同学进入候场'}
                   </div>
                   <div className="mt-1.5 text-sm leading-7 text-slate-600">
                     {participant?.role_reason || roleDescription[role]}
@@ -332,21 +417,47 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
           <WaitingStatusBar
             hasAssignedRole={!!displayRole}
             participantCount={participantCount}
-            isReady={canStartDebate}
+            isReady={debateStarted}
           />
 
           <section className="student-card px-5 py-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold tracking-[-0.03em] text-slate-900">
+                  准备清单
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  四位辩手都完成全部勾选后，会自动进入比赛界面。
+                </p>
+              </div>
+              <Badge className="student-pill">
+                {myChecklist.filter(Boolean).length}/{readinessChecklist.length}
+              </Badge>
+            </div>
             <div className="mt-4 space-y-3">
               {readinessChecklist.map((item, index) => (
-                <div key={item} className="flex items-start gap-3">
-                  <CheckCircle2
-                    className={`mt-1 h-4 w-4 ${
-                      index === 0 && displayRole ? 'text-emerald-600' : 'text-slate-300'
-                    }`}
+                <label
+                  key={item}
+                  className={`flex items-start gap-3 rounded-2xl border px-4 py-3 transition ${
+                    displayRole
+                      ? 'cursor-pointer border-slate-200 hover:border-slate-300'
+                      : 'cursor-not-allowed border-slate-100 opacity-70'
+                  }`}
+                >
+                  <Checkbox
+                    checked={myChecklist[index]}
+                    disabled={!displayRole}
+                    onCheckedChange={(checked) =>
+                      handleChecklistToggle(index, checked === true)
+                    }
+                    className="mt-1"
                   />
                   <span className="text-sm leading-7 text-slate-600">{item}</span>
-                </div>
+                </label>
               ))}
+            </div>
+            <div className="mt-4 text-sm text-slate-500">
+              当前已有 {readyCount}/{requiredCount} 位辩手完成全部准备。
             </div>
           </section>
 
@@ -354,10 +465,10 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <Button
                 className="student-dark-button h-auto w-full justify-center"
-                disabled={!canStartDebate}
+                disabled={!debateStarted}
                 onClick={() => onDebateStart?.(joinedDebate.id)}
               >
-                进入正式辩论
+                {debateStarted ? '进入正式辩论' : '等待四人全部准备完成'}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
               <Button

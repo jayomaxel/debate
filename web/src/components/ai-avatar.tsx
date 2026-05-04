@@ -9,7 +9,6 @@ import {
   TrendingUp,
   Cpu,
   Activity,
-  Circle,
 } from 'lucide-react';
 
 export interface AIAvatar {
@@ -29,16 +28,7 @@ interface AIAvatarProps {
 }
 
 const AIAvatar: React.FC<AIAvatarProps> = ({ ai, isActive = false }) => {
-  const [animationFrame, setAnimationFrame] = useState(0);
   const [thinkingBubbles, setThinkingBubbles] = useState<string[]>([]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setAnimationFrame(prev => (prev + 1) % 60);
-    }, 50);
-
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (ai.isSpeaking) {
@@ -66,37 +56,37 @@ const AIAvatar: React.FC<AIAvatarProps> = ({ ai, isActive = false }) => {
       case 'analytical':
         return {
           color: 'blue',
-          gradient: 'from-[#e2eef8] to-white',
-          bgColor: 'from-white to-[#e2eef8]',
+          gradient: 'from-white to-[#e2eef8]',
+          bgColor: 'from-white via-[#f7fbfe] to-[#e2eef8]',
           borderColor: 'border-[#d8e7f2]',
-          icon: <Brain className="w-8 h-8 text-slate-800" />,
+          icon: <Brain className="h-8 w-8 text-slate-800" />,
           traits: ['逻辑分析', '数据处理', '事实核查']
         };
       case 'creative':
         return {
           color: 'purple',
-          gradient: 'from-[#eae6f6] to-white',
-          bgColor: 'from-white to-[#eae6f6]',
+          gradient: 'from-white to-[#eae6f6]',
+          bgColor: 'from-white via-[#fbfaff] to-[#eae6f6]',
           borderColor: 'border-[#e0d8ef]',
-          icon: <Zap className="w-8 h-8 text-slate-800" />,
+          icon: <Zap className="h-8 w-8 text-slate-800" />,
           traits: ['创新思维', '联想能力', '创意表达']
         };
       case 'aggressive':
         return {
           color: 'red',
-          gradient: 'from-[#f9ecde] to-white',
-          bgColor: 'from-white to-[#f9ecde]',
+          gradient: 'from-white to-[#f9ecde]',
+          bgColor: 'from-white via-[#fffaf6] to-[#f9ecde]',
           borderColor: 'border-[#f0d6c0]',
-          icon: <Target className="w-8 h-8 text-slate-800" />,
+          icon: <Target className="h-8 w-8 text-slate-800" />,
           traits: ['攻击性辩论', '快速反应', '压力测试']
         };
       case 'balanced':
         return {
           color: 'emerald',
-          gradient: 'from-emerald-50 to-white',
-          bgColor: 'from-white to-emerald-50',
+          gradient: 'from-white to-emerald-50',
+          bgColor: 'from-white via-[#f7fffb] to-emerald-50',
           borderColor: 'border-emerald-200',
-          icon: <Cpu className="w-8 h-8 text-slate-800" />,
+          icon: <Cpu className="h-8 w-8 text-slate-800" />,
           traits: ['均衡策略', '适应性强', '全面思考']
         };
       default:
@@ -105,7 +95,7 @@ const AIAvatar: React.FC<AIAvatarProps> = ({ ai, isActive = false }) => {
           gradient: 'from-white to-[#f8f5f1]',
           bgColor: 'from-white to-[#f8f5f1]',
           borderColor: 'border-[#ece4da]',
-          icon: <Bot className="w-8 h-8 text-slate-400" />,
+          icon: <Bot className="h-8 w-8 text-slate-400" />,
           traits: ['通用智能']
         };
     }
@@ -116,81 +106,60 @@ const AIAvatar: React.FC<AIAvatarProps> = ({ ai, isActive = false }) => {
   const getActiveStyles = () => {
     if (!isActive) return '';
 
-    return 'ring-2 ring-slate-900/15 ring-offset-2 ring-offset-white';
-  };
-
-  const getProcessingBars = () => {
-    const bars = 12;
-    const barHeight = ai.processingPower || 50;
-
-    return Array.from({ length: bars }, (_, i) => {
-      const delay = i * 100;
-      const height = Math.sin((animationFrame + delay) / 10) * barHeight + barHeight;
-
-      return (
-        <div
-          key={i}
-          className="w-1 rounded-full bg-slate-700 transition-all duration-200"
-          style={{
-            height: `${Math.max(4, height)}px`,
-            opacity: ai.isSpeaking ? 0.8 + Math.random() * 0.2 : 0.3
-          }}
-        />
-      );
-    });
+    return 'scale-[1.015] ring-2 ring-slate-900/20 ring-offset-4 ring-offset-[#f8f5f1]';
   };
 
   return (
     <Card className={`
-      relative overflow-hidden transition-all duration-300
+      group relative overflow-hidden rounded-[26px] transition-all duration-300
       bg-gradient-to-br ${config.bgColor}
-      border ${config.borderColor}
+      border ${ai.isSpeaking ? 'border-slate-300' : config.borderColor}
       ${getActiveStyles()}
-      shadow-[0_12px_28px_rgba(174,154,126,0.08)]
+      shadow-[0_22px_54px_rgba(82,72,61,0.10)]
     `}>
-      <CardContent className="p-0 h-40">
-        <div className="relative h-full">
-          {/* AI 核心区域 */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            {/* 机器人头像 */}
-            <div className={`
-              relative w-16 h-16 rounded-full bg-gradient-to-br ${config.gradient}
-              flex items-center justify-center border border-white shadow-[0_12px_28px_rgba(174,154,126,0.10)]
-            `}>
-              {config.icon}
+      <CardContent className="relative h-[218px] p-5">
+        <div className="pointer-events-none absolute inset-0 opacity-70">
+          <div className="absolute -right-12 -top-14 h-32 w-32 rounded-full bg-[#eae6f6]" />
+          <div className="absolute -bottom-16 left-8 h-28 w-28 rounded-full bg-[#f9ecde]" />
+        </div>
 
-              {/* 发言光环 */}
-              {ai.isSpeaking && (
-                <div className="absolute inset-0 rounded-full border-2 border-slate-900/20" />
-              )}
-            </div>
-
-            {/* AI 名称和职位 */}
-            <div className="mt-2 text-center">
-              <h3 className="text-sm font-semibold text-slate-900">
+        <div className="relative flex h-full flex-col">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Badge className="rounded-full border-[#e0d8ef] bg-white/80 text-xs text-slate-700">
+                  反方 AI
+                </Badge>
+                <Badge className={ai.isSpeaking ? 'rounded-full border-slate-900 bg-slate-900 text-xs text-white' : 'student-pill text-xs'}>
+                  {ai.isSpeaking ? '发言中' : '待命'}
+                </Badge>
+              </div>
+              <h3 className="mt-3 truncate text-lg font-semibold tracking-[-0.02em] text-slate-950">
                 {ai.name}
               </h3>
-              <Badge className="student-pill mt-1 text-xs">
-                {ai.position}
-              </Badge>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge className="student-pill text-xs">
+                  {ai.position}
+                </Badge>
+                <span className="rounded-full border border-[#ece4da] bg-white/70 px-2 py-1 text-xs text-slate-500">
+                  LV.{ai.skillLevel}
+                </span>
+              </div>
             </div>
 
-            {/* 技能等级 */}
-            <div className="mt-1 text-xs text-slate-500">
-              LV.{ai.skillLevel}
+            <div className={`
+              flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${config.gradient}
+              border border-white shadow-[0_16px_34px_rgba(82,72,61,0.14)]
+            `}>
+              {config.icon}
             </div>
-          </div>
-
-          {/* 音频处理可视化 */}
-          <div className="absolute bottom-8 left-0 right-0 flex items-center justify-center gap-0.5 px-8">
-            {getProcessingBars()}
           </div>
 
           {/* 思考气泡 */}
           {thinkingBubbles.length > 0 && (
-            <div className="absolute top-2 right-2 max-w-32">
-              <div className="rounded-[10px] border border-emerald-200 bg-emerald-50 p-2">
-                <div className="flex items-center gap-1 mb-1">
+            <div className="mt-4">
+              <div className="rounded-[14px] border border-emerald-200 bg-emerald-50/90 p-3">
+                <div className="mb-1 flex items-center gap-1">
                   <Activity className="h-3 w-3 text-emerald-700" />
                   <span className="text-xs font-medium text-emerald-800">思考中</span>
                 </div>
@@ -201,58 +170,29 @@ const AIAvatar: React.FC<AIAvatarProps> = ({ ai, isActive = false }) => {
             </div>
           )}
 
-          {/* AI 类型标识 */}
-          <div className="absolute top-2 left-2">
-            <Badge className="student-pill text-xs">
-              {ai.aiType === 'analytical' && '分析型'}
-              {ai.aiType === 'creative' && '创意型'}
-              {ai.aiType === 'aggressive' && '激进型'}
-              {ai.aiType === 'balanced' && '平衡型'}
-            </Badge>
-          </div>
-
-          {/* 发言指示器 */}
-          {ai.isSpeaking && (
-            <div className="absolute top-12 left-0 right-0 flex justify-center">
-              <div className="flex items-center gap-1">
-                {[0, 1, 2].map((i) => (
-                  <Circle
-                    key={i}
-                    className="h-2 w-2 fill-current text-slate-700"
-                    style={{
-                      animation: `pulse 1s infinite ${i * 0.2}s`
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 处理状态指示 */}
-          <div className="absolute bottom-2 left-2 right-2">
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>处理中...</span>
-              <TrendingUp className="w-3 h-3" />
-            </div>
-            <div className="mt-1 h-1 w-full rounded-full bg-[#ede4da]">
-              <div
-                className="h-full rounded-full bg-slate-900 transition-all duration-300"
-                style={{ width: `${ai.processingPower || 50}%` }}
-              />
-            </div>
-          </div>
-
-          {/* AI 特征标签（悬停显示） */}
-          <div className="absolute inset-x-0 -bottom-8 opacity-0 hover:opacity-100 transition-opacity duration-200">
-            <div className="flex flex-wrap gap-1 justify-center">
-              {config.traits.map((trait, index) => (
+          <div className="mt-auto">
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {config.traits.slice(0, 2).map((trait, index) => (
                 <span
                   key={index}
-                  className="rounded border border-[#ece4da] bg-white/90 px-2 py-1 text-xs text-slate-700"
+                  className="rounded-full border border-white/80 bg-white/70 px-2 py-1 text-xs text-slate-600"
                 >
                   {trait}
                 </span>
               ))}
+            </div>
+
+            <div className="rounded-[14px] border border-white/80 bg-white/72 p-3 backdrop-blur">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span>{ai.isSpeaking ? '正在输出观点' : '策略待命'}</span>
+                <TrendingUp className="h-3 w-3" />
+              </div>
+              <div className="mt-2 h-1.5 w-full rounded-full bg-[#ede4da]">
+                <div
+                  className="h-full rounded-full bg-slate-900 transition-all duration-300"
+                  style={{ width: `${ai.processingPower || 50}%` }}
+                />
+              </div>
             </div>
           </div>
         </div>
