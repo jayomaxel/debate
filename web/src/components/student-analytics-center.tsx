@@ -310,7 +310,7 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
       icon: <Trophy className="h-5 w-5" />,
       label: '成就',
       desc: '查看里程碑与徽章',
-      tone: 'student-card-muted',
+      tone: 'student-card-soft-peach',
     },
   ];
 

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
-  BrainCircuit,
   CheckCircle2,
   Clock3,
   Loader2,
@@ -104,6 +103,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   onBackToLogin,
   onNavigateToAnalytics,
 }) => {
+  void onNavigateToAnalytics;
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -159,9 +159,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
         setJoinedDebate(debate);
       } catch (loadError: any) {
         console.error('[StudentOnboarding] Failed to load waiting context:', loadError);
-        setError(
-          loadError?.message || '等待与准备页加载失败，请稍后重试。'
-        );
+        setError(loadError?.message || '等待与准备页加载失败，请稍后重试。');
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -303,8 +301,8 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
                     isMe
                       ? 'student-card-soft-blue'
                       : index % 2 === 0
-                      ? 'student-card-muted'
-                      : 'student-card-soft-peach'
+                        ? 'student-card-muted'
+                        : 'student-card-soft-peach'
                   } p-4`}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -361,20 +359,6 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
               >
                 进入正式辩论
                 <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                className="student-light-button h-auto w-full justify-start"
-                onClick={() => onNavigateToAnalytics?.('growth')}
-              >
-                查看成长区
-              </Button>
-              <Button
-                variant="outline"
-                className="student-light-button h-auto w-full justify-start"
-                onClick={() => onNavigateToAnalytics?.('history')}
-              >
-                查看历史记录
               </Button>
               <Button
                 variant="outline"

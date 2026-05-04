@@ -4,8 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StudentCommandCenter from './student-command-center';
 
 const navigateMock = vi.fn();
-const getUserInfoMock = vi.fn();
-const getSessionStartedAtMock = vi.fn();
 const shouldShowPromptMock = vi.fn();
 const consumePromptMock = vi.fn();
 
@@ -35,11 +33,14 @@ vi.mock('@/lib/router', () => ({
   }),
 }));
 
-vi.mock('@/lib/token-manager', () => ({
-  default: {
-    getUserInfo: getUserInfoMock,
-    getSessionStartedAt: getSessionStartedAtMock,
-  },
+vi.mock('@/store/auth.context', () => ({
+  useAuth: () => ({
+    user: {
+      id: 'student-001',
+      account: 'student-001',
+      user_type: 'student',
+    },
+  }),
 }));
 
 vi.mock('@/lib/student-assessment-onboarding', () => ({
@@ -75,12 +76,6 @@ describe('StudentCommandCenter', () => {
       page_size: 8,
     });
 
-    getUserInfoMock.mockReturnValue({
-      id: 'student-001',
-      account: 'student-001',
-      user_type: 'student',
-    });
-    getSessionStartedAtMock.mockReturnValue(123456);
     shouldShowPromptMock.mockReturnValue(true);
   });
 
@@ -96,7 +91,7 @@ describe('StudentCommandCenter', () => {
     expect(consumePromptMock).toHaveBeenCalled();
     await waitFor(() => {
       expect(
-        sessionStorage.getItem('assessment_prompt_dismissed:student-home:123456')
+        sessionStorage.getItem('assessment_prompt_dismissed:student-home:student-001')
       ).toBe('1');
     });
   });

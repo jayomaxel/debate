@@ -53,15 +53,41 @@ const AbilityRadarChart: React.FC<AbilityRadarChartProps> = ({
   };
 
   const renderRadarVisualization = () => {
-    const centerX = 150;
-    const centerY = 150;
-    const maxRadius = 120;
+    const svgWidth = 340;
+    const svgHeight = 320;
+    const centerX = svgWidth / 2;
+    const centerY = svgHeight / 2;
+    const maxRadius = 110;
     const levels = 5;
     const canShowComparison =
       showComparison && comparisonScores.length === scores.length;
+    const labelRadius = maxRadius + 18;
+
+    const getLabelAnchor = (angle: number) => {
+      const horizontal = Math.cos(angle);
+      if (horizontal > 0.35) return 'end';
+      if (horizontal < -0.35) return 'start';
+      return 'middle';
+    };
+
+    const getLabelPosition = (angle: number) => {
+      const horizontal = Math.cos(angle);
+      const vertical = Math.sin(angle);
+
+      return {
+        x:
+          centerX +
+          labelRadius * horizontal +
+          (Math.abs(horizontal) > 0.2 ? Math.sign(horizontal) * 12 : 0),
+        y:
+          centerY +
+          labelRadius * vertical +
+          (Math.abs(vertical) > 0.2 ? Math.sign(vertical) * 6 : 0),
+      };
+    };
 
     return (
-      <svg width="300" height="300" className="mx-auto">
+      <svg width={svgWidth} height={svgHeight} className="mx-auto">
         {Array.from({ length: levels }, (_, i) => {
           const radius = (maxRadius / levels) * (i + 1);
           const points = scores
@@ -181,16 +207,14 @@ const AbilityRadarChart: React.FC<AbilityRadarChartProps> = ({
 
         {scores.map((score, index) => {
           const angle = (index * 2 * Math.PI) / scores.length - Math.PI / 2;
-          const labelRadius = maxRadius + 20;
-          const x = centerX + labelRadius * Math.cos(angle);
-          const y = centerY + labelRadius * Math.sin(angle);
+          const { x, y } = getLabelPosition(angle);
 
           return (
             <text
               key={index}
               x={x}
               y={y}
-              textAnchor="middle"
+              textAnchor={getLabelAnchor(angle)}
               dominantBaseline="middle"
               className="text-xs font-medium fill-slate-700"
             >

@@ -31,10 +31,7 @@ const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const TOKEN_TYPE_KEY = 'token_type';
 const TOKEN_EXPIRES_AT_KEY = 'token_expires_at';
-const SESSION_STARTED_AT_KEY = 'session_started_at';
 const USER_INFO_KEY = 'user_info';
-
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type ImportMetaWithEnv = ImportMeta & {
   env?: {
@@ -70,10 +67,6 @@ class TokenManager {
   static setTokens(tokenData: TokenData): void {
     if (!storageAvailable()) {
       return;
-    }
-
-    if (!localStorage.getItem(SESSION_STARTED_AT_KEY)) {
-      localStorage.setItem(SESSION_STARTED_AT_KEY, String(Date.now()));
     }
 
     localStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
@@ -171,31 +164,7 @@ class TokenManager {
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(TOKEN_TYPE_KEY);
     localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
-    localStorage.removeItem(SESSION_STARTED_AT_KEY);
     localStorage.removeItem(USER_INFO_KEY);
-  }
-
-  static getSessionStartedAt(): number | null {
-    if (!storageAvailable()) {
-      return null;
-    }
-
-    const raw = localStorage.getItem(SESSION_STARTED_AT_KEY);
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
-
-  static isSessionExpired(): boolean {
-    const sessionStartedAt = this.getSessionStartedAt();
-    if (!sessionStartedAt) {
-      return false;
-    }
-
-    return Date.now() - sessionStartedAt >= SESSION_MAX_AGE_MS;
   }
 
   static async refreshToken(): Promise<RefreshTokenResult> {
@@ -206,11 +175,6 @@ class TokenManager {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
       throw new Error('No refresh token available');
-    }
-
-    if (this.isSessionExpired()) {
-      this.clearAll();
-      throw new Error('Session expired');
     }
 
     this.refreshPromise = (async () => {

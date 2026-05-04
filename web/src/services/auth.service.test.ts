@@ -637,6 +637,21 @@ describe('Auth Service - Unit Tests', () => {
       expect(result).toBe(false);
     });
 
+    it('should not clear auth state solely because access token is expired', () => {
+      vi.mocked(TokenManager.getAccessToken).mockReturnValue('expired_token');
+      vi.mocked(TokenManager.getUserInfo).mockReturnValue({
+        id: '123',
+        name: 'Test User',
+        email: 'test@example.com',
+        user_type: 'teacher',
+      });
+      vi.mocked(TokenManager.isTokenExpired).mockReturnValue(true);
+
+      AuthService.isAuthenticated();
+
+      expect(TokenManager.clearAll).not.toHaveBeenCalled();
+    });
+
     it('should return false when both token and user are missing', () => {
       // Arrange
       vi.mocked(TokenManager.getAccessToken).mockReturnValue(null);

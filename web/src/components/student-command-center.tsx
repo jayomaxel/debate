@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useStudentAssessment } from '@/hooks/use-student-assessment';
 import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import StudentService from '@/services/student.service';
-import TokenManager from '@/lib/token-manager';
+import { useAuth } from '@/store/auth.context';
 import { useAppRouter } from '@/lib/router';
 import {
   consumeAssessmentOnboardingPrompt,
@@ -67,7 +67,9 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
 }) => {
   const { toast } = useToast();
   const { navigate } = useAppRouter();
-  const studentName = propStudentName || '同学';
+  const { user } = useAuth();
+  const studentName = propStudentName?.trim() || '同学';
+  const welcomeName = studentName === '同学' ? studentName : `${studentName}同学`;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [history, setHistory] = useState<DebateHistoryItem[]>([]);
@@ -124,8 +126,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
       return;
     }
 
-    const currentUser = TokenManager.getUserInfo();
-    const shouldShowPrompt = shouldShowAssessmentOnboardingPrompt(currentUser, {
+    const shouldShowPrompt = shouldShowAssessmentOnboardingPrompt(user, {
       needsAssessment,
       completedDebates,
     });
@@ -134,19 +135,17 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
       return;
     }
 
-    const sessionMarker = TokenManager.getSessionStartedAt() || 'anonymous';
-    const promptKey = `assessment_prompt_dismissed:student-home:${sessionMarker}`;
+    const promptKey = `assessment_prompt_dismissed:student-home:${user?.id || 'anonymous'}`;
     const dismissed = sessionStorage.getItem(promptKey) === '1';
 
     if (!dismissed) {
       setShowAssessmentPrompt(true);
     }
-  }, [assessmentLoading, completedDebates, needsAssessment]);
+  }, [assessmentLoading, completedDebates, needsAssessment, user]);
 
   const dismissPrompt = () => {
-    consumeAssessmentOnboardingPrompt(TokenManager.getUserInfo());
-    const sessionMarker = TokenManager.getSessionStartedAt() || 'anonymous';
-    const promptKey = `assessment_prompt_dismissed:student-home:${sessionMarker}`;
+    consumeAssessmentOnboardingPrompt(user);
+    const promptKey = `assessment_prompt_dismissed:student-home:${user?.id || 'anonymous'}`;
     sessionStorage.setItem(promptKey, '1');
     setShowAssessmentPrompt(false);
   };
@@ -248,7 +247,7 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               <div className="space-y-4">
                 <div>
                   <h1 className="student-section-title">
-                    欢迎回来，{studentName}
+                    欢迎回来，{welcomeName}
                   </h1>
                 </div>
                 <div className="flex flex-wrap gap-3">
@@ -423,18 +422,6 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
             </div>
           </section>
 
-          <section className="student-card-soft-lavender px-5 py-6">
-            <div className="flex items-center gap-4">
-              <div className="student-icon-bubble h-12 w-12 bg-white text-slate-900">
-                <User className="h-6 w-6" />
-              </div>
-              <div>
-                <div className="mt-1 text-xl font-semibold tracking-[-0.04em] text-slate-900">
-                  欢迎回来，{studentName}
-                </div>
-              </div>
-            </div>
-          </section>
         </div>
       </div>
     </div>

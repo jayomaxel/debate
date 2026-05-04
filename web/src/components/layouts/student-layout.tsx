@@ -22,6 +22,9 @@ const navItems = [
 
 const isItemActive = (pathname: string, href: string) => {
   if (href === '/student') return pathname === '/student';
+  if (href === '/student/competition' && pathname === '/student/waiting') {
+    return true;
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 };
 

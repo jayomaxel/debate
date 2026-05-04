@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   Send,
-  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -25,7 +24,6 @@ import StudentService, {
 } from '@/services/student.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 import { useToast } from '@/hooks/use-toast';
-import { useAuth } from '@/store/auth.context';
 import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import TokenManager from '@/lib/token-manager';
 
@@ -37,7 +35,6 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
   onBack,
 }) => {
   const { toast } = useToast();
-  const { user } = useAuth();
   const [sessions, setSessions] = useState<KBSession[]>([]);
   const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -603,21 +600,6 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
             </div>
           </ScrollArea>
 
-          <div className="border-t border-black/5 bg-white/40 p-4">
-            <div className="student-card-muted flex items-center gap-3 p-4">
-              <div className="student-icon-bubble h-10 w-10 bg-white">
-                <User className="h-4 w-4 text-slate-700" />
-              </div>
-              <div className="min-w-0 flex-1">
-                {user?.name ? (
-                  <p className="truncate text-sm font-medium text-slate-900">
-                    {user.name}
-                  </p>
-                ) : null}
-                <p className="truncate text-xs text-slate-500">备赛区账户</p>
-              </div>
-            </div>
-          </div>
         </aside>
 
         <section className="student-card flex min-h-[calc(100vh-11rem)] flex-col overflow-hidden">

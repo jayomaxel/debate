@@ -180,11 +180,6 @@ class AuthService {
       return false;
     }
 
-    if (TokenManager.isSessionExpired()) {
-      TokenManager.clearAll();
-      return false;
-    }
-
     // 检查token是否过期
     if (TokenManager.isTokenExpired()) {
       return false;

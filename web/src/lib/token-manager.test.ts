@@ -1,5 +1,8 @@
+import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import TokenManager from './token-manager';
+
+vi.mock('axios');
 
 describe('TokenManager', () => {
   beforeEach(() => {
@@ -13,38 +16,55 @@ describe('TokenManager', () => {
     localStorage.clear();
   });
 
-  it('persists session_started_at on first token write and keeps it on later refreshes', () => {
+  it('stores token bundle in localStorage', () => {
     TokenManager.setTokens({
       access_token: 'access-1',
       refresh_token: 'refresh-1',
       expires_in: 3600,
     });
 
-    const startedAt = TokenManager.getSessionStartedAt();
-    expect(startedAt).toBe(Date.now());
-
-    vi.advanceTimersByTime(60_000);
-
-    TokenManager.setTokens({
-      access_token: 'access-2',
-      refresh_token: 'refresh-2',
-      expires_in: 3600,
-    });
-
-    expect(TokenManager.getSessionStartedAt()).toBe(startedAt);
+    expect(localStorage.getItem('access_token')).toBe('access-1');
+    expect(localStorage.getItem('refresh_token')).toBe('refresh-1');
+    expect(localStorage.getItem('token_type')).toBe('bearer');
+    expect(Number(localStorage.getItem('token_expires_at'))).toBe(Date.now() + 3600 * 1000);
   });
 
-  it('expires the session after 24 hours', () => {
+  it('refreshes tokens using the refresh token and updates local state', async () => {
     TokenManager.setTokens({
       access_token: 'access-1',
       refresh_token: 'refresh-1',
       expires_in: 3600,
     });
+    TokenManager.setUserInfo({
+      id: 'user-1',
+      account: 'student-1',
+      name: 'Student One',
+      user_type: 'student',
+    });
 
-    vi.advanceTimersByTime(24 * 60 * 60 * 1000 - 1);
-    expect(TokenManager.isSessionExpired()).toBe(false);
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        data: {
+          access_token: 'access-2',
+          refresh_token: 'refresh-2',
+          token_type: 'Bearer',
+          expires_in: 7200,
+          user: {
+            id: 'user-1',
+            account: 'student-1',
+            name: 'Student Updated',
+            user_type: 'student',
+          },
+        },
+      },
+    });
 
-    vi.advanceTimersByTime(1);
-    expect(TokenManager.isSessionExpired()).toBe(true);
+    const result = await TokenManager.refreshToken();
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('access_token')).toBe('access-2');
+    expect(localStorage.getItem('refresh_token')).toBe('refresh-2');
+    expect(TokenManager.getUserInfo()?.name).toBe('Student Updated');
+    expect(result.access_token).toBe('access-2');
   });
 });

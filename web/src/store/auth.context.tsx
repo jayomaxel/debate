@@ -46,10 +46,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const checkAuth = useCallback(async () => {
     try {
-      const isAuth = AuthService.isAuthenticated();
-      const user = AuthService.getCurrentUser();
-
-      if (!isAuth && TokenManager.getRefreshToken()) {
+      const refreshToken = TokenManager.getRefreshToken();
+      if (refreshToken) {
         try {
           const refreshed = await AuthService.refreshToken();
           setState({
@@ -61,8 +59,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } catch (refreshError) {
           console.error('[AuthContext] Session restore failed:', refreshError);
           AuthService.logout({ redirect: false });
+          setState({
+            isAuthenticated: false,
+            user: null,
+            loading: false,
+          });
+          return;
         }
       }
+
+      const isAuth = AuthService.isAuthenticated();
+      const user = AuthService.getCurrentUser();
 
       setState({
         isAuthenticated: isAuth,

@@ -130,24 +130,18 @@ describe('StudentOnboarding', () => {
     });
   });
 
-  it('uses the provided callbacks for entering the debate and opening analytics', async () => {
+  it('uses the provided callback for entering the debate', async () => {
     vi.mocked(StudentService.getAvailableDebates).mockResolvedValue([baseDebate]);
     const onDebateStart = vi.fn();
-    const onNavigateToAnalytics = vi.fn();
 
     render(
       <StudentOnboarding
         onDebateStart={onDebateStart}
-        onNavigateToAnalytics={onNavigateToAnalytics}
       />
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '进入正式辩论' }));
-    fireEvent.click(screen.getByRole('button', { name: '查看成长区' }));
-    fireEvent.click(screen.getByRole('button', { name: '查看历史记录' }));
 
     expect(onDebateStart).toHaveBeenCalledWith('debate-001');
-    expect(onNavigateToAnalytics).toHaveBeenNthCalledWith(1, 'growth');
-    expect(onNavigateToAnalytics).toHaveBeenNthCalledWith(2, 'history');
   });
 });
