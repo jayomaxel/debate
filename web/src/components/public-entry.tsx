@@ -144,9 +144,6 @@ export default function PublicEntry({ section }: PublicEntryProps) {
                   <div className="mt-2 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
                     {content.eyebrow}
                   </div>
-                  <div className="mt-2 text-sm leading-7 text-slate-600">
-                    进入前先确认这个入口是不是你现在要去的地方。
-                  </div>
                 </div>
               </div>
             </div>
@@ -192,26 +189,26 @@ export default function PublicEntry({ section }: PublicEntryProps) {
               <div className="space-y-4">
                 <div>
                   <h2 className="text-[1.5rem] font-semibold tracking-[-0.04em] text-slate-900">
-                    每个板块分别做什么
+                    入口说明
                   </h2>
                 </div>
                 <div className="space-y-3">
                   <div className="student-card-soft-peach p-4">
                     <div className="text-sm font-semibold text-slate-900">比赛区</div>
                     <div className="mt-1 text-sm leading-6 text-slate-600">
-                      负责加入对局、等待开赛和进入正式辩论。
+                      加入对局、等待开赛、进入正式辩论。
                     </div>
                   </div>
                   <div className="student-card-soft-blue p-4">
                     <div className="text-sm font-semibold text-slate-900">备赛区</div>
                     <div className="mt-1 text-sm leading-6 text-slate-600">
-                      负责看资料、整理论点和准备证据。
+                      查看资料、整理论点、准备证据。
                     </div>
                   </div>
                   <div className="student-card-soft-lavender p-4">
                     <div className="text-sm font-semibold text-slate-900">成长区</div>
                     <div className="mt-1 text-sm leading-6 text-slate-600">
-                      负责查看历史记录、趋势变化和成就进展。
+                      查看历史记录、趋势变化和成就进展。
                     </div>
                   </div>
                 </div>
@@ -223,7 +220,7 @@ export default function PublicEntry({ section }: PublicEntryProps) {
                 <div className="student-card-muted p-4">
                   <div className="text-xs uppercase tracking-[0.18em] text-slate-500">浏览顺序</div>
                   <div className="mt-2 text-[1.35rem] font-semibold tracking-[-0.04em] text-slate-900">
-                    先看板块，再登录
+                    选择入口
                   </div>
                 </div>
                 <div className="student-card-muted p-4">

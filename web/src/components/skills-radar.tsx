@@ -127,9 +127,6 @@ const SkillsRadar: React.FC<SkillsRadarProps> = ({
           <BrainCircuit className="h-5 w-5 text-slate-700" />
           个人能力评估
         </CardTitle>
-        <p className="text-sm leading-7 text-slate-600">
-          以下内容仅用于展示系统记录的能力评估结果。
-        </p>
       </CardHeader>
       <CardContent className="space-y-4">
         {!hasAnySkillValue ? (

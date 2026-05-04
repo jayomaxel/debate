@@ -40,14 +40,18 @@ const JoinPrivateRoomDialog: React.FC<JoinPrivateRoomDialogProps> = ({
 
   const handleSubmit = async () => {
     if (!room) return;
+
     try {
       setSubmitting(true);
       setError(null);
-      const joined = await StudentService.joinLobbyRoom(room.room_id, { password });
+      const joined = await StudentService.joinLobbyRoom(room.room_id, {
+        password,
+      });
       onJoined(joined);
       onOpenChange(false);
     } catch (err: any) {
-      const detail = err?.response?.data?.detail || err?.message || '加入房间失败';
+      const detail =
+        err?.response?.data?.detail || err?.message || '加入房间失败';
       setError(detail);
     } finally {
       setSubmitting(false);
@@ -56,19 +60,21 @@ const JoinPrivateRoomDialog: React.FC<JoinPrivateRoomDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="rounded-[20px] border-[#dfd3c5] bg-[#fbf5ee]">
         <DialogHeader>
           <DialogTitle>加入私密房间</DialogTitle>
-          <DialogDescription>
-            {room ? `请输入「${room.room_name}」的房间密码。` : '请输入房间密码。'}
+          <DialogDescription className="leading-6 text-slate-500">
+            {room
+              ? `请输入「${room.room_name}」的房间密码后继续。`
+              : '请输入房间密码后继续。'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className='grid gap-3 py-2'>
-          <Label htmlFor='join-room-password'>房间密码</Label>
+        <div className="grid gap-3 py-2">
+          <Label htmlFor="join-room-password">房间密码</Label>
           <Input
-            id='join-room-password'
-            type='password'
+            id="join-room-password"
+            type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             onKeyDown={(event) => {
@@ -76,17 +82,35 @@ const JoinPrivateRoomDialog: React.FC<JoinPrivateRoomDialogProps> = ({
                 void handleSubmit();
               }
             }}
-            placeholder='输入密码'
+            placeholder="输入密码"
+            className="h-11 rounded-xl border-[#e8dfd4] bg-white/90"
           />
-          {error && <div className='rounded-md bg-red-50 px-3 py-2 text-sm text-red-700'>{error}</div>}
+          {error ? (
+            <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
         </div>
 
         <DialogFooter>
-          <Button variant='outline' disabled={submitting} onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            disabled={submitting}
+            onClick={() => onOpenChange(false)}
+            className="student-light-button h-auto"
+          >
             取消
           </Button>
-          <Button disabled={submitting || !password.trim()} onClick={handleSubmit}>
-            {submitting ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : <Lock className='mr-2 h-4 w-4' />}
+          <Button
+            disabled={submitting || !password.trim()}
+            onClick={handleSubmit}
+            className="student-dark-button h-auto"
+          >
+            {submitting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Lock className="mr-2 h-4 w-4" />
+            )}
             确认加入
           </Button>
         </DialogFooter>

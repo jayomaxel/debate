@@ -395,7 +395,7 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="mt-3 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-              用班级平均和排行榜理解你当前的位置
+              班级排名与平均差距
             </h3>
           </div>
           <div className="flex items-center gap-3">
@@ -591,7 +591,7 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="mt-3 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-                在这里查看你的里程碑、徽章和下一步进度
+                成就与进度
               </h3>
             </div>
             <div className="flex items-center gap-3">

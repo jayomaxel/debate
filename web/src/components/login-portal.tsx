@@ -328,10 +328,6 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                 </div>
               </button>
 
-              <div className="hidden items-center gap-2 md:flex">
-                <div className="student-pill">先看板块，再登录</div>
-              </div>
-
               <Button
                 variant="outline"
                 className="student-light-button h-auto"
@@ -349,14 +345,10 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
               <div className="student-card px-6 py-6 md:px-8">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="max-w-2xl space-y-4">
-                    <div className="student-pill">未登录入口</div>
                     <div className="space-y-3">
                       <h1 className="text-[2rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]">
-                        先看清每个板块的用途，再决定要不要登录。
+                        选择入口后登录，进入对应工作区。
                       </h1>
-                      <p className="text-[15px] leading-7 text-slate-600 md:text-base">
-                        这里把学生、教师、管理员入口放在同一页，先浏览，再进入对应工作区。
-                      </p>
                     </div>
                     <div className="flex flex-wrap gap-3">
                       <Button
@@ -377,13 +369,10 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                   <div className="student-card-soft-blue min-w-[220px] p-4">
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      页面意图
+                      登录后
                     </div>
                     <div className="mt-2 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      先理解，再进入
-                    </div>
-                    <div className="mt-2 text-sm leading-7 text-slate-600">
-                      登录后会跳转到与你身份对应的同一套工作区布局。
+                      自动进入对应身份首页
                     </div>
                   </div>
                 </div>

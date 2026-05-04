@@ -613,9 +613,6 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
                 <h1 className="mt-3 text-[1.95rem] font-semibold tracking-[-0.05em] text-slate-900">
                   备赛区 AI 助手
                 </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-600">
-                  基于知识库的辩题资料检索、论点梳理和提问辅助，适合在开赛前快速完成结构化准备。
-                </p>
               </div>
             </div>
           </header>
@@ -633,8 +630,8 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
                     </h2>
                     <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-600">
                       {documents.length > 0
-                        ? '可以先查看左侧资料库，或直接在下方输入问题开始真实会话。'
-                        : '当前还没有可展示的备赛内容，输入问题后会生成真实会话记录。'}
+                        ? '选择资料或直接输入问题。'
+                        : '输入问题后开始备赛。'}
                     </p>
                   </div>
                 </div>

@@ -249,7 +249,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <h1 className="mt-4 max-w-2xl text-[1.95rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.3rem]">
-              在正式开赛前，把角色、名单和准备状态一次看清。
+              先确认你的辩位和参赛名单，准备好后进入正式辩论。
             </h1>
           </div>
 

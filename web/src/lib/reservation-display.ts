@@ -49,7 +49,9 @@ export const checkinStatusLabelMap: Record<ReservationCheckinStatus, string> = {
   absent: '缺席',
 };
 
-export const statusBadgeClass = (status?: ReservationStatus | LobbyRoomStatus | string | null) => {
+export const statusBadgeClass = (
+  status?: ReservationStatus | LobbyRoomStatus | string | null
+) => {
   switch (status) {
     case 'scheduled':
     case 'waiting':
@@ -89,7 +91,9 @@ export const formatDateTimeLocalInput = (value?: string | null) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   const pad = (num: number) => String(num).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 export const toIsoFromLocalInput = (value: string) => {
@@ -105,10 +109,12 @@ export const formatRelativeStart = (value?: string | null) => {
   if (Number.isNaN(date.getTime())) return '时间格式异常';
   const diffMs = date.getTime() - Date.now();
   const absMinutes = Math.round(Math.abs(diffMs) / 60000);
+
   if (diffMs < 0) {
     if (absMinutes < 60) return `已开始 ${absMinutes} 分钟`;
     return `已开始 ${Math.round(absMinutes / 60)} 小时`;
   }
+
   if (absMinutes < 1) return '即将开始';
   if (absMinutes < 60) return `${absMinutes} 分钟后开始`;
   if (absMinutes < 1440) return `${Math.round(absMinutes / 60)} 小时后开始`;

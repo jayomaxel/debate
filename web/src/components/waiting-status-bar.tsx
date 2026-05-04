@@ -25,26 +25,26 @@ const getStageMeta = (stage: WaitingStage, participantCount: number) => {
     case 'connecting':
       return {
         message: '正在连接本场辩论',
-        details: '建立与辩论房间和状态服务的连接。',
+        details: '正在同步房间状态，请稍等片刻。',
         progress: 20,
       };
     case 'matching':
       return {
         message: '正在确认角色与对阵',
-        details: '系统会根据已加入信息同步辩题、辩位和参赛名单。',
+        details: '系统正在确认你的辩位和当前参赛名单。',
         progress: 48,
       };
     case 'preparing':
       return {
         message: '等待其余参与者并完成准备',
-        details: `当前已确认 ${participantCount}/4 位人类参与者，请先检查资料与设备。`,
+        details: `当前已有 ${participantCount}/4 位同学到场。你可以先查看辩题、整理观点并检查设备。`,
         progress: Math.min(90, 60 + participantCount * 8),
       };
     case 'ready':
     default:
       return {
         message: '本场辩论可以开始',
-        details: '角色、名单和准备状态都已就绪，等待进入正式辩论。',
+        details: '角色和名单已经确认完成，现在可以直接进入正式辩论。',
         progress: 100,
       };
   }
