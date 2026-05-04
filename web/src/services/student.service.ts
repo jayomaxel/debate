@@ -67,6 +67,8 @@ export interface Debate {
   participants?: Array<{
     user_id: string;
     name: string;
+    avatar?: string | null;
+    avatar_url?: string | null;
     role: 'debater_1' | 'debater_2' | 'debater_3' | 'debater_4';
     role_reason?: string | null;
     overall_score?: number;

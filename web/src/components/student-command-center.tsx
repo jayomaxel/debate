@@ -1,12 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Bot,
   DoorOpen,
   Loader2,
   Sparkles,
-  Trophy,
-  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +27,7 @@ import {
 } from '@/lib/student-assessment-onboarding';
 import { formatDebateRole, formatStudentDate } from '@/lib/student-display';
 import type { DebateHistoryItem } from '@/services/student.service';
+import growthPathJourneyImage from '@/assets/growth-path-journey.png';
 
 type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
 
@@ -212,14 +210,6 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         <div className="student-card min-w-[280px] px-8 py-10 text-center">
           <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-slate-700" />
           <p className="text-slate-600">正在加载学生首页...</p>
-          <Button
-            className="student-dark-button mt-5 h-auto w-full justify-center"
-            disabled={!onNavigateToLobby}
-            onClick={() => onNavigateToLobby?.()}
-          >
-            <DoorOpen className="mr-2 h-4 w-4" />
-            进入匹配大厅
-          </Button>
         </div>
       </div>
     );
@@ -265,14 +255,12 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
 
       <div className="student-page-split grid gap-5">
         <div className="space-y-5">
-          <section className="student-card relative overflow-hidden px-5 py-6 md:px-6">
-            <div className="grid gap-5 lg:grid-cols-[1.05fr,0.95fr] xl:grid-cols-[minmax(0,1.05fr),minmax(280px,0.95fr)]">
+          <div className="grid items-stretch gap-5 lg:grid-cols-[1.05fr,0.95fr] xl:grid-cols-[minmax(0,1.05fr),minmax(280px,0.95fr)]">
+            <section className="relative overflow-hidden border border-transparent bg-transparent p-6 shadow-none md:p-9">
               <div className="space-y-4">
-                <div>
-                  <h1 className="student-section-title">
-                    欢迎回来，{welcomeName}
-                  </h1>
-                </div>
+                <h1 className="student-section-title">
+                  欢迎回来，{welcomeName}
+                </h1>
                 <div className="flex flex-wrap gap-3">
                   {needsAssessment ? (
                     <Button
@@ -298,45 +286,63 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
                   >
                     打开备赛区
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="student-light-button h-auto"
-                    onClick={() => onNavigateToLobby?.()}
-                  >
-                    <DoorOpen className="mr-2 h-4 w-4" />
+                </div>
+              </div>
+            </section>
+
+            <section className="student-card-soft-blue p-6 md:p-9">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[1.65rem] font-semibold tracking-[-0.04em] text-slate-900">
+                    {statusSummary.label}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="student-card-muted p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    已完成正式辩论
+                  </div>
+                  <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
+                    {completedDebates}
+                  </div>
+                </div>
+                <div className="student-card-muted p-4">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    平均得分
+                  </div>
+                  <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
+                    {averageScore.toFixed(1)}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section className="student-card px-5 py-6 md:px-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-4">
+                <div className="student-icon-bubble h-12 w-12">
+                  <DoorOpen className="h-5 w-5 text-slate-800" />
+                </div>
+                <div>
+                  <h2 className="text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950">
                     匹配大厅
-                  </Button>
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    加入同学发起的房间，或继续等待匹配。
+                  </p>
                 </div>
               </div>
-
-              <div className="student-card-soft-blue p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="mt-2.5 text-[1.65rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {statusSummary.label}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="student-card-muted p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      已完成正式辩论
-                    </div>
-                    <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {completedDebates}
-                    </div>
-                  </div>
-                  <div className="student-card-muted p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                      平均得分
-                    </div>
-                    <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                      {averageScore.toFixed(1)}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <Button
+                variant="outline"
+                className="student-light-button h-auto"
+                onClick={() => onNavigateToLobby?.()}
+              >
+                进入匹配大厅
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
           </section>
 
@@ -409,8 +415,15 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         </div>
 
         <div className="student-page-aside space-y-5">
-          <section className="student-card px-5 py-6">
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <section className="student-card overflow-hidden px-0 py-0">
+            <div className="relative h-32 overflow-hidden border-b border-slate-100 bg-white">
+              <img
+                src={growthPathJourneyImage}
+                alt="辩论成长路径插画"
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div className="grid gap-3 p-5 sm:grid-cols-2">
               {summaryTiles.map((item) => (
                 <StatusItem
                   key={item.label}
@@ -422,49 +435,21 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
             </div>
           </section>
 
-          <section className="student-card px-5 py-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="mt-3 text-[1.6rem] font-semibold tracking-[-0.04em] text-slate-900">
-                  去你现在需要的地方
-                </h2>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <QuickLink
-                icon={<Bot className="h-4 w-4" />}
-                title="备赛区"
-                tone="student-card-soft-blue"
-                onClick={() => onNavigateToPreparation?.()}
-              />
-              <QuickLink
-                icon={<Trophy className="h-4 w-4" />}
-                title="成长区"
-                tone="student-card-soft-lavender"
-                onClick={() => onNavigateToAnalytics?.('history')}
-              />
-              <QuickLink
-                icon={<Users className="h-4 w-4" />}
-                title="匹配大厅"
-                tone="student-card-soft-peach"
-                onClick={() => onNavigateToLobby?.()}
-              />
-              <Button
-                variant="outline"
-                onClick={() => void loadCommandCenter({ silent: true })}
-                disabled={refreshing}
-                className="student-light-button h-auto w-full justify-start"
-              >
-                {refreshing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-2 h-4 w-4" />
-                )}
-                刷新首页摘要
-              </Button>
-            </div>
-          </section>
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => void loadCommandCenter({ silent: true })}
+              disabled={refreshing}
+              className="student-light-button h-auto"
+            >
+              {refreshing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              刷新首页摘要
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -489,34 +474,6 @@ function StatusItem({
         {value}
       </div>
     </div>
-  );
-}
-
-function QuickLink({
-  icon,
-  title,
-  onClick,
-  tone,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  onClick: () => void;
-  tone: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`${tone} w-full p-4 text-left transition-colors duration-150 hover:border-[#b8a891] hover:bg-white/82`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 text-slate-900">
-          <div className="student-icon-bubble h-10 w-10">{icon}</div>
-          <span className="font-medium">{title}</span>
-        </div>
-        <ArrowRight className="h-4 w-4 text-slate-500" />
-      </div>
-    </button>
   );
 }
 

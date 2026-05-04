@@ -32,7 +32,8 @@ import {
   Bot,
   AlertCircle,
   Loader2,
-  Radio
+  Radio,
+  Clock
 } from 'lucide-react';
 
 interface DebateArenaProps {
@@ -45,6 +46,8 @@ interface RoomParticipant {
   user_id: string;
   name: string;
   role: string;
+  avatar?: string | null;
+  avatar_url?: string | null;
   stance?: string | null;
   user_type?: string | null;
   can_moderate?: boolean;
@@ -77,6 +80,13 @@ const toOptionalString = (value: unknown): string | null => {
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.map((item) => String(item)) : [];
 
+const formatCountdown = (seconds: number) => {
+  const normalizedSeconds = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(normalizedSeconds / 60);
+  const secs = normalizedSeconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
 const toFlowSegments = (value: unknown): FlowSegment[] =>
   Array.isArray(value)
     ? value
@@ -98,6 +108,8 @@ const toRoomParticipant = (value: unknown): RoomParticipant | null => {
     user_id: String(value.user_id),
     name: String(value.name),
     role: String(value.role),
+    avatar: toOptionalString(value.avatar),
+    avatar_url: toOptionalString(value.avatar_url),
     stance: toOptionalString(value.stance),
     user_type: toOptionalString(value.user_type),
     can_moderate: value.can_moderate === undefined ? undefined : Boolean(value.can_moderate),
@@ -162,6 +174,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     user_id: string;
     name: string;
     role: string;
+    avatar?: string | null;
+    avatar_url?: string | null;
     role_reason?: string | null;
     overall_score?: number;
   }>>([]);
@@ -497,7 +511,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     if (!url) return undefined;
     const trimmed = String(url).trim();
     if (!trimmed) return undefined;
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+    if (
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://') ||
+      trimmed.startsWith('data:')
+    ) return trimmed;
     
     const base = getApiOriginBaseUrl();
     
@@ -509,6 +527,22 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
   const findWsParticipantByRole = (role: string) => participants.find((x) => roleMatches(role, x?.role));
   const findAssignedByRole = (role: string) => assignedParticipants.find((x) => roleMatches(role, x?.role));
+  const resolveParticipantAvatar = (p?: RoomParticipant, assigned?: {
+    user_id: string;
+    avatar?: string | null;
+    avatar_url?: string | null;
+  }) => {
+    const avatar =
+      p?.avatar_url ||
+      p?.avatar ||
+      assigned?.avatar_url ||
+      assigned?.avatar ||
+      (p?.user_id === currentUserId || assigned?.user_id === currentUserId
+        ? user?.avatar_url || user?.avatar
+        : undefined);
+
+    return resolveMediaUrl(avatar);
+  };
 
   const humanTeam: Participant[] = ['debater_1', 'debater_2', 'debater_3', 'debater_4'].map((role, idx) => {
     const p = findWsParticipantByRole(role);
@@ -519,6 +553,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     return {
       id: p?.user_id || assigned?.user_id || `placeholder-${role}`,
       name: p?.name || assigned?.name || `等待加入`,
+      avatar: resolveParticipantAvatar(p, assigned),
       position: roleToPosition(role) as Participant['position'],
       isAI: false,
       isMuted: p && isCurrent ? isMuted : false,
@@ -1272,14 +1307,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const humanAvgSignal = humanOnlineCount > 0 ? Math.round(humanOnlineMembers.reduce((sum, m) => sum + (m.signalStrength || 0), 0) / humanOnlineCount) : 0;
   const humanStatusText = humanOnlineCount === 0 ? '等待加入' : humanOnlineCount === 4 ? '在线活跃' : `在线 ${humanOnlineCount}/4`;
   const aiAvgProcessing = Math.round(aiTeam.reduce((sum, m) => sum + (m.processingPower || 0), 0) / Math.max(aiTeam.length, 1));
-  const debateProgressPercent =
-    typeof segmentIndex === 'number' && effectiveFlowSegments.length > 0
-      ? Math.min(100, Math.max(4, ((segmentIndex + 1) / effectiveFlowSegments.length) * 100))
-      : currentPhase === 'waiting'
-      ? 4
-      : currentPhase === 'finished'
-      ? 100
-      : 12;
   const currentActionTitle = isTeacherModeratorMode
     ? '主持观察中'
     : canSpeak
@@ -1297,24 +1324,34 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     ? '自由辩论当前无人持麦，点击抢麦后即可开始发言。'
     : micStatusText || '请关注顶部流程和当前发言席位，轮到你时操作区会高亮。';
 
+  const timeCardStateClass =
+    timeRemaining <= 30
+      ? 'border-red-200 bg-red-50 text-red-700'
+      : timeRemaining <= 60
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : 'border-[#ece4da] bg-white/88 text-slate-950';
+  const timeProgressClass =
+    timeRemaining <= 30 ? 'bg-red-500' : timeRemaining <= 60 ? 'bg-amber-500' : 'bg-[#171717]';
+  const timeProgressPercent = Math.max(2, Math.min(100, (timeRemaining / 1800) * 100));
+
   return (
     <div
       ref={arenaRootRef}
-      className="relative flex min-h-screen flex-col overflow-hidden bg-[radial-gradient(circle_at_8%_10%,rgba(216,231,242,0.78),transparent_25%),radial-gradient(circle_at_90%_18%,rgba(249,236,222,0.82),transparent_24%),linear-gradient(180deg,#fbf7f1_0%,#f8f5f1_52%,#f7f1ea_100%)]"
+      className="relative flex min-h-screen flex-col overflow-hidden bg-white"
     >
       {/* 错误提示 */}
       {error && (
-        <div className="fixed top-4 right-4 z-50 max-w-md">
-          <Alert variant="destructive">
+        <div className="app-top-layer fixed top-4 right-4 max-w-md">
+          <Alert variant="destructive" className="border-red-200 bg-red-50 text-red-800 shadow-[0_14px_32px_rgba(127,29,29,0.12)]">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription className="text-red-800">{error}</AlertDescription>
           </Alert>
         </div>
       )}
 
       {/* 连接状态指示器 */}
       {!roomJoined && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
+        <div className="app-top-layer fixed top-4 left-1/2 -translate-x-1/2 transform">
           <Alert className="bg-amber-100 border-amber-300">
             <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
             <AlertDescription className="text-amber-800">
@@ -1325,17 +1362,17 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       )}
 
       {participantsLoadError && (
-        <div className="fixed top-16 right-4 z-50 max-w-md">
-          <Alert variant="destructive">
+        <div className="app-top-layer fixed top-16 right-4 max-w-md">
+          <Alert variant="destructive" className="border-red-200 bg-red-50 text-red-800 shadow-[0_14px_32px_rgba(127,29,29,0.12)]">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{participantsLoadError}</AlertDescription>
+            <AlertDescription className="text-red-800">{participantsLoadError}</AlertDescription>
           </Alert>
         </div>
       )}
 
       {/* 实时字幕 */}
       {subtitle && (
-        <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 z-50 max-w-2xl">
+        <div className="app-top-layer fixed bottom-32 left-1/2 max-w-2xl -translate-x-1/2 transform">
           <div className="student-card-muted px-6 py-3 text-center text-slate-900">
             {subtitle}
           </div>
@@ -1393,7 +1430,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
       {/* 抢麦成功提示 - 显眼的位置 */}
       {isFreeDebate && micActive && (
-        <div className="fixed top-24 left-1/2 transform -translate-x-1/2 z-50">
+        <div className="app-top-layer fixed top-24 left-1/2 -translate-x-1/2 transform">
           <Alert className="border-[#e0d8ef] bg-[#eae6f6] shadow-[0_18px_40px_rgba(91,80,120,0.16)]">
             <Radio className="h-5 w-5 text-slate-800" />
             <AlertDescription className="text-lg font-semibold text-slate-900">
@@ -1417,7 +1454,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
         topic={debateTopic}
         currentPhase={phaseLabel(currentPhase)}
         segmentTitle={segmentTitle || undefined}
-        timeRemaining={timeRemaining}
         onBack={onBack}
         canStartDebate={canStartDebate}
         canAdvanceSegment={canAdvanceSegment}
@@ -1434,56 +1470,21 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
       <div className="student-container grid min-h-0 flex-1 gap-5 pb-6 xl:grid-cols-[minmax(0,1fr)_390px] xl:overflow-hidden">
         <main className="flex min-h-0 flex-col gap-5 overflow-y-auto pr-1 custom-scrollbar">
-          {isTeacherModeratorMode && (
-            <div className="rounded-[18px] border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800">
-              当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
-            </div>
-          )}
-          {isStudentModeratorMode && (
-            <div className="rounded-[18px] border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800">
-              当前为学生主持模式。您可以控制辩论流程，同时保留自己的辩手发言入口。
-            </div>
-          )}
-
           <section className="student-card overflow-hidden p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Live Stage</p>
                 <h2 className="mt-2 truncate text-2xl font-semibold tracking-[-0.03em] text-slate-950">
                   {segmentTitle || phaseLabel(currentPhase)}
                 </h2>
-                <p className="mt-2 text-sm text-slate-500">
-                  {typeof segmentIndex === 'number'
-                    ? `流程 ${segmentIndex + 1}/${effectiveFlowSegments.length}`
-                    : '等待流程同步'}
-                </p>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[520px]">
+              <div className="grid grid-cols-1 gap-3 sm:min-w-[180px] lg:min-w-[180px]">
                 <div className="rounded-[16px] border border-[#d8e7f2] bg-[#e2eef8]/80 p-3">
-                  <div className="text-xs text-slate-500">正方在线</div>
+                  <div className="text-xs font-medium text-slate-500">人类团队在线</div>
                   <div className="mt-1 text-xl font-semibold text-slate-900">{humanOnlineCount}/4</div>
-                </div>
-                <div className="rounded-[16px] border border-[#e0d8ef] bg-[#eae6f6]/80 p-3">
-                  <div className="text-xs text-slate-500">AI 状态</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-slate-900">{aiTurnStatusMeta?.label || '待命中'}</div>
-                </div>
-                <div className="rounded-[16px] border border-[#ece4da] bg-white/80 p-3">
-                  <div className="text-xs text-slate-500">信号</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">{humanOnlineCount > 0 ? `${humanAvgSignal}%` : '--'}</div>
-                </div>
-                <div className="rounded-[16px] border border-[#f0d6c0] bg-[#f9ecde]/80 p-3">
-                  <div className="text-xs text-slate-500">AI 负载</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">{aiAvgProcessing}%</div>
                 </div>
               </div>
             </div>
 
-            <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#ede4da]">
-              <div
-                className="h-full rounded-full bg-[#171717] transition-all duration-700"
-                style={{ width: `${debateProgressPercent}%` }}
-              />
-            </div>
           </section>
 
           {(currentSpeakerInfo || aiTurnStatusMeta) && (
@@ -1494,7 +1495,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
                     <div className="h-3 w-3 rounded-full bg-emerald-500" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Now Speaking</p>
                     <p className="mt-1 truncate font-semibold text-slate-900">
                       {currentSpeakerInfo.name} ({currentSpeakerInfo.position})
                     </p>
@@ -1506,12 +1506,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
               )}
               {aiTurnStatusMeta && (
                 <div className="student-card-muted p-4">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Badge className={aiTurnStatusMeta.badgeClassName}>
-                      {aiTurnStatusMeta.label}
-                    </Badge>
-                    <span className="text-sm text-slate-700">{aiTurnStatusMeta.detail}</span>
-                  </div>
+                  <Badge className={aiTurnStatusMeta.badgeClassName}>
+                    {aiTurnStatusMeta.label}
+                  </Badge>
                   {aiTurnStatus === 'thinking' && aiThinkingElapsedSec >= 60 && (
                     <p className="mt-2 text-xs text-amber-700">
                       已等待 {aiThinkingElapsedSec} 秒，建议检查后端日志是否停在 AI 生成或数据库写入阶段
@@ -1527,9 +1524,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <Users className="h-6 w-6 text-slate-700" />
-                  <h2 className="text-xl font-semibold text-slate-900">人类团队</h2>
+                  <h2 className="text-xl font-semibold text-slate-900">人类团队（正方）</h2>
                 </div>
-                <Badge className="student-pill">正方 · {humanStatusText}</Badge>
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {humanTeam.map((participant) => {
@@ -1552,9 +1548,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <Bot className="h-6 w-6 text-slate-700" />
-                  <h2 className="text-xl font-semibold text-slate-900">AI 智能团队</h2>
+                  <h2 className="text-xl font-semibold text-slate-900">AI 智能团队（反方）</h2>
                 </div>
-                <Badge className="student-pill">反方 · {aiTurnStatusMeta?.label || '待命中'}</Badge>
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {aiTeam.map((ai) => (
@@ -1568,12 +1563,70 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
             </div>
           </section>
 
+          <DebateControls
+            canSpeak={canSpeak}
+            showInput={!isTeacherModeratorMode}
+            onSendMessage={handleSendMessage}
+            transcript={transcript}
+            title="赛场发言流"
+            badgeText={`${transcript.length} 条记录`}
+            autoPlayEnabled={autoPlayEnabled}
+            onAutoPlayEnabledChange={setAutoPlayEnabled}
+            externalPlaybackLock={hasActiveLiveTtsStream}
+            suppressAutoPlayEntryIds={streamedSpeechEntryIds}
+            onSpeechPlaybackEvent={(payload) => sendSpeechPlaybackEvent(payload)}
+          />
+        </main>
+
+        <aside className="flex min-h-0 flex-col gap-4 xl:overflow-y-auto xl:pr-1 custom-scrollbar">
+          <section className={`rounded-[22px] border p-5 shadow-[0_20px_46px_rgba(174,154,126,0.12)] ${
+            canSpeak || canGrabMic
+              ? 'border-slate-900 bg-white'
+              : 'border-[#ece4da] bg-white/88 backdrop-blur'
+          }`}>
+            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
+              {currentActionTitle}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {currentActionDescription}
+            </p>
+          </section>
+
+          <section className={`rounded-[22px] border p-5 shadow-[0_20px_46px_rgba(174,154,126,0.12)] ${timeCardStateClass}`}>
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-white/70">
+                <Clock className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">时间</p>
+                <p className="mt-1 text-3xl font-semibold tracking-normal">
+                  {formatCountdown(timeRemaining)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/70">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ease-out ${timeProgressClass}`}
+                style={{ width: `${timeProgressPercent}%` }}
+              />
+            </div>
+          </section>
+
+          <DebateAudioControl
+            isMuted={isMuted}
+            canGrabMic={canGrabMic}
+            showSpeakingControls={!isTeacherModeratorMode}
+            micStatusText={micStatusText}
+            onToggleMic={handleToggleMic}
+            onRequestStartRecording={handleRequestStartRecording}
+            onSendAudio={handleSendAudio}
+            onGrabMic={handleGrabMic}
+            onEndTurn={handleEndTurn}
+          />
+
           <section className="student-card-muted p-4">
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">流程卡片</p>
-                <p className="mt-1 text-xs text-slate-500">当前环节会高亮，已完成环节自动弱化。</p>
-              </div>
+              <div />
               {canSelectCurrentUserSpeaker && (
                 <Button
                   type="button"
@@ -1587,7 +1640,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
                 </Button>
               )}
             </div>
-            <div className="mt-4 grid max-h-[154px] grid-cols-1 gap-2 overflow-y-auto pr-2 custom-scrollbar md:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-2">
               {effectiveFlowSegments.map((seg, idx) => {
                 const active = !!segmentId && seg.id === segmentId;
                 const done = typeof segmentIndex === 'number' && idx < segmentIndex;
@@ -1608,50 +1661,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
               })}
             </div>
           </section>
-        </main>
-
-        <aside className="flex min-h-0 flex-col gap-4 xl:overflow-y-auto xl:pr-1 custom-scrollbar">
-          <section className={`rounded-[22px] border p-5 shadow-[0_20px_46px_rgba(174,154,126,0.12)] ${
-            canSpeak || canGrabMic
-              ? 'border-slate-900 bg-white'
-              : 'border-[#ece4da] bg-white/88 backdrop-blur'
-          }`}>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Next Move</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
-              {currentActionTitle}
-            </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {currentActionDescription}
-            </p>
-          </section>
-
-          <DebateAudioControl
-            isMuted={isMuted}
-            isVideoOff={isVideoOff}
-            canGrabMic={canGrabMic}
-            showSpeakingControls={!isTeacherModeratorMode}
-            micStatusText={micStatusText}
-            onToggleMic={handleToggleMic}
-            onToggleVideo={handleToggleVideo}
-            onRequestStartRecording={handleRequestStartRecording}
-            onSendAudio={handleSendAudio}
-            onGrabMic={handleGrabMic}
-            onEndTurn={handleEndTurn}
-          />
-
-          <DebateControls
-            canSpeak={canSpeak}
-            showInput={!isTeacherModeratorMode}
-            onSendMessage={handleSendMessage}
-            transcript={transcript}
-            title="赛场发言流"
-            badgeText={`${transcript.length} 条记录`}
-            autoPlayEnabled={autoPlayEnabled}
-            onAutoPlayEnabledChange={setAutoPlayEnabled}
-            externalPlaybackLock={hasActiveLiveTtsStream}
-            suppressAutoPlayEntryIds={streamedSpeechEntryIds}
-            onSpeechPlaybackEvent={(payload) => sendSpeechPlaybackEvent(payload)}
-          />
         </aside>
       </div>
     </div>

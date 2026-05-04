@@ -218,6 +218,13 @@
     -webkit-backdrop-filter: blur(12px);
   }
 
+  .student-sidebar-tab-active {
+    border: 1px solid #bfdbfe;
+    border-radius: 14px;
+    background: #eff6ff;
+    box-shadow: 0 14px 32px rgba(37, 99, 235, 0.08);
+  }
+
   .student-page-split {
     align-items: start;
     gap: 1.5rem;
@@ -280,7 +287,7 @@
 
   .student-nav-pill {
     border: 1px solid transparent;
-    border-radius: 9999px;
+    border-radius: 14px;
     background: transparent;
     padding: 0.7rem 1rem;
     font-size: 0.875rem;
@@ -502,6 +509,9 @@
 
 /* 工具类样式 */
 @layer utilities {
+  .app-top-layer {
+    z-index: 2147483647;
+  }
 
   /* 间距工具类 */
   .space-y-8> :not([hidden])~ :not([hidden]) {

@@ -1,7 +1,6 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { BrainCircuit } from 'lucide-react';
 import type { SkillData, SkillKey } from './skills-radar';
 
@@ -94,22 +93,11 @@ const SkillsAssessmentEditor: React.FC<SkillsAssessmentEditorProps> = ({
                 )}
               </div>
 
-              <div className="mt-4">
-                {hasValue ? (
-                  <Progress
-                    value={currentValue}
-                    className={
-                      studentMode
-                        ? 'h-2 bg-[#ece3d8] [&>div]:bg-[#171717]'
-                        : 'h-2'
-                    }
-                  />
-                ) : (
-                  <div className="rounded-md border border-dashed border-black/10 bg-white/60 px-3 py-3 text-sm text-slate-500">
-                    请拖动滑块或输入分值完成自评。
-                  </div>
-                )}
-              </div>
+              {!hasValue && (
+                <div className="mt-4 rounded-md border border-dashed border-black/10 bg-white/60 px-3 py-3 text-sm text-slate-500">
+                  请拖动滑块或输入分值完成自评。
+                </div>
+              )}
 
               <div className="mt-4 flex items-center gap-3">
                 <input

@@ -2,15 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
-  Camera,
-  GraduationCap,
   Key,
   Loader2,
   Lock,
   Mail,
   Phone,
   Save,
-  ShieldCheck,
   Trash2,
   Upload,
   User,
@@ -90,7 +87,7 @@ const tabItems: Array<{
     key: 'ability',
     label: '能力评估',
     description: '完成或查看你的辩论能力评估。',
-    tone: 'student-card-soft-lavender',
+    tone: 'rounded-[16px] border border-blue-300 bg-blue-50 shadow-[0_14px_32px_rgba(37,99,235,0.12)]',
   },
 ];
 
@@ -132,7 +129,6 @@ const UserProfile: React.FC<UserProfileProps> = ({
 
   const [currentUser, setCurrentUser] = useState<UserInfo>(user);
   const isStudent = currentUser.user_type === 'student';
-  const isAdmin = currentUser.user_type === 'administrator';
 
   const {
     assessment,
@@ -468,10 +464,7 @@ const UserProfile: React.FC<UserProfileProps> = ({
   const renderAvatarSection = () => (
     <Card className="student-card">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-slate-900">
-          <Camera className="h-5 w-5" />
-          头像设置
-        </CardTitle>
+          <CardTitle className="text-slate-900">头像设置</CardTitle>
         <CardDescription className="leading-7">
           上传自定义头像，或从默认头像库中选择一款。
         </CardDescription>
@@ -599,17 +592,37 @@ const UserProfile: React.FC<UserProfileProps> = ({
       {renderAvatarSection()}
 
       <Card className="student-card">
-        <CardHeader>
-          <CardTitle className="text-slate-900">个人资料</CardTitle>
-          <CardDescription className="leading-7">
-            更新基础信息，保持账户资料完整。
-            {isStudent && needsAssessment
-              ? ' 你还未完成能力评估，比赛区入口仍会保持锁定。'
-              : ''}
-          </CardDescription>
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="text-slate-900">个人资料</CardTitle>
+            <CardDescription className="leading-7">
+              更新基础信息，保持账户资料完整。
+              {isStudent && needsAssessment
+                ? ' 你还未完成能力评估，比赛区入口仍会保持锁定。'
+                : ''}
+            </CardDescription>
+          </div>
+          <Button
+            type="submit"
+            form="profile-form"
+            className="student-dark-button h-10 shrink-0 justify-center px-4"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                保存中...
+              </>
+            ) : (
+              <>
+                <Save className="mr-2 h-4 w-4" />
+                保存修改
+              </>
+            )}
+          </Button>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleProfileUpdate} className="space-y-5">
+          <form id="profile-form" onSubmit={handleProfileUpdate} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="account">账号</Label>
               <Input
@@ -728,23 +741,6 @@ const UserProfile: React.FC<UserProfileProps> = ({
               </>
             ) : null}
 
-            <Button
-              type="submit"
-              className="student-dark-button h-auto w-full justify-center"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  保存中...
-                </>
-              ) : (
-                <>
-                  <Save className="mr-2 h-4 w-4" />
-                  保存修改
-                </>
-              )}
-            </Button>
           </form>
         </CardContent>
       </Card>
@@ -971,29 +967,6 @@ const UserProfile: React.FC<UserProfileProps> = ({
   return (
     <div className="grid gap-6 lg:grid-cols-[300px,1fr]">
       <aside className="student-card h-fit px-4 py-4">
-        <div className="mb-4 flex items-center gap-3 px-2">
-          <div className="student-icon-bubble h-12 w-12 bg-[#151515] text-white">
-            {isStudent ? (
-              <GraduationCap className="h-5 w-5" />
-            ) : isAdmin ? (
-              <ShieldCheck className="h-5 w-5 text-amber-200" />
-            ) : (
-              <ShieldCheck className="h-5 w-5" />
-            )}
-          </div>
-          <div>
-            <div className="font-semibold text-slate-900">{currentUser.name}</div>
-            <div className="text-sm text-slate-500">
-              {isStudent ? '学生设置中心' : isAdmin ? '管理员设置中心' : '教师设置中心'}
-            </div>
-            {isStudent && isAssessmentLocked ? (
-              <div className="mt-1 text-xs text-amber-700">
-                能力评估已锁定，右侧展示只读结果。
-              </div>
-            ) : null}
-          </div>
-        </div>
-
         <nav className="space-y-2">
           {availableTabs.map((item) => (
             <button

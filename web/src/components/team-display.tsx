@@ -55,7 +55,7 @@ const TeamDisplay: React.FC<TeamDisplayProps> = ({
   };
 
   const getTeamTypeLabel = () => {
-    return isHuman ? '人类团队' : 'AI智能团队';
+    return isHuman ? '人类团队' : 'AI团队';
   };
 
   const getAIDiversity = () => {
@@ -66,7 +66,6 @@ const TeamDisplay: React.FC<TeamDisplayProps> = ({
 
     return (
       <div className="flex items-center gap-2 mt-2">
-        <span className="text-xs text-slate-600">AI策略多样性:</span>
         <div className="flex gap-1">
           {uniqueTypes.map((type, index) => (
             <Badge
@@ -114,7 +113,6 @@ const TeamDisplay: React.FC<TeamDisplayProps> = ({
                 {getAverageSkill()}
               </span>
             </div>
-            <p className="text-xs text-slate-600">团队综合实力</p>
           </div>
         </div>
 
@@ -142,21 +140,6 @@ const TeamDisplay: React.FC<TeamDisplayProps> = ({
           </div>
         ))}
 
-        {/* 团队统计 */}
-        <div className="mt-4 p-3 bg-white/60 rounded-lg border border-slate-200">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-blue-500" />
-              <span className="font-medium text-slate-700">团队优势</span>
-            </div>
-            <div className="flex gap-3 text-xs text-slate-600">
-              <span>立论: {members.filter(m => m.position === '一辩').length}</span>
-              <span>攻辩: {members.filter(m => m.position === '二辩').length}</span>
-              <span>质询: {members.filter(m => m.position === '三辩').length}</span>
-              <span>总结: {members.filter(m => m.position === '四辩').length}</span>
-            </div>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );

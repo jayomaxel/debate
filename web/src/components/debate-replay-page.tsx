@@ -168,7 +168,7 @@ const DebateReplayPage: React.FC<DebateReplayPageProps> = ({ debateId, onBack })
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-[radial-gradient(circle_at_8%_10%,rgba(216,231,242,0.78),transparent_25%),radial-gradient(circle_at_90%_18%,rgba(249,236,222,0.82),transparent_24%),linear-gradient(180deg,#fbf7f1_0%,#f8f5f1_52%,#f7f1ea_100%)]">
       {error && (
-        <div className="fixed top-4 right-4 z-50 max-w-md">
+        <div className="app-top-layer fixed top-4 right-4 max-w-md">
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{error}</AlertDescription>

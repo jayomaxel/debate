@@ -5,20 +5,16 @@ import AudioRecorder from '@/lib/audio-recorder';
 import {
   Mic,
   MicOff,
-  Video,
-  VideoOff,
   AlertCircle,
   Radio,
 } from 'lucide-react';
 
 interface DebateAudioControlProps {
   isMuted?: boolean;
-  isVideoOff?: boolean;
   canGrabMic?: boolean;
   showSpeakingControls?: boolean;
   micStatusText?: string;
   onToggleMic?: () => void;
-  onToggleVideo?: () => void;
   onRequestStartRecording?: () => Promise<boolean>;
   onSendAudio?: (audioBlob: Blob, clientTranscript?: string) => void | Promise<void>;
   onGrabMic?: () => void;
@@ -27,12 +23,10 @@ interface DebateAudioControlProps {
 
 const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   isMuted = false,
-  isVideoOff = false,
   canGrabMic = false,
   showSpeakingControls = true,
   micStatusText,
   onToggleMic,
-  onToggleVideo,
   onRequestStartRecording,
   onSendAudio,
   onGrabMic,
@@ -147,15 +141,11 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   return (
     <div className="student-card flex w-full flex-col gap-5 px-5 py-5">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Action</p>
         <h3 className="mt-1 text-lg font-semibold text-slate-900">发言操作台</h3>
-        <p className="mt-1 text-sm leading-6 text-slate-500">
-          抢麦、录音和结束发言集中在这里，轮到你时直接按主按钮即可。
-        </p>
       </div>
 
       {/* 顶部状态图标 */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         <div className="relative group">
           <Button
             onClick={onToggleMic}
@@ -170,21 +160,6 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
             <span className="ml-2 text-sm font-semibold">{isMuted ? '麦克风关' : '麦克风开'}</span>
           </Button>
         </div>
-
-        <div className="relative group">
-          <Button
-            onClick={onToggleVideo}
-            size="icon"
-            className={`h-12 w-full rounded-[14px] shadow-sm transition-all duration-300 ${
-              isVideoOff
-                ? 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                : 'border border-[#d8e7f2] bg-[#e2eef8] text-slate-800 hover:bg-[#d6e8f6]'
-            }`}
-          >
-            {isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-            <span className="ml-2 text-sm font-semibold">{isVideoOff ? '摄像头关' : '摄像头开'}</span>
-          </Button>
-        </div>
       </div>
 
       <div className="h-px w-full bg-[#ece4da]" />
@@ -192,7 +167,6 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       {/* 状态提示文本 */}
       {micStatusText && (
         <div className="rounded-[16px] border border-[#ece4da] bg-[#fbf7f1] px-4 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">当前状态</p>
           <p className="mt-2 text-sm font-medium leading-relaxed text-slate-800">
             {micStatusText}
           </p>
@@ -259,10 +233,6 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
           </div>
           <span className="font-medium text-slate-900">结束发言</span>
         </Button>}
-      </div>
-
-      {/* 底部功能区 - 移除抢麦按钮 */}
-      <div className="mt-auto w-full">
       </div>
     </div>
   );

@@ -366,7 +366,7 @@ function GuestPreparation({ onLogin }: { onLogin: () => void }) {
         <aside className="student-card flex min-h-[calc(100vh-11rem)] flex-col overflow-hidden">
           <div className="border-b border-black/5 p-4">
             <div className="student-card-soft-lavender p-3.5">
-              <div className="flex items-center justify-between gap-3">
+              <div>
                 <div>
                   <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
                     AI 备赛助手
@@ -374,9 +374,6 @@ function GuestPreparation({ onLogin }: { onLogin: () => void }) {
                   <div className="mt-1.5 text-lg font-semibold tracking-[-0.03em] text-slate-900">
                     开启新对话
                   </div>
-                </div>
-                <div className="student-icon-bubble h-11 w-11 bg-white text-slate-900">
-                  <Bot className="h-5 w-5" />
                 </div>
               </div>
 
@@ -447,7 +444,7 @@ function GuestPreparation({ onLogin }: { onLogin: () => void }) {
           <ScrollArea className="flex-1 px-5 py-5">
             <div className="mx-auto max-w-5xl space-y-5 pb-4">
               <div className="py-10">
-                <div className="student-card-soft-blue mx-auto max-w-3xl p-6 text-center">
+                <div className="mx-auto max-w-3xl p-6 text-center">
                   <div className="student-icon-bubble mx-auto h-16 w-16 bg-white text-slate-900">
                     <Bot className="h-9 w-9" />
                   </div>

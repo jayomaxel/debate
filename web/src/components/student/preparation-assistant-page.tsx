@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft,
   BookOpen,
   Bot,
   Download,
@@ -32,7 +31,7 @@ interface PreparationAssistantPageProps {
 }
 
 const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
-  onBack,
+  onBack: _onBack,
 }) => {
   const { toast } = useToast();
   const [sessions, setSessions] = useState<KBSession[]>([]);
@@ -438,18 +437,8 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
       <div className="grid gap-5 xl:grid-cols-[320px,1fr]">
         <aside className="student-card flex min-h-[calc(100vh-11rem)] flex-col overflow-hidden">
           <div className="border-b border-black/5 p-4">
-            <Button
-              onClick={onBack}
-              variant="ghost"
-              size="sm"
-              className="student-light-button mb-4 h-auto px-4 py-2"
-            >
-              <ArrowLeft className="mr-1 h-4 w-4" />
-              返回学生首页
-            </Button>
-
             <div className="student-card-soft-lavender p-3.5">
-              <div className="flex items-center justify-between gap-3">
+              <div>
                 <div>
                   <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
                     AI 备赛助手
@@ -457,9 +446,6 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
                   <div className="mt-1.5 text-lg font-semibold tracking-[-0.03em] text-slate-900">
                     开启新对话
                   </div>
-                </div>
-                <div className="student-icon-bubble h-11 w-11 bg-white text-slate-900">
-                  <Bot className="h-5 w-5" />
                 </div>
               </div>
 
@@ -621,18 +607,13 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
             <div className="mx-auto max-w-5xl space-y-5 pb-4">
               {!currentSessionId && conversations.length === 0 ? (
                 <div className="py-10">
-                  <div className="student-card-soft-blue mx-auto max-w-3xl p-6 text-center">
+                  <div className="mx-auto max-w-3xl p-6 text-center">
                     <div className="student-icon-bubble mx-auto h-16 w-16 bg-white text-slate-900">
                       <BookOpen className="h-9 w-9" />
                     </div>
                     <h2 className="mt-5 text-[1.55rem] font-semibold tracking-[-0.04em] text-slate-900">
                       还没有备赛会话
                     </h2>
-                    <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-600">
-                      {documents.length > 0
-                        ? '选择资料或直接输入问题。'
-                        : '输入问题后开始备赛。'}
-                    </p>
                   </div>
                 </div>
               ) : loadingHistory ? (

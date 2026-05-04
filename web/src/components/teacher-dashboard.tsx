@@ -1012,7 +1012,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     <>
       {/* 错误提示 */}
       {error && (
-        <div className='fixed top-4 right-4 z-50 max-w-md'>
+        <div className='app-top-layer fixed top-4 right-4 max-w-md'>
           <Alert variant='destructive'>
             <AlertCircle className='h-4 w-4' />
             <AlertDescription>{error}</AlertDescription>

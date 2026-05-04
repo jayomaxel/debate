@@ -82,9 +82,6 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <Badge className="rounded-full border-[#d8e7f2] bg-white/80 text-xs text-slate-700">
-                  正方席位
-                </Badge>
                 {isCurrentUser && (
                   <Badge className="rounded-full border-slate-900 bg-slate-900 text-xs text-white">
                     我
@@ -128,7 +125,6 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
                 </AvatarFallback>
               </Avatar>
               <div>
-                <p className="text-xs text-slate-500">当前状态</p>
                 <p className={`mt-1 text-sm font-semibold ${
                   participant.isSpeaking ? 'text-emerald-700' : isOffline ? 'text-slate-500' : 'text-slate-900'
                 }`}>
@@ -137,11 +133,7 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
               </div>
             </div>
 
-            {participant.isSpeaking && (
-              <div className="rounded-full border border-emerald-200 bg-white/88 px-3 py-1 text-xs font-semibold text-emerald-700 shadow-sm">
-                Live
-              </div>
-            )}
+            {participant.isSpeaking && null}
           </div>
 
           {/* AI 标识 */}

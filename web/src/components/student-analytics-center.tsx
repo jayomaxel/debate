@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft,
   BarChart3,
   Brain,
   CheckCircle,
@@ -756,45 +755,6 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
 
   return (
     <div className="student-container py-6 pb-14">
-      <section className="student-card px-5 py-6 md:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-3xl">
-            <h1 className="mt-4 text-[2rem] font-semibold leading-[1.06] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]">
-              {user?.name ? `${user.name} 的成长区` : '成长区'}
-            </h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onBack}
-              className="student-light-button h-auto px-4 py-2"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回
-            </Button>
-            <Button
-              variant="outline"
-              onClick={async () => {
-                await loadBaseData({ silent: true });
-                if (activeTab === 'comparison') {
-                  await loadComparison(comparisonMetric, { silent: true });
-                }
-              }}
-              disabled={refreshing || comparisonLoading}
-              className="student-light-button h-auto"
-            >
-              {refreshing || comparisonLoading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              刷新成长区
-            </Button>
-          </div>
-        </div>
-      </section>
-
       <div className="mt-5 grid gap-5 xl:grid-cols-[240px,minmax(0,1fr)]">
         <aside className="student-card h-fit px-3.5 py-3.5 xl:sticky xl:top-28">
           <div className="space-y-2">
@@ -803,7 +763,7 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full rounded-[12px] p-3.5 text-left transition-colors duration-150 ${
-                  activeTab === item.id ? item.tone : 'student-card-muted'
+                  activeTab === item.id ? 'student-sidebar-tab-active' : 'student-card-muted'
                 }`}
               >
                   <div className="flex items-start gap-3">

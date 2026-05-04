@@ -146,21 +146,6 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
             </div>
 
             {/* 准备提示 */}
-            <div className="flex items-center justify-center gap-6 text-sm text-slate-600">
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-blue-500" />
-                <span>人类团队已就绪</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Bot className="w-4 h-4 text-purple-500" />
-                <span>AI团队待命中</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4 text-amber-500" />
-                <span>系统准备就绪</span>
-              </div>
-            </div>
-
             {/* 准备进度条 */}
             <div className="w-full max-w-md mx-auto">
               <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
@@ -190,14 +175,6 @@ const StanceDisplay: React.FC<StanceDisplayProps> = ({
             </div>
           </div>
         </CardContent>
-
-        {/* 角落装饰 */}
-        <div className="absolute top-4 left-4 w-20 h-20 opacity-10">
-          <Target className="w-full h-full text-slate-600" />
-        </div>
-        <div className="absolute bottom-4 right-4 w-20 h-20 opacity-10">
-          <Award className="w-full h-full text-slate-600" />
-        </div>
       </Card>
     </div>
   );
