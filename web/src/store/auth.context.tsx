@@ -19,7 +19,7 @@ export interface AuthActions {
   login: (params: LoginParams) => Promise<void>;
   logout: () => void;
   updateUser: (user: Partial<UserInfo>) => void;
-  checkAuth: () => void;
+  checkAuth: () => Promise<void>;
 }
 
 type AuthContextType = AuthState & AuthActions;
@@ -44,8 +44,30 @@ export function AuthProvider({ children }: AuthProviderProps) {
   /**
    * 检查认证状态
    */
-  const checkAuth = useCallback(() => {
+  const checkAuth = useCallback(async () => {
     try {
+      const refreshToken = TokenManager.getRefreshToken();
+      if (refreshToken) {
+        try {
+          const refreshed = await AuthService.refreshToken();
+          setState({
+            isAuthenticated: true,
+            user: refreshed.user || AuthService.getCurrentUser(),
+            loading: false,
+          });
+          return;
+        } catch (refreshError) {
+          console.error('[AuthContext] Session restore failed:', refreshError);
+          AuthService.logout({ redirect: false });
+          setState({
+            isAuthenticated: false,
+            user: null,
+            loading: false,
+          });
+          return;
+        }
+      }
+
       const isAuth = AuthService.isAuthenticated();
       const user = AuthService.getCurrentUser();
 
@@ -91,7 +113,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
    * 登出
    */
   const logout = useCallback(() => {
-    AuthService.logout();
+    AuthService.logout({ redirect: false });
     setState({
       isAuthenticated: false,
       user: null,
@@ -124,7 +146,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
    * 初始化时从localStorage恢复状态
    */
   useEffect(() => {
-    checkAuth();
+    void checkAuth();
   }, [checkAuth]);
 
   /**
@@ -133,14 +155,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'user_info' || e.key === 'access_token') {
-        checkAuth();
+        void checkAuth();
       }
     };
 
+    const handleAuthExpired = () => {
+      setState({
+        isAuthenticated: false,
+        user: null,
+        loading: false,
+      });
+    };
+
     window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('auth:expired', handleAuthExpired);
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('auth:expired', handleAuthExpired);
     };
   }, [checkAuth]);
 

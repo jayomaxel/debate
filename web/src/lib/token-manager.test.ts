@@ -44,15 +44,17 @@ describe('TokenManager', () => {
 
     vi.mocked(axios.post).mockResolvedValue({
       data: {
-        access_token: 'access-2',
-        refresh_token: 'refresh-2',
-        token_type: 'Bearer',
-        expires_in: 7200,
-        user: {
-          id: 'user-1',
-          account: 'student-1',
-          name: 'Student Updated',
-          user_type: 'student',
+        data: {
+          access_token: 'access-2',
+          refresh_token: 'refresh-2',
+          token_type: 'Bearer',
+          expires_in: 7200,
+          user: {
+            id: 'user-1',
+            account: 'student-1',
+            name: 'Student Updated',
+            user_type: 'student',
+          },
         },
       },
     });

@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { useAuth } from '@/store/auth.context';
 import { useToast } from '@/hooks/use-toast';
+import { useNavigationBlocker } from '@/lib/router';
 import StudentService from '@/services/student.service';
 import {
   TRANSCRIPT_PENDING_TEXT,
@@ -24,6 +25,7 @@ import {
 } from '@/lib/debate-transcript';
 import { audioPlaybackDebug, debateDebug } from '@/lib/utils';
 import PcmStreamPlayer from '@/lib/pcm-stream-player';
+import { getApiOriginBaseUrl } from '@/lib/runtime-url';
 import { buildDebateWebSocketUrl, type MessageType } from '@/lib/websocket-client';
 import {
   Users,
@@ -170,6 +172,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const [roomJoined, setRoomJoined] = useState(false);
   const [participantsLoadError, setParticipantsLoadError] = useState<string | null>(null);
   const [aiThinkingElapsedSec, setAiThinkingElapsedSec] = useState(0);
+  const leaveToastLockRef = useRef(false);
 
   const recordingPermissionWaiters = useRef<Map<string, { resolve: (result: { allowed: boolean; message?: string }) => void; timeoutId: number }>>(new Map());
   const liveTtsPlayerRef = useRef<PcmStreamPlayer | null>(null);
@@ -186,6 +189,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   const toastRef = useRef(toast);
   const onEndDebateRef = useRef(onEndDebate);
   const aiSpeechMetaRef = useRef<Map<string, { segmentId?: string; speakerRole?: string }>>(new Map());
+  const startDebateWaiterRef = useRef<number | null>(null);
 
   // WebSocket连接
   const { isConnected, send, on, off } = useWebSocket(roomId, {
@@ -197,6 +201,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     onDisconnect: () => {
       debateDebug('DebateArena', 'Disconnected from debate room');
       setRoomJoined(false);
+      if (startDebateWaiterRef.current !== null) {
+        window.clearTimeout(startDebateWaiterRef.current);
+        startDebateWaiterRef.current = null;
+      }
     },
     onError: (err) => {
       console.error('WebSocket error:', err);
@@ -289,7 +297,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     null;
   const currentUserCanModerate = !!currentParticipant?.can_moderate;
   const isTeacherModeratorMode =
-    currentUserCanModerate || currentParticipant?.user_type === 'teacher';
+    currentParticipant?.user_type === 'teacher' || user?.user_type === 'teacher';
+  const isStudentModeratorMode = currentUserCanModerate && !isTeacherModeratorMode;
   const socketConnected = isConnected;
   const debateReady = socketConnected && roomJoined;
   const accessTokenExists =
@@ -306,6 +315,21 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     toastRef.current = toast;
     onEndDebateRef.current = onEndDebate;
   }, [autoPlayEnabled, currentUserId, currentUserRole, speakerMode, toast, onEndDebate]);
+
+  useEffect(() => {
+    if (currentPhase !== 'waiting' && startDebateWaiterRef.current !== null) {
+      window.clearTimeout(startDebateWaiterRef.current);
+      startDebateWaiterRef.current = null;
+    }
+  }, [currentPhase]);
+
+  useEffect(() => {
+    return () => {
+      if (startDebateWaiterRef.current !== null) {
+        window.clearTimeout(startDebateWaiterRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     debateDebug('DebateArena', 'Mount or room changed', {
@@ -346,6 +370,48 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     });
     liveTtsPlayerRef.current?.stop();
   }, [autoPlayEnabled, roomId]);
+
+  const shouldWarnBeforeLeave =
+    currentPhase !== 'waiting' && currentPhase !== 'finished';
+  const leaveWarningMessage = '离开将影响当前辩论进程。';
+  const { allowNextNavigation } = useNavigationBlocker({
+    when: shouldWarnBeforeLeave,
+    message: leaveWarningMessage,
+    onBlock: () => {
+      if (leaveToastLockRef.current) {
+        return;
+      }
+
+      leaveToastLockRef.current = true;
+      toast({
+        variant: 'destructive',
+        title: '暂时不能离开辩论',
+        description: leaveWarningMessage,
+      });
+
+      window.setTimeout(() => {
+        leaveToastLockRef.current = false;
+      }, 1000);
+    },
+  });
+
+  useEffect(() => {
+    if (!shouldWarnBeforeLeave) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = leaveWarningMessage;
+      return leaveWarningMessage;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [leaveWarningMessage, shouldWarnBeforeLeave]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -435,15 +501,9 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     if (!trimmed) return undefined;
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
     
-    const env = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env;
-    let base = (env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+    const base = getApiOriginBaseUrl();
     
     // 如果是上传文件，通常挂载在根目录下的 /uploads
-    // 如果 base 包含 /api/v1，需要去除，指向根目录
-    if (trimmed.startsWith('/uploads') || trimmed.startsWith('uploads/')) {
-       base = base.replace(/\/api\/v1$/, '').replace(/\/api$/, '');
-    }
-
     if (!base) return trimmed;
     if (trimmed.startsWith('/')) return `${base}${trimmed}`;
     return `${base}/${trimmed}`;
@@ -742,9 +802,39 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       }
     };
 
+    const handleModeratorTransferred = (data: WsPayload) => {
+      const newModeratorUserId = toOptionalString(data.new_moderator_user_id);
+      setParticipants((prev) =>
+        prev.map((participant) => ({
+          ...participant,
+          can_moderate: participant.user_id === newModeratorUserId,
+        }))
+      );
+      if (newModeratorUserId === currentUserIdRef.current) {
+        toastRef.current({
+          title: '主持权已转移给你',
+          description: '你现在可以控制辩论流程，同时继续作为辩手发言。',
+        });
+      }
+    };
+
+    const handleModeratorMissing = () => {
+      setParticipants((prev) =>
+        prev.map((participant) => ({ ...participant, can_moderate: false }))
+      );
+      toastRef.current({
+        title: '当前暂无主持人在线',
+        description: '等待新的学生主持人接管后再开始或推进流程。',
+      });
+    };
+
     // 监听错误
     const handleError = (data: WsPayload) => {
       console.error('WebSocket error:', data);
+      if (startDebateWaiterRef.current !== null) {
+        window.clearTimeout(startDebateWaiterRef.current);
+        startDebateWaiterRef.current = null;
+      }
       setError(toOptionalString(data.message) || '发生错误');
     };
 
@@ -765,6 +855,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
         description: data.timestamp ? `结束时间：${String(data.timestamp)}` : undefined,
       });
       setCurrentPhase('finished');
+      allowNextNavigation();
       onEndDebateRef.current?.();
     };
 
@@ -809,6 +900,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
     on('mic_grabbed', handleMicGrabbed);
     on('mic_released', handleMicReleased);
     on('speaker_selected', handleSpeakerSelected);
+    on('moderator_transferred', handleModeratorTransferred);
+    on('moderator_missing', handleModeratorMissing);
     on('debate_processing', handleDebateProcessing);
     on('debate_ended', handleDebateEnded);
     on('error', handleError);
@@ -834,6 +927,8 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
       off('mic_grabbed', handleMicGrabbed);
       off('mic_released', handleMicReleased);
       off('speaker_selected', handleSpeakerSelected);
+      off('moderator_transferred', handleModeratorTransferred);
+      off('moderator_missing', handleModeratorMissing);
       off('debate_processing', handleDebateProcessing);
       off('debate_ended', handleDebateEnded);
       off('error', handleError);
@@ -970,9 +1065,45 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
   };
 
   const handleStartDebate = () => {
-    if (isConnected && roomJoined) {
-      send('start_debate', {});
+    if (!isConnected || !roomJoined) {
+      toast({
+        title: '无法开始辩论',
+        description: '未连接到辩论房间，请稍后重试',
+        variant: 'destructive',
+      });
+      return;
     }
+    if (!currentUserCanModerate) {
+      toast({
+        title: '无法开始辩论',
+        description: '当前账号没有主持权限，请确认一号辩手已进入该房间。',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    debateDebug('DebateArena', 'Send start_debate', {
+      roomId,
+      currentUserId,
+      currentUserRole,
+      currentUserCanModerate,
+      roomJoined,
+      isConnected,
+    });
+    send('start_debate', {});
+    if (startDebateWaiterRef.current !== null) {
+      window.clearTimeout(startDebateWaiterRef.current);
+    }
+    startDebateWaiterRef.current = window.setTimeout(() => {
+      startDebateWaiterRef.current = null;
+      if (currentPhase === 'waiting') {
+        toast({
+          title: '开始辩论未生效',
+          description: '服务端未返回开赛状态，请确认后端已重启并且一号辩手主持权限已写入。',
+          variant: 'destructive',
+        });
+      }
+    }, 3000);
   };
 
   const handleAdvanceSegment = () => {
@@ -1298,6 +1429,11 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onEndDebate }) =
             {isTeacherModeratorMode && (
               <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                 当前为教师主持模式。您可以控制辩论流程并查看记录，学生发言入口已关闭。
+              </div>
+            )}
+            {isStudentModeratorMode && (
+              <div className="mb-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                当前为学生主持模式。您可以控制辩论流程，同时保留自己的辩手发言入口。
               </div>
             )}
             <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-4">

@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  ArrowRight,
   User,
   GraduationCap,
   Mail,
@@ -28,8 +29,10 @@ import {
   Loader2
 } from 'lucide-react';
 import { useAuth } from '@/store/auth.context';
+import { useAppRouter } from '@/lib/router';
 import AuthService from '@/services/auth.service';
 import { formatErrorMessage } from '@/lib/error-handler';
+import { markAssessmentOnboardingPendingForAccount } from '@/lib/student-assessment-onboarding';
 
 interface LoginFormData {
   name: string;
@@ -58,8 +61,48 @@ interface ClassOption {
   student_count: number;
 }
 
+const authInputClass =
+  'h-11 rounded-[12px] border-black/10 bg-white/88 text-slate-900 placeholder:text-slate-400 focus-visible:ring-black/10 focus-visible:ring-offset-0';
+
+const authSelectTriggerClass =
+  'h-11 rounded-[12px] border-black/10 bg-white/88 focus-visible:ring-black/10 focus-visible:ring-offset-0';
+
+const authTabTriggerClass =
+  'flex items-center gap-2 rounded-[10px] data-[state=active]:bg-[#171717] data-[state=active]:text-white';
+
+const authSubmitButtonClass =
+  'student-dark-button h-auto w-full justify-center py-3';
+
+const portalCards = [
+  {
+    icon: GraduationCap,
+    title: '学生端',
+    description: '登录后进入学生首页、比赛区、备赛区和成长区。',
+    tone: 'student-card-soft-blue',
+  },
+  {
+    icon: BookOpen,
+    title: '教师端',
+    description: '查看班级、学生进度和课堂对局数据。',
+    tone: 'student-card-soft-peach',
+  },
+  {
+    icon: ShieldCheck,
+    title: '管理端',
+    description: '管理账号、班级和平台配置。',
+    tone: 'student-card-soft-lavender',
+  },
+];
+
+const portalSteps = [
+  { value: '01', label: '选择身份', description: '先确认你要进入的工作区。' },
+  { value: '02', label: '输入账号', description: '用账号和密码完成登录。' },
+  { value: '03', label: '进入页面', description: '跳到对应的首页布局。' },
+];
+
 const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
   const { login } = useAuth();
+  const { navigate } = useAppRouter();
   const { toast } = useToast();
   const [activeRole, setActiveRole] = useState<UserRole>('student');
   const [isLogin, setIsLogin] = useState<boolean>(true);
@@ -226,6 +269,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
             student_id: formData.classCode || undefined,
           });
 
+          markAssessmentOnboardingPendingForAccount(formData.account);
           handleRegisterSuccess('请使用您的账号密码登录');
         } else {
           if (!formData.email || !formData.name || !formData.teacherId) {
@@ -261,126 +305,205 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-amber-50">
-      <div className="flex flex-col min-h-screen">
-        {/* 顶部品牌区域 */}
-        <div className="text-center pt-12 pb-8 px-4">
-          <div className="mb-6">
-            <div className="flex items-center justify-center gap-3 mb-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
-                <BrainCircuit className="w-10 h-10 text-white" />
-              </div>
-              <div className="text-left">
-                <h1 className="text-3xl font-bold leading-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
-                  碳硅之辩·人机思辨平台
-                </h1>
-                <p className="text-lg text-slate-600 font-medium">
-                  SpeculateAI: The Carbon-Silicon Debate Platform
-                </p>
-              </div>
-            </div>
+    <div className="student-theme">
+      <div className="student-shell">
+        <header className="sticky top-0 z-40 px-4 py-4 sm:px-6">
+          <div className="student-container">
+            <div className="student-header-frame flex items-center justify-between gap-4 rounded-none px-5 py-3 sm:px-6">
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                className="flex items-center gap-3 text-left"
+              >
+                <div className="student-icon-bubble bg-[#151515] text-white shadow-[0_14px_30px_rgba(15,23,42,0.18)]">
+                  <BrainCircuit className="h-6 w-6" />
+                </div>
+                <div>
+                  <div className="text-lg font-semibold tracking-[-0.03em] text-slate-900">
+                    碳硅之辩
+                  </div>
+                  <div className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                    未登录入口
+                  </div>
+                </div>
+              </button>
 
-            <div className="max-w-2xl mx-auto">
-              <p className="text-xl text-slate-700 font-light mb-4">
-                人机协作，思辨通识未来
-              </p>
-              <div className="flex items-center justify-center gap-6 text-sm text-slate-500">
-                <div className="flex items-center gap-2">
-                  <Target className="w-4 h-4 text-blue-500" />
-                  <span>AI辅助辩论</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-purple-500" />
-                  <span>实时互动</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Award className="w-4 h-4 text-amber-500" />
-                  <span>能力评估</span>
-                </div>
+              <div className="hidden items-center gap-2 md:flex">
+                <div className="student-pill">先看板块，再登录</div>
               </div>
+
+              <Button
+                variant="outline"
+                className="student-light-button h-auto"
+                onClick={() => navigate('/')}
+              >
+                浏览公开入口
+              </Button>
             </div>
           </div>
-        </div>
+        </header>
 
-        {/* 登录表单区域 */}
-        <div className="flex-1 flex items-center justify-center px-4 pb-12">
-          <div className="w-full max-w-md">
-            <Card className="bg-white border-slate-200 shadow-xl">
-              <CardHeader className="text-center pb-4">
-                <CardTitle className="text-2xl font-bold text-slate-900 mb-2">
-                  {isLogin ? '欢迎登录' : '欢迎注册'}
-                </CardTitle>
-                <CardDescription className="text-slate-600">
-                  {isLogin ? '选择您的身份，开启智能辩论之旅' : '选择您的身份，创建账号后开始使用平台'}
-                </CardDescription>
-              </CardHeader>
-
-              <CardContent className="space-y-6">
-                {/* 登录/注册切换 */}
-                <div className="flex items-center justify-center gap-4 text-sm">
-                  <button
-                    type="button"
-                    onClick={() => handleModeChange(true)}
-                    className={`px-4 py-2 rounded-md transition-colors ${
-                      isLogin
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    登录
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleModeChange(false)}
-                    className={`px-4 py-2 rounded-md transition-colors ${
-                      !isLogin
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    注册
-                  </button>
-                </div>
-
-                {/* 角色切换 */}
-                <Tabs value={activeRole} onValueChange={(value) => setActiveRole(value as UserRole)}>
-                  <TabsList
-                    className={`grid w-full h-12 bg-slate-100 ${
-                      isLogin ? 'grid-cols-3' : 'grid-cols-2'
-                    }`}
-                  >
-                    <TabsTrigger
-                      value="student"
-                      className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
-                    >
-                      <GraduationCap className="w-4 h-4" />
-                      我是学生
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="teacher"
-                      className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
-                    >
-                      <User className="w-4 h-4" />
-                      我是老师
-                    </TabsTrigger>
-                    {roleOptions.includes('administrator') && (
-                      <TabsTrigger
-                        value="administrator"
-                        className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
+        <main className="student-container py-6 pb-14">
+          <div className="student-page-split grid gap-6">
+            <section className="space-y-6">
+              <div className="student-card px-6 py-6 md:px-8">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="max-w-2xl space-y-4">
+                    <div className="student-pill">未登录入口</div>
+                    <div className="space-y-3">
+                      <h1 className="text-[2rem] font-semibold leading-[1.08] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]">
+                        先看清每个板块的用途，再决定要不要登录。
+                      </h1>
+                      <p className="text-[15px] leading-7 text-slate-600 md:text-base">
+                        这里把学生、教师、管理员入口放在同一页，先浏览，再进入对应工作区。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <Button
+                        className="student-dark-button h-auto"
+                        onClick={() => navigate('/login')}
                       >
-                        <ShieldCheck className="w-4 h-4" />
-                        管理员
-                      </TabsTrigger>
-                    )}
-                  </TabsList>
+                        登录 / 注册
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="student-light-button h-auto"
+                        onClick={() => navigate('/')}
+                      >
+                        继续浏览
+                      </Button>
+                    </div>
+                  </div>
 
-                  <TabsContent value="student" className="space-y-4 mt-6">
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                      {/* 账号 */}
-                      <div className="space-y-2">
-                        <Label htmlFor="student-account" className="text-slate-700 font-medium flex items-center gap-2">
-                          <User className="w-4 h-4" />
-                          账号
+                  <div className="student-card-soft-blue min-w-[220px] p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                      页面意图
+                    </div>
+                    <div className="mt-2 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
+                      先理解，再进入
+                    </div>
+                    <div className="mt-2 text-sm leading-7 text-slate-600">
+                      登录后会跳转到与你身份对应的同一套工作区布局。
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                {portalCards.map((card) => {
+                  const Icon = card.icon;
+
+                  return (
+                    <div key={card.title} className={`${card.tone} p-4`}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-3">
+                          <div className="student-icon-bubble text-slate-900">
+                            <Icon className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-semibold text-slate-900">
+                              {card.title}
+                            </h3>
+                            <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                              {card.description}
+                            </p>
+                          </div>
+                        </div>
+                        <ArrowRight className="h-4 w-4 text-slate-500" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                {portalSteps.map((step, index) => (
+                  <div
+                    key={step.value}
+                    className={
+                      index === 1 ? 'student-card-soft-peach p-4' : 'student-card-muted p-4'
+                    }
+                  >
+                    <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      {step.value}
+                    </div>
+                    <div className="mt-2 text-[15px] font-semibold text-slate-900">
+                      {step.label}
+                    </div>
+                    <div className="mt-1 text-sm leading-6 text-slate-600">
+                      {step.description}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <div className="w-full">
+              <Card className="student-card border-[#d7ccbf] shadow-[0_18px_46px_rgba(58,42,28,0.08)]">
+                <CardHeader className="text-center pb-4">
+                  <CardTitle className="mb-2 text-[1.65rem] font-semibold text-slate-900">
+                    {isLogin ? '欢迎登录' : '欢迎注册'}
+                  </CardTitle>
+                  <CardDescription className="text-slate-600">
+                    {isLogin ? '选择你的身份后登录' : '选择你的身份后创建账号'}
+                  </CardDescription>
+                </CardHeader>
+
+                <CardContent className="space-y-6">
+                  <div className="flex items-center justify-center gap-4 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange(true)}
+                      className={`px-4 py-2 rounded-[10px] transition-colors ${
+                        isLogin
+                          ? 'bg-[#171717] text-white'
+                          : 'border border-[#d7ccbf] bg-white/82 text-slate-600 hover:border-[#b8a891] hover:text-slate-900'
+                      }`}
+                    >
+                      登录
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange(false)}
+                      className={`px-4 py-2 rounded-[10px] transition-colors ${
+                        !isLogin
+                          ? 'bg-[#171717] text-white'
+                          : 'border border-[#d7ccbf] bg-white/82 text-slate-600 hover:border-[#b8a891] hover:text-slate-900'
+                      }`}
+                    >
+                      注册
+                    </button>
+                  </div>
+
+                  <Tabs value={activeRole} onValueChange={(value) => setActiveRole(value as UserRole)}>
+                    <TabsList
+                      className={`grid h-auto w-full rounded-[12px] border border-[#d7ccbf] bg-[#f6f0e8] p-1.5 ${
+                        isLogin ? 'grid-cols-3' : 'grid-cols-2'
+                      }`}
+                    >
+                      <TabsTrigger value="student" className={authTabTriggerClass}>
+                        <GraduationCap className="h-4 w-4" />
+                        我是学生
+                      </TabsTrigger>
+                      <TabsTrigger value="teacher" className={authTabTriggerClass}>
+                        <User className="h-4 w-4" />
+                        我是老师
+                      </TabsTrigger>
+                      {roleOptions.includes('administrator') && (
+                        <TabsTrigger value="administrator" className={authTabTriggerClass}>
+                          <ShieldCheck className="h-4 w-4" />
+                          管理员
+                        </TabsTrigger>
+                      )}
+                    </TabsList>
+
+                    <TabsContent value="student" className="mt-6 space-y-4">
+                      <form onSubmit={handleSubmit} className="space-y-4">
+                        {/* 账号 */}
+                        <div className="space-y-2">
+                          <Label htmlFor="student-account" className="text-slate-700 font-medium flex items-center gap-2">
+                            <User className="w-4 h-4" />
+                            账号
                           <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs ml-auto">
                             必填
                           </Badge>
@@ -391,7 +514,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           placeholder="请输入账号"
                           value={formData.account}
                           onChange={(e) => handleInputChange('account', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                          className={authInputClass}
                           required
                           disabled={loading}
                         />
@@ -412,7 +535,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           placeholder="请输入密码"
                           value={formData.password}
                           onChange={(e) => handleInputChange('password', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                          className={authInputClass}
                           required
                           disabled={loading}
                         />
@@ -434,7 +557,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请再次输入密码"
                               value={formData.confirmPassword}
                               onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               required
                               disabled={loading}
                             />
@@ -452,7 +575,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请输入您的姓名"
                               value={formData.name}
                               onChange={(e) => handleInputChange('name', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               required
                               disabled={loading}
                             />
@@ -470,7 +593,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请输入您的邮箱"
                               value={formData.email}
                               onChange={(e) => handleInputChange('email', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               disabled={loading}
                             />
                           </div>
@@ -495,7 +618,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                                 onValueChange={(value) => handleInputChange('classId', value)}
                                 disabled={loading}
                               >
-                                <SelectTrigger className="border-slate-300 focus:border-blue-500 focus:ring-blue-500">
+                                <SelectTrigger className={authSelectTriggerClass}>
                                   <SelectValue placeholder="请选择班级" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -530,7 +653,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请输入学号"
                               value={formData.classCode}
                               onChange={(e) => handleInputChange('classCode', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               disabled={loading}
                             />
                           </div>
@@ -539,7 +662,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                       <Button
                         type="submit"
-                        className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white py-3"
+                        className={authSubmitButtonClass}
                         disabled={loading}
                       >
                         {loading ? (
@@ -554,11 +677,11 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           </>
                         )}
                       </Button>
-                    </form>
-                  </TabsContent>
+                      </form>
+                    </TabsContent>
 
-                  <TabsContent value="teacher" className="space-y-4 mt-6">
-                    <form onSubmit={handleSubmit} className="space-y-4">
+                    <TabsContent value="teacher" className="mt-6 space-y-4">
+                      <form onSubmit={handleSubmit} className="space-y-4">
                       {/* 邮箱/教工号 */}
                       <div className="space-y-2">
                         <Label htmlFor="teacher-id" className="text-slate-700 font-medium flex items-center gap-2">
@@ -574,7 +697,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           placeholder={isLogin ? '请输入邮箱或教工号' : '请输入教工号'}
                           value={formData.teacherId}
                           onChange={(e) => handleInputChange('teacherId', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                          className={authInputClass}
                           required
                           disabled={loading}
                         />
@@ -595,7 +718,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           placeholder="请输入密码"
                           value={formData.password}
                           onChange={(e) => handleInputChange('password', e.target.value)}
-                          className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                          className={authInputClass}
                           required
                           disabled={loading}
                         />
@@ -617,7 +740,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请再次输入密码"
                               value={formData.confirmPassword}
                               onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               required
                               disabled={loading}
                             />
@@ -635,7 +758,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请输入您的姓名"
                               value={formData.name}
                               onChange={(e) => handleInputChange('name', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               required
                               disabled={loading}
                             />
@@ -656,14 +779,14 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                               placeholder="请输入您的邮箱"
                               value={formData.email}
                               onChange={(e) => handleInputChange('email', e.target.value)}
-                              className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                              className={authInputClass}
                               required
                               disabled={loading}
                             />
                           </div>
 
                           {/* 班级选择 - 仅注册时显示 */}
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                          <div className="student-card-muted px-3 py-2 text-sm text-slate-600">
                             教师账号注册后由管理员创建并管理班级，无需在注册时选择班级。
                           </div>
                         </>
@@ -671,7 +794,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                       <Button
                         type="submit"
-                        className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white py-3"
+                        className={authSubmitButtonClass}
                         disabled={loading}
                       >
                         {loading ? (
@@ -686,12 +809,12 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           </>
                         )}
                       </Button>
-                    </form>
-                  </TabsContent>
+                      </form>
+                    </TabsContent>
 
-                  {roleOptions.includes('administrator') && (
-                    <TabsContent value="administrator" className="space-y-4 mt-6">
-                      <form onSubmit={handleSubmit} className="space-y-4">
+                    {roleOptions.includes('administrator') && (
+                      <TabsContent value="administrator" className="mt-6 space-y-4">
+                        <form onSubmit={handleSubmit} className="space-y-4">
                         {/* 账号 */}
                         <div className="space-y-2">
                           <Label htmlFor="admin-account" className="text-slate-700 font-medium flex items-center gap-2">
@@ -707,7 +830,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                             placeholder="请输入管理员账号"
                             value={formData.account}
                             onChange={(e) => handleInputChange('account', e.target.value)}
-                            className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                            className={authInputClass}
                             required
                             disabled={loading}
                           />
@@ -728,7 +851,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                             placeholder="请输入密码"
                             value={formData.password}
                             onChange={(e) => handleInputChange('password', e.target.value)}
-                            className="border-slate-300 focus:border-blue-500 focus:ring-blue-500"
+                            className={authInputClass}
                             required
                             disabled={loading}
                           />
@@ -736,7 +859,7 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 
                         <Button
                           type="submit"
-                          className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white py-3"
+                          className="w-full bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white py-3"
                           disabled={loading}
                         >
                           {loading ? (
@@ -751,23 +874,15 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                             </>
                           )}
                         </Button>
-                      </form>
-                    </TabsContent>
-                  )}
-                </Tabs>
-              </CardContent>
-            </Card>
-
-            {/* 底部说明 */}
-            <div className="mt-6 text-center">
-              <div className="flex items-center justify-center gap-2 text-sm text-slate-500">
-                <Sparkles className="w-4 h-4 text-blue-500" />
-                <span>AI驱动的人机思辨平台</span>
-                <Sparkles className="w-4 h-4 text-purple-500" />
-              </div>
+                        </form>
+                      </TabsContent>
+                    )}
+                  </Tabs>
+                </CardContent>
+              </Card>
             </div>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

@@ -23,55 +23,34 @@ function Get-CommandPath {
   return (Get-Command $Name -ErrorAction Stop).Source
 }
 
-function Get-CpolarPublicBaseUrl {
-  function Get-PreferredTunnelUrl {
-    param(
-      [Parameter(Mandatory = $true)]
-      [string]$Line
-    )
+function Get-FrontendDevCommand {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$WebDir
+  )
 
-    $urlMatches = [regex]::Matches($Line, 'https?://[a-zA-Z0-9.-]+')
-    if ($urlMatches.Count -eq 0) {
-      return $null
-    }
-
-    $httpsMatch = $urlMatches | Where-Object { $_.Value -like 'https://*' } | Select-Object -Last 1
-    if ($httpsMatch) {
-      return $httpsMatch.Value.TrimEnd('/')
-    }
-
-    return $urlMatches[$urlMatches.Count - 1].Value.TrimEnd('/')
+  $pnpmCommand = Get-Command 'pnpm.cmd' -ErrorAction SilentlyContinue
+  if (-not $pnpmCommand) {
+    $pnpmCommand = Get-Command 'pnpm' -ErrorAction SilentlyContinue
+  }
+  if ($pnpmCommand) {
+    return "& '$($pnpmCommand.Source)' dev --host 0.0.0.0 --port $WebPort"
   }
 
-  $logDir = Join-Path $env:USERPROFILE '.cpolar\logs'
-  if (-not (Test-Path -LiteralPath $logDir)) {
-    return $null
+  $localVite = Join-Path $WebDir 'node_modules\.bin\vite.CMD'
+  if (Test-Path -LiteralPath $localVite) {
+    return "& '$localVite' --host 0.0.0.0 --port $WebPort"
   }
 
-  $logFiles = Get-ChildItem -LiteralPath $logDir -Filter 'cpolar_service.log*' -File |
-    Sort-Object LastWriteTime -Descending
-
-  foreach ($logFile in $logFiles) {
-    $publicUrlMatch = Select-String -Path $logFile.FullName -Pattern 'PublicUrl.*https?://[a-zA-Z0-9.-]+' |
-      Select-Object -Last 1
-    if ($publicUrlMatch) {
-      $resolvedUrl = Get-PreferredTunnelUrl -Line $publicUrlMatch.Line
-      if ($resolvedUrl) {
-        return $resolvedUrl
-      }
-    }
-
-    $newTunnelMatch = Select-String -Path $logFile.FullName -Pattern 'NewTunnel.*https?://[a-zA-Z0-9.-]+' |
-      Select-Object -Last 1
-    if ($newTunnelMatch) {
-      $resolvedUrl = Get-PreferredTunnelUrl -Line $newTunnelMatch.Line
-      if ($resolvedUrl) {
-        return $resolvedUrl
-      }
-    }
+  $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+  if (-not $npmCommand) {
+    $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue
+  }
+  if ($npmCommand) {
+    return "& '$($npmCommand.Source)' exec -- vite --host 0.0.0.0 --port $WebPort"
   }
 
-  return $null
+  throw "Missing frontend runner. Install pnpm or run npm install in the web directory."
 }
 
 function Start-DevWindow {
@@ -108,10 +87,6 @@ $apiDir = Join-Path $rootDir 'api'
 $webDir = Join-Path $rootDir 'web'
 $apiPython = Join-Path $apiDir 'venv\Scripts\python.exe'
 
-if (-not $PublicBaseUrl) {
-  $PublicBaseUrl = Get-CpolarPublicBaseUrl
-}
-
 if (-not (Test-Path -LiteralPath $apiDir)) {
   throw "Missing api directory: $apiDir"
 }
@@ -125,13 +100,12 @@ if (-not (Test-Path -LiteralPath $apiPython)) {
   $apiPython = Get-CommandPath -Name 'python'
 }
 
-$pnpmPath = Get-CommandPath -Name 'pnpm' -PreferCmdWrapper
-
 if (-not (Test-Path -LiteralPath (Join-Path $webDir 'node_modules'))) {
   Write-Warning "web\\node_modules not found. Run 'pnpm install' in the web directory if the frontend fails to start."
 }
 
 $escapedPublicBaseUrl = $PublicBaseUrl.Replace("'", "''")
+$frontendDevCommand = Get-FrontendDevCommand -WebDir $webDir
 
 $backendCommand = @"
 `$env:DEBUG = 'true'
@@ -141,14 +115,15 @@ if ('$escapedPublicBaseUrl') {
   Write-Host "Resolved PUBLIC_BASE_URL: `$env:PUBLIC_BASE_URL" -ForegroundColor Green
 } else {
   Remove-Item Env:PUBLIC_BASE_URL -ErrorAction SilentlyContinue
-  Write-Warning 'PUBLIC_BASE_URL was not auto-detected. The backend will fall back to api/.env if it exists.'
+  Write-Host 'PUBLIC_BASE_URL was not provided. The backend will fall back to api/.env.' -ForegroundColor Yellow
 }
 & '$apiPython' -m uvicorn main:app --host 0.0.0.0 --port $ApiPort --reload
 "@
 
 $frontendCommand = @"
 Write-Host "Starting Web on http://localhost:$WebPort ..." -ForegroundColor Cyan
-& '$pnpmPath' dev --host 0.0.0.0 --port $WebPort
+Write-Host "Web working directory: $webDir" -ForegroundColor Green
+$frontendDevCommand
 "@
 
 Start-DevWindow -Title 'AIDebate API' -WorkingDir $apiDir -CommandText $backendCommand
@@ -156,12 +131,13 @@ Start-DevWindow -Title 'AIDebate Web' -WorkingDir $webDir -CommandText $frontend
 
 Write-Host ''
 Write-Host 'Development services are starting in two new PowerShell windows.' -ForegroundColor Green
+Write-Host "Project root: $rootDir" -ForegroundColor Green
 Write-Host "API:  http://localhost:$ApiPort" -ForegroundColor Green
 Write-Host "Web:  http://localhost:$WebPort" -ForegroundColor Green
 if ($PublicBaseUrl) {
   Write-Host "Public Base URL: $PublicBaseUrl" -ForegroundColor Green
 } else {
-  Write-Warning 'No cpolar public URL detected. Start cpolar first or pass -PublicBaseUrl to enable public uploads/ASR.'
+  Write-Host 'Public Base URL: not set for this local session.' -ForegroundColor Yellow
 }
 Write-Host ''
 Write-Host "The API window forces DEBUG=true so the backend won't crash on a global DEBUG=release environment variable." -ForegroundColor Yellow

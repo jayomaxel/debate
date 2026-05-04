@@ -1,15 +1,8 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import TokenManager from './token-manager';
+import { getApiBaseUrl } from './runtime-url';
 
-type ImportMetaWithEnv = ImportMeta & {
-  env?: {
-    VITE_API_BASE_URL?: string;
-  };
-};
-
-const baseURL = (
-  (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
-).replace(/\/+$/, '');
+const baseURL = getApiBaseUrl();
 
 const client = axios.create({
   baseURL,
@@ -30,22 +23,34 @@ const unwrapResponseData = <T>(payload: unknown): T => {
 };
 
 client.interceptors.request.use((config) => {
-  const token = TokenManager.getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  const prepareRequest = async () => {
+    if (TokenManager.getRefreshToken() && TokenManager.isTokenExpiringSoon()) {
+      try {
+        await TokenManager.refreshToken();
+      } catch (error) {
+        TokenManager.clearAll();
+      }
+    }
 
-  if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV) {
-    const requestUrl = `${config.baseURL || ''}${config.url || ''}`;
-    console.debug('[API] Request', {
-      method: String(config.method || 'get').toUpperCase(),
-      url: requestUrl || config.url,
-      hasToken: !!token,
-      origin: typeof window !== 'undefined' ? window.location.origin : '',
-    });
-  }
+    const token = TokenManager.getAccessToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
 
-  return config;
+    if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV) {
+      const requestUrl = `${config.baseURL || ''}${config.url || ''}`;
+      console.debug('[API] Request', {
+        method: String(config.method || 'get').toUpperCase(),
+        url: requestUrl || config.url,
+        hasToken: !!token,
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+      });
+    }
+
+    return config;
+  };
+
+  return prepareRequest();
 });
 
 client.interceptors.response.use(
@@ -73,6 +78,9 @@ client.interceptors.response.use(
         return client(originalRequest);
       } catch (refreshError) {
         TokenManager.clearAll();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('auth:expired'));
+        }
         return Promise.reject(refreshError);
       }
     }

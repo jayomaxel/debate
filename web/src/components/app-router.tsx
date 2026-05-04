@@ -1,222 +1,409 @@
-import React, { useState } from 'react';
+import React from 'react';
 import LoginPortal from './login-portal';
 import TeacherDashboard from './teacher-dashboard';
 import AdminDashboard from './admin-dashboard';
 import StudentCommandCenter from './student-command-center';
+import StudentCompetitionHub from './student-competition-hub';
 import StudentOnboarding from './student-onboarding';
-import DebateMatchResult from './debate-match-result';
+import DebateLobby from './debate-lobby';
+import LobbyRoomWaiting from './lobby-room-waiting';
 import DebateArena from './debate-arena';
 import EnhancedDebateAnalytics from './enhanced-debate-analytics';
 import StudentAnalyticsCenter from './student-analytics-center';
 import DebateReportPage from './debate-report-page';
 import DebateReplayPage from './debate-replay-page';
 import PreparationAssistantPage from './student/preparation-assistant-page';
-import StudentService from '@/services/student.service';
-import type { Debate } from '@/services/student.service';
+import UserProfile from './user-profile';
+import PublicEntry from './public-entry';
+import {
+  RequireAuth,
+  RequireGuest,
+  RequireRole,
+  RequireStudentAssessment,
+} from './auth-guards';
+import PublicLayout from './layouts/public-layout';
+import StudentLayout from './layouts/student-layout';
+import TeacherLayout from './layouts/teacher-layout';
+import AdminLayout from './layouts/admin-layout';
+import SettingsLayout from './layouts/settings-layout';
+import DebateFullscreenLayout from './layouts/debate-fullscreen-layout';
 import { useAuth } from '@/store/auth.context';
-import { debateDebug } from '@/lib/utils';
+import { matchPath, useAppRouter } from '@/lib/router';
+import {
+  getDefaultHomePath,
+  getStudentAnalyticsPath,
+  getStudentSettingsPath,
+  normalizePublicSection,
+  normalizeSettingsTab,
+  normalizeStudentAnalyticsTab,
+} from '@/lib/route-utils';
 
-type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
-
-// 简单的路由管理组件
 const AppRouter: React.FC = () => {
-  const { user } = useAuth();
-  const [currentPage, setCurrentPage] = useState<'login' | 'teacher' | 'student' | 'command-center' | 'match' | 'debate' | 'analytics' | 'admin' | 'student-analytics' | 'debate-report' | 'debate-replay' | 'preparation-assistant'>('login');
-  const [userType, setUserType] = useState<'student' | 'teacher' | 'administrator'>('student');
-  const [currentDebateId, setCurrentDebateId] = useState<string | undefined>(undefined);
-  const [joinedDebate, setJoinedDebate] = useState<Debate | null>(null);
-  const [studentNeedsAssessment, setStudentNeedsAssessment] = useState(false);
-  const [studentProfileTab, setStudentProfileTab] = useState<'info' | 'password' | 'ability'>('info');
-  const [reportDebateId, setReportDebateId] = useState<string | undefined>(undefined);
-  const [reportBackPage, setReportBackPage] = useState<'command-center' | 'student-analytics' | 'teacher'>('command-center');
-  const [replayDebateId, setReplayDebateId] = useState<string | undefined>(undefined);
-  const [replayBackPage, setReplayBackPage] = useState<'command-center' | 'student-analytics' | 'teacher'>('command-center');
-  const [studentAnalyticsTab, setStudentAnalyticsTab] = useState<StudentAnalyticsTab>('history');
+  const { location, navigate, back } = useAppRouter();
+  const { logout, user, updateUser } = useAuth();
+  const pathname = location.pathname;
+  const searchParams = new URLSearchParams(location.search);
 
-  // 在实际项目中，这里会使用 React Router 或其他路由库
-  // 现在用简单的状态管理来模拟路由
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'login':
-        return <LoginPortal onLogin={async (role) => {
-          setUserType(role);
-          if (role === 'administrator') {
-            setCurrentPage('admin');
-            return;
-          }
-          if (role === 'teacher') {
-            setCurrentPage('teacher');
-            return;
-          }
-
-          let need = false;
-          try {
-            const assessment = await StudentService.getAssessment();
-            need = !assessment || !!assessment.is_default;
-          } catch {
-            need = true;
-          }
-
-          setStudentNeedsAssessment(need);
-          setStudentProfileTab(need ? 'ability' : 'info');
-          setCurrentPage('command-center');
-        }} />;
-      case 'teacher':
-        return <TeacherDashboard 
-          onLogout={() => setCurrentPage('login')} 
-          onNavigate={(page, debateId) => {
-            debateDebug('AppRouter', `Navigate to ${page}`, { debateId });
-            if (page === 'debate-report') {
-              setReportBackPage('teacher');
-              setReportDebateId(debateId);
-              setCurrentPage('debate-report');
-              return;
-            }
-            if (page === 'debate-replay') {
-              setReplayBackPage('teacher');
-              setReplayDebateId(debateId);
-              setCurrentPage('debate-replay');
-              return;
-            }
-            setCurrentDebateId(debateId);
-            setCurrentPage(page);
-          }}
-        />;
-      case 'admin':
-        return <AdminDashboard onLogout={() => setCurrentPage('login')} />;
-      case 'command-center':
-        return <StudentCommandCenter
-          defaultShowProfile={studentNeedsAssessment}
-          defaultProfileTab={studentProfileTab}
-          onJoinClass={(debate) => {
-            debateDebug('AppRouter', '加入课堂', { invitationCode: debate.invitation_code });
-            setJoinedDebate(debate);
-            setCurrentDebateId(debate.id);
-            setCurrentPage('student');
-          }}
-          onToWaitingRoom={() => setCurrentPage('student')}
-          onViewReport={(matchId) => {
-            debateDebug('AppRouter', '查看报告', { matchId });
-            setReportBackPage('command-center');
-            setReportDebateId(matchId);
-            setCurrentPage('debate-report');
-          }}
-          onViewReplay={(debateId) => {
-            setReplayBackPage('command-center');
-            setReplayDebateId(debateId);
-            setCurrentPage('debate-replay');
-          }}
-          onNavigateToAnalytics={(tab = 'history') => {
-            setStudentAnalyticsTab(tab);
-            setCurrentPage('student-analytics');
-          }}
-          onNavigateToPreparation={() => setCurrentPage('preparation-assistant')}
-          onLogout={() => {
-            setStudentNeedsAssessment(false);
-            setStudentProfileTab('info');
-            setCurrentPage('login');
-          }}
-        />;
-      case 'student':
-        return <StudentOnboarding 
-          initialDebate={joinedDebate}
-          onBackToLogin={() => setCurrentPage('login')} 
-          onMatchFound={() => setCurrentPage('match')} 
-          onNavigateToAnalytics={(tab) => {
-            setStudentAnalyticsTab(tab);
-            setCurrentPage('student-analytics');
-          }}
-        />;
-      case 'match':
-        return <DebateMatchResult
-          initialDebate={joinedDebate}
-          onBack={() => setCurrentPage('command-center')}
-          onStartDebate={(debateId) => {
-            if (debateId) {
-              setCurrentDebateId(debateId);
-            }
-            setCurrentPage('debate');
-          }}
-          onCountdownEnd={() => debateDebug('AppRouter', '倒计时结束')}
-        />;
-      case 'debate':
-        return <DebateArena 
-          roomId={currentDebateId}
-          onBack={() => userType === 'teacher' ? setCurrentPage('teacher') : setCurrentPage('match')} 
-          onEndDebate={() => setCurrentPage('analytics')} 
-        />;
-      case 'analytics':
-        return <EnhancedDebateAnalytics
-          userType={userType === 'teacher' ? 'teacher' : 'student'}
-          studentName={user?.name}
-          debateId={currentDebateId}
-          onBack={() => setCurrentPage(userType === 'teacher' ? 'teacher' : 'command-center')}
-        />;
-      case 'student-analytics':
-        return <StudentAnalyticsCenter
-          defaultTab={studentAnalyticsTab}
-          onBack={() => setCurrentPage('command-center')}
-          onViewReport={(debateId) => {
-            setReportBackPage('student-analytics');
-            setReportDebateId(debateId);
-            setCurrentPage('debate-report');
-          }}
-          onViewReplay={(debateId) => {
-            setReplayBackPage('student-analytics');
-            setReplayDebateId(debateId);
-            setCurrentPage('debate-replay');
-          }}
-        />;
-      case 'debate-report':
-        return reportDebateId ? (
-          <DebateReportPage
-            debateId={reportDebateId}
-            studentName={user?.name}
-            onBack={() => setCurrentPage(reportBackPage)}
-          />
-        ) : null;
-      case 'debate-replay':
-        return replayDebateId ? (
-          <DebateReplayPage
-            debateId={replayDebateId}
-            onBack={() => setCurrentPage(replayBackPage)}
-          />
-        ) : null;
-      case 'preparation-assistant':
-        return (
-          <PreparationAssistantPage
-            onBack={() => setCurrentPage('command-center')}
-          />
-        );
-      default:
-        return <LoginPortal onLogin={async (role) => {
-          setUserType(role);
-          if (role === 'administrator') {
-            setCurrentPage('admin');
-            return;
-          }
-          if (role === 'teacher') {
-            setCurrentPage('teacher');
-            return;
-          }
-
-          let need = false;
-          try {
-            const assessment = await StudentService.getAssessment();
-            need = !assessment || !!assessment.is_default;
-          } catch {
-            need = true;
-          }
-
-          setStudentNeedsAssessment(need);
-          setStudentProfileTab(need ? 'ability' : 'info');
-          setCurrentPage('command-center');
-        }} />;
-    }
+  const handleLogout = () => {
+    logout();
+    navigate('/', { replace: true });
   };
 
-  return renderPage();
+  const renderPublicPage = (sectionKey?: string | null) => {
+    const section = normalizePublicSection(sectionKey);
+
+    return (
+      <PublicLayout activeSection={section}>
+        <PublicEntry section={section} />
+      </PublicLayout>
+    );
+  };
+
+  const renderStudentPage = (children: React.ReactNode) => (
+    <RequireAuth>
+      <RequireRole role="student">
+        <StudentLayout>{children}</StudentLayout>
+      </RequireRole>
+    </RequireAuth>
+  );
+
+  const renderStudentCompetitionPage = (children: React.ReactNode) => (
+    <RequireAuth>
+      <RequireRole role="student">
+        <RequireStudentAssessment>
+          <StudentLayout>{children}</StudentLayout>
+        </RequireStudentAssessment>
+      </RequireRole>
+    </RequireAuth>
+  );
+
+  const renderTeacherPage = (children: React.ReactNode) => (
+    <RequireAuth>
+      <RequireRole role="teacher">
+        <TeacherLayout>{children}</TeacherLayout>
+      </RequireRole>
+    </RequireAuth>
+  );
+
+  const renderAdminPage = (children: React.ReactNode) => (
+    <RequireAuth>
+      <RequireRole role="administrator">
+        <AdminLayout>{children}</AdminLayout>
+      </RequireRole>
+    </RequireAuth>
+  );
+
+  const loginMatch = matchPath('/login', pathname);
+  if (loginMatch) {
+    return (
+      <RequireGuest>
+        <LoginPortal
+          onLogin={async (role) => {
+            navigate(getDefaultHomePath(role), { replace: true });
+          }}
+        />
+      </RequireGuest>
+    );
+  }
+
+  const studentArenaMatch = matchPath('/student/debates/:debateId/arena', pathname);
+  if (studentArenaMatch) {
+    const debateId = studentArenaMatch.params.debateId;
+
+    return (
+      <RequireAuth>
+        <RequireRole role="student">
+          <RequireStudentAssessment>
+            <DebateFullscreenLayout>
+              <DebateArena
+                roomId={debateId}
+                onEndDebate={() =>
+                  navigate(`/student/debates/${debateId}/analytics`, {
+                    replace: true,
+                  })
+                }
+              />
+            </DebateFullscreenLayout>
+          </RequireStudentAssessment>
+        </RequireRole>
+      </RequireAuth>
+    );
+  }
+
+  const teacherArenaMatch = matchPath('/teacher/debates/:debateId/arena', pathname);
+  if (teacherArenaMatch) {
+    const debateId = teacherArenaMatch.params.debateId;
+
+    return renderTeacherPage(
+      <DebateFullscreenLayout>
+        <DebateArena
+          roomId={debateId}
+          onEndDebate={() =>
+            navigate(`/teacher/debates/${debateId}/analytics`, {
+              replace: true,
+            })
+          }
+        />
+      </DebateFullscreenLayout>
+    );
+  }
+
+  const studentAnalyticsReportMatch = matchPath(
+    '/student/debates/:debateId/analytics',
+    pathname
+  );
+  if (studentAnalyticsReportMatch) {
+    const debateId = studentAnalyticsReportMatch.params.debateId;
+
+    return renderStudentPage(
+      <EnhancedDebateAnalytics
+        debateId={debateId}
+        studentName={user?.name}
+        userType="student"
+        onBack={() => navigate('/student')}
+      />
+    );
+  }
+
+  const teacherAnalyticsReportMatch = matchPath(
+    '/teacher/debates/:debateId/analytics',
+    pathname
+  );
+  if (teacherAnalyticsReportMatch) {
+    const debateId = teacherAnalyticsReportMatch.params.debateId;
+
+    return renderTeacherPage(
+      <EnhancedDebateAnalytics
+        debateId={debateId}
+        userType="teacher"
+        onBack={() => navigate('/teacher')}
+      />
+    );
+  }
+
+  const studentReportMatch = matchPath('/student/reports/:debateId', pathname);
+  if (studentReportMatch) {
+    return renderStudentPage(
+      <DebateReportPage
+        debateId={studentReportMatch.params.debateId}
+        studentName={user?.name}
+        studentMode
+        onBack={() => back('/student')}
+      />
+    );
+  }
+
+  const teacherReportMatch = matchPath('/teacher/reports/:debateId', pathname);
+  if (teacherReportMatch) {
+    return renderTeacherPage(
+      <DebateReportPage
+        debateId={teacherReportMatch.params.debateId}
+        onBack={() => back('/teacher')}
+      />
+    );
+  }
+
+  const studentReplayMatch = matchPath('/student/replays/:debateId', pathname);
+  if (studentReplayMatch) {
+    return renderStudentPage(
+      <DebateReplayPage
+        debateId={studentReplayMatch.params.debateId}
+        onBack={() => back('/student')}
+      />
+    );
+  }
+
+  const teacherReplayMatch = matchPath('/teacher/replays/:debateId', pathname);
+  if (teacherReplayMatch) {
+    return renderTeacherPage(
+      <DebateReplayPage
+        debateId={teacherReplayMatch.params.debateId}
+        onBack={() => back('/teacher')}
+      />
+    );
+  }
+
+  const studentAnalyticsMatch = matchPath('/student/analytics/:tab', pathname);
+  if (studentAnalyticsMatch) {
+    const tab = normalizeStudentAnalyticsTab(studentAnalyticsMatch.params.tab);
+
+    return renderStudentPage(
+      <StudentAnalyticsCenter
+        defaultTab={tab}
+        onBack={() => navigate('/student')}
+        onViewReport={(debateId) => navigate(`/student/reports/${debateId}`)}
+        onViewReplay={(debateId) => navigate(`/student/replays/${debateId}`)}
+      />
+    );
+  }
+
+  const studentAnalyticsHomeMatch = matchPath('/student/analytics', pathname);
+  if (studentAnalyticsHomeMatch) {
+    return renderStudentPage(
+      <StudentAnalyticsCenter
+        defaultTab="history"
+        onBack={() => navigate('/student')}
+        onViewReport={(debateId) => navigate(`/student/reports/${debateId}`)}
+        onViewReplay={(debateId) => navigate(`/student/replays/${debateId}`)}
+      />
+    );
+  }
+
+  const studentPreparationMatch = matchPath('/student/preparation', pathname);
+  if (studentPreparationMatch) {
+    return renderStudentPage(
+      <PreparationAssistantPage onBack={() => navigate('/student')} />
+    );
+  }
+
+  const studentLobbyRoomMatch = matchPath('/student/lobby/rooms/:roomId', pathname);
+  if (studentLobbyRoomMatch) {
+    const roomId = studentLobbyRoomMatch.params.roomId;
+
+    return renderStudentPage(
+      <LobbyRoomWaiting
+        roomId={roomId}
+        onBack={() => navigate('/student/lobby')}
+        onEnterDebate={(targetRoomId) =>
+          navigate(`/student/debates/${targetRoomId}/arena`)
+        }
+      />
+    );
+  }
+
+  const studentLobbyMatch = matchPath('/student/lobby', pathname);
+  if (studentLobbyMatch) {
+    return renderStudentPage(
+      <DebateLobby
+        onBack={() => navigate('/student')}
+        onEnterRoom={(roomId) => navigate(`/student/lobby/rooms/${roomId}`)}
+      />
+    );
+  }
+
+  const studentCompetitionMatch = matchPath('/student/competition', pathname);
+  if (studentCompetitionMatch) {
+    return renderStudentPage(
+      <StudentCompetitionHub
+        onNavigateToWaiting={() => navigate('/student/waiting')}
+        onNavigateToPostMatch={(debateId) =>
+          navigate(`/student/debates/${debateId}/analytics`)
+        }
+        onNavigateToSettings={(tab = 'ability') =>
+          navigate(getStudentSettingsPath(tab))
+        }
+      />
+    );
+  }
+
+  const studentSettingsMatch = matchPath('/student/settings', pathname);
+  if (studentSettingsMatch) {
+    const initialTab = normalizeSettingsTab(searchParams.get('tab'));
+
+    return (
+      <RequireAuth>
+        <RequireRole role="student">
+          <SettingsLayout onBack={() => navigate('/student')}>
+            {user ? (
+              <UserProfile
+                user={user}
+                initialTab={initialTab}
+                onUpdate={(nextUser) => {
+                  if (nextUser) {
+                    updateUser(nextUser);
+                  }
+                }}
+              />
+            ) : null}
+          </SettingsLayout>
+        </RequireRole>
+      </RequireAuth>
+    );
+  }
+
+  const studentWaitingMatch = matchPath('/student/waiting', pathname);
+  if (studentWaitingMatch) {
+    return renderStudentCompetitionPage(
+      <StudentOnboarding
+        onBackToLogin={() => navigate('/student')}
+        onDebateStart={(debateId) => {
+          if (!debateId) {
+            return;
+          }
+
+          navigate(`/student/debates/${debateId}/arena`);
+        }}
+        onNavigateToAnalytics={(tab) =>
+          navigate(getStudentAnalyticsPath(tab === 'growth' ? 'growth' : 'history'))
+        }
+      />
+    );
+  }
+
+  const studentHomeMatch = matchPath('/student', pathname);
+  if (studentHomeMatch) {
+    return renderStudentPage(
+      <StudentCommandCenter
+        onViewReport={(debateId) => navigate(`/student/reports/${debateId}`)}
+        onViewReplay={(debateId) => navigate(`/student/replays/${debateId}`)}
+        onNavigateToAnalytics={(tab = 'history') =>
+          navigate(getStudentAnalyticsPath(tab))
+        }
+        onNavigateToPreparation={() => navigate('/student/preparation')}
+        onNavigateToLobby={() => navigate('/student/lobby')}
+        onEnterLobbyRoom={(roomId) => navigate(`/student/lobby/rooms/${roomId}`)}
+        onNavigateToSettings={(tab = 'info') =>
+          navigate(getStudentSettingsPath(tab))
+        }
+      />
+    );
+  }
+
+  const teacherHomeMatch = matchPath('/teacher', pathname);
+  if (teacherHomeMatch) {
+    return renderTeacherPage(
+      <TeacherDashboard
+        onLogout={handleLogout}
+        onNavigate={(page, debateId) => {
+          if (page === 'debate' && debateId) {
+            navigate(`/teacher/debates/${debateId}/arena`);
+            return;
+          }
+
+          if (page === 'analytics' && debateId) {
+            navigate(`/teacher/debates/${debateId}/analytics`);
+            return;
+          }
+
+          if (page === 'debate-report' && debateId) {
+            navigate(`/teacher/reports/${debateId}`);
+            return;
+          }
+
+          if (page === 'debate-replay' && debateId) {
+            navigate(`/teacher/replays/${debateId}`);
+          }
+        }}
+      />
+    );
+  }
+
+  const adminMatch = matchPath('/admin', pathname);
+  if (adminMatch) {
+    return renderAdminPage(<AdminDashboard onLogout={handleLogout} />);
+  }
+
+  const exploreMatch = matchPath('/explore/:section', pathname);
+  if (exploreMatch) {
+    return renderPublicPage(exploreMatch.params.section);
+  }
+
+  const homeMatch = matchPath('/', pathname);
+  if (homeMatch) {
+    return renderPublicPage('home');
+  }
+
+  return renderPublicPage('home');
 };
 
 export default AppRouter;

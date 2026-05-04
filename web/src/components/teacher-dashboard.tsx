@@ -34,6 +34,7 @@ import {
 } from '@/lib/debate-description';
 import { debateDebug } from '@/lib/utils';
 import UserProfile from './user-profile';
+import TeacherReservationManagement from './teacher-reservation-management';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
 import type {
@@ -64,6 +65,7 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronUp,
+  CalendarClock,
 } from 'lucide-react';
 
 interface DebateConfig {
@@ -287,6 +289,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const menuItems = [
     { id: 'new', label: '新建辩论', icon: Plus },
+    { id: 'reservations', label: '预约辩论赛', icon: CalendarClock },
     { id: 'history', label: '历史记录', icon: History },
     { id: 'students', label: '学生管理', icon: Users },
     { id: 'profile', label: '个人中心', icon: UserIcon },
@@ -997,9 +1000,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   if (loading) {
     return (
-      <div className='min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-amber-50 flex items-center justify-center'>
-        <div className='text-center'>
-          <Loader2 className='w-12 h-12 text-blue-600 animate-spin mx-auto mb-4' />
+      <div className='student-container flex min-h-[70vh] items-center justify-center py-10'>
+        <div className='student-card px-8 py-10 text-center'>
+          <Loader2 className='mx-auto mb-4 h-10 w-10 animate-spin text-slate-700' />
           <p className='text-slate-600'>加载中...</p>
         </div>
       </div>
@@ -1007,7 +1010,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   }
 
   return (
-    <div className='min-h-screen bg-gradient-to-br from-blue-50 via-slate-50 to-amber-50'>
+    <>
       {/* 错误提示 */}
       {error && (
         <div className='fixed top-4 right-4 z-50 max-w-md'>
@@ -1018,19 +1021,17 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      <div className='flex h-screen'>
+      <div className='student-shell flex h-screen'>
         {/* 侧边栏 */}
-        <div className='w-64 bg-white border-r border-slate-200 shadow-lg relative'>
+        <div className='student-card m-4 w-64 overflow-hidden'>
           <div className='p-6 border-b border-slate-200'>
             <div className='flex items-center gap-3'>
-              <div className='w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center'>
+              <div className='student-icon-bubble bg-[#151515] text-white'>
                 <BrainCircuit className='w-6 h-6 text-white' />
               </div>
               <div>
                 <h1 className='text-lg font-bold text-slate-900'>碳硅之辩</h1>
-                <p className='text-xs text-slate-500'>
-                  人机思辨平台 · 教师控制台
-                </p>
+                <p className='text-xs text-slate-500'>教师控制台</p>
               </div>
             </div>
           </div>
@@ -1042,10 +1043,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 mb-1 ${
-                    activeTab === item.id
-                      ? 'bg-blue-100 text-blue-700 border-l-4 border-blue-600'
-                      : 'hover:bg-slate-100 text-slate-700'
+                  className={`student-nav-pill w-full justify-start gap-3 mb-1 ${
+                    activeTab === item.id ? 'student-nav-pill-active' : ''
                   }`}
                 >
                   <IconComponent className='w-5 h-5' />
@@ -1056,10 +1055,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </nav>
 
           {/* 侧边栏底部 - 登出按钮 */}
-          <div className='absolute bottom-0 left-0 right-0 p-4 border-t border-slate-200'>
+          <div className='border-t border-slate-200 p-4'>
             <button
               onClick={onLogout}
-              className='w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 hover:bg-red-50 text-red-600 hover:text-red-700'
+              className='student-light-button w-full justify-start text-red-600 hover:text-red-700'
             >
               <Settings className='w-5 h-5' />
               <span className='font-medium'>退出登录</span>
@@ -1069,99 +1068,79 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
         {/* 主内容区 */}
         <div className='flex-1 overflow-auto'>
-          <div className='p-8'>
+          <div className='student-container py-6 pb-14'>
             {/* 页面标题和状态看板 */}
-            <div className='mb-8'>
-              <div className='flex justify-between items-center mb-6'>
+            <section className='student-card px-5 py-6 md:px-6'>
+              <div className='flex flex-wrap items-start justify-between gap-4'>
                 <div>
-                  <h1 className='text-3xl font-bold text-slate-900 mb-2'>
+                  <div className='student-kicker'>教师控制台</div>
+                  <h1 className='mt-4 text-[2rem] font-semibold leading-[1.06] tracking-[-0.05em] text-slate-900 md:text-[2.35rem]'>
                     教师控制台
                   </h1>
-                  <p className='text-slate-600'>管理辩论任务，监控学生进度</p>
+                  <p className='mt-3 text-[15px] leading-7 text-slate-600'>
+                    管理辩论任务，监控学生进度
+                  </p>
                 </div>
-                <div className='flex gap-2'>
-                  <Badge
-                    variant='outline'
-                    className='bg-blue-50 text-blue-700 border-blue-200'
-                  >
+                <div className='flex flex-wrap gap-2'>
+                  <Badge className='student-pill'>
                     <Users className='w-4 h-4 mr-1' />
                     {stats.managedStudents} 在管学生
                   </Badge>
-                  <Badge
-                    variant='outline'
-                    className='bg-emerald-50 text-emerald-700 border-emerald-200'
-                  >
+                  <Badge className='student-pill'>
                     <Play className='w-4 h-4 mr-1' />
                     {stats.activeDebates} 进行中
                   </Badge>
+                  <button type='button' onClick={onLogout} className='student-light-button h-auto'>
+                    退出登录
+                  </button>
                 </div>
               </div>
+            </section>
 
-              {/* 统计卡片 */}
-              <div className='grid grid-cols-1 md:grid-cols-4 gap-4'>
-                <Card className='bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200'>
-                  <CardContent className='p-4'>
-                    <div className='flex items-center justify-between'>
-                      <div>
-                        <p className='text-sm font-medium text-blue-700'>
-                          进行中辩论
-                        </p>
-                        <p className='text-2xl font-bold text-blue-900'>
-                          {stats.activeDebates}
-                        </p>
-                      </div>
-                      <Play className='w-8 h-8 text-blue-600 opacity-50' />
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className='bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200'>
-                  <CardContent className='p-4'>
-                    <div className='flex items-center justify-between'>
-                      <div>
-                        <p className='text-sm font-medium text-emerald-700'>
-                          已完成辩论
-                        </p>
-                        <p className='text-2xl font-bold text-emerald-900'>
-                          {stats.completedDebates}
-                        </p>
-                      </div>
-                      <CheckCircle className='w-8 h-8 text-emerald-600 opacity-50' />
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className='bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200'>
-                  <CardContent className='p-4'>
-                    <div className='flex items-center justify-between'>
-                      <div>
-                        <p className='text-sm font-medium text-amber-700'>
-                          今日辩论
-                        </p>
-                        <p className='text-2xl font-bold text-amber-900'>
-                          {stats.todayDebates}
-                        </p>
-                      </div>
-                      <Calendar className='w-8 h-8 text-amber-600 opacity-50' />
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className='bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200'>
-                  <CardContent className='p-4'>
-                    <div className='flex items-center justify-between'>
-                      <div>
-                        <p className='text-sm font-medium text-purple-700'>
-                          参与学生
-                        </p>
-                        <p className='text-2xl font-bold text-purple-900'>
-                          {stats.participatingStudents}
-                        </p>
-                      </div>
-                      <Users className='w-8 h-8 text-purple-600 opacity-50' />
-                    </div>
-                  </CardContent>
-                </Card>
+            <div className='mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
+              <div className='student-card-soft-blue p-4'>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <p className='text-sm font-medium text-slate-700'>进行中辩论</p>
+                    <p className='text-2xl font-bold text-slate-900'>
+                      {stats.activeDebates}
+                    </p>
+                  </div>
+                  <Play className='w-8 h-8 text-slate-700/50' />
+                </div>
+              </div>
+              <div className='student-card-soft-peach p-4'>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <p className='text-sm font-medium text-slate-700'>已完成辩论</p>
+                    <p className='text-2xl font-bold text-slate-900'>
+                      {stats.completedDebates}
+                    </p>
+                  </div>
+                  <CheckCircle className='w-8 h-8 text-slate-700/50' />
+                </div>
+              </div>
+              <div className='student-card-soft-lavender p-4'>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <p className='text-sm font-medium text-slate-700'>今日辩论</p>
+                    <p className='text-2xl font-bold text-slate-900'>
+                      {stats.todayDebates}
+                    </p>
+                  </div>
+                  <Calendar className='w-8 h-8 text-slate-700/50' />
+                </div>
+              </div>
+              <div className='student-card-muted p-4'>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <p className='text-sm font-medium text-slate-700'>参与学生</p>
+                    <p className='text-2xl font-bold text-slate-900'>
+                      {stats.participatingStudents}
+                    </p>
+                  </div>
+                  <Users className='w-8 h-8 text-slate-700/50' />
+                </div>
               </div>
             </div>
 
@@ -1609,6 +1588,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 </Card>
               </TabsContent>
 
+              <TabsContent value='reservations' className='space-y-6'>
+                <TeacherReservationManagement
+                  classes={classes}
+                  initialClassId={selectedClass}
+                />
+              </TabsContent>
+
               <TabsContent value='history'>
                 <Card>
                   <CardHeader>
@@ -1868,7 +1854,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 

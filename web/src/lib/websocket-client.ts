@@ -1,3 +1,5 @@
+import { getWebSocketBaseUrl as getRuntimeWebSocketBaseUrl } from './runtime-url';
+
 export type MessageType =
   | 'room_joined'
   | 'state_update'
@@ -30,6 +32,8 @@ export type MessageType =
   | 'debate_end_failed'
   | 'advance_blocked'
   | 'advance_deferred'
+  | 'moderator_transferred'
+  | 'moderator_missing'
   | 'ai_turn_failed'
   | 'ai_turn_skipped'
   | 'playback_controller_appointed'
@@ -46,6 +50,8 @@ export type MessageType =
 
 export type EventHandler = (data: Record<string, unknown>) => void;
 
+export const getWebSocketBaseUrl = getRuntimeWebSocketBaseUrl;
+
 interface WebSocketClientOptions {
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -54,27 +60,6 @@ interface WebSocketClientOptions {
   onClose?: (event?: CloseEvent) => void;
   onError?: (error: Event) => void;
 }
-
-type ImportMetaWithEnv = ImportMeta & {
-  env?: {
-    VITE_API_BASE_URL?: string;
-  };
-};
-
-export const getWebSocketBaseUrl = () => {
-  const envBase = (
-    (import.meta as ImportMetaWithEnv).env?.VITE_API_BASE_URL || ''
-  ).replace(/\/+$/, '');
-  if (envBase) {
-    return envBase
-      .replace(/^https:/, 'wss:')
-      .replace(/^http:/, 'ws:')
-      .replace(/\/api$/, '');
-  }
-
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}`;
-};
 
 export const buildDebateWebSocketUrl = (roomId: string, token?: string) => {
   const baseUrl = getWebSocketBaseUrl();
@@ -92,13 +77,14 @@ export default class WebSocketClient {
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private closedByUser = false;
+  private hasConnected = false;
   private currentRoomId: string | null = null;
   private currentToken: string | null = null;
   private readonly reconnectInterval: number;
   private readonly maxReconnectAttempts: number;
   private readonly heartbeatInterval: number;
   private readonly onOpen?: () => void;
-  private readonly onClose?: () => void;
+  private readonly onClose?: (event?: CloseEvent) => void;
   private readonly onError?: (error: Event) => void;
 
   constructor(options: WebSocketClientOptions = {}) {
@@ -129,6 +115,7 @@ export default class WebSocketClient {
 
       socket.onopen = () => {
         this.reconnectAttempts = 0;
+        this.hasConnected = true;
         this.startHeartbeat();
         console.debug('[WebSocketClient] Debate websocket connected', {
           roomId,
@@ -163,7 +150,7 @@ export default class WebSocketClient {
           closedByUser: this.closedByUser,
         });
         this.onClose?.(event);
-        if (!this.closedByUser) {
+        if (!this.closedByUser && this.hasConnected) {
           this.scheduleReconnect();
         }
       };
@@ -173,6 +160,7 @@ export default class WebSocketClient {
   disconnect(markClosedByUser = true): void {
     if (markClosedByUser) {
       this.closedByUser = true;
+      this.hasConnected = false;
     }
 
     if (this.reconnectTimer !== null) {

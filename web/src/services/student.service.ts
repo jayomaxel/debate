@@ -145,6 +145,141 @@ export interface DebateDetails {
   scores: Score[];
 }
 
+export type DebateVisibility = 'public' | 'private';
+export type LobbyRoomStatus = 'waiting' | 'full' | 'ongoing' | 'finished' | 'cancelled';
+export type DebateMode = 'teacher_assigned' | 'student_lobby' | 'teacher_reserved';
+export type ReservationStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'checkin_open'
+  | 'waiting'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+export type ReservationInvitationStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+export type ReservationReadStatus = 'unread' | 'read';
+export type ReservationCheckinStatus = 'not_checked_in' | 'checked_in' | 'absent';
+export type LobbySort = 'latest' | 'hot' | 'start_soon';
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface LobbyRoomMember {
+  user_id: string | null;
+  name: string;
+  avatar?: string | null;
+  role: 'debater_1' | 'debater_2' | 'debater_3' | 'debater_4';
+  stance?: 'positive' | 'negative' | null;
+  role_reason?: string | null;
+  seat_order?: number | null;
+  is_room_owner?: boolean;
+  can_speak?: boolean;
+  can_moderate?: boolean;
+  joined_at?: string | null;
+}
+
+export interface LobbyRoomPermissions {
+  role?: LobbyRoomMember['role'] | null;
+  can_speak: boolean;
+  can_moderate: boolean;
+  is_joined: boolean;
+}
+
+export interface LobbyRoom {
+  room_id: string;
+  debate_id: string;
+  topic: string;
+  room_name: string;
+  description?: string | null;
+  current_count: number;
+  capacity: number;
+  visibility: DebateVisibility;
+  has_password: boolean;
+  host_user_id?: string | null;
+  host_name?: string | null;
+  mode: DebateMode;
+  status: LobbyRoomStatus;
+  scheduled_start_time?: string | null;
+  allow_spectators: boolean;
+  created_at?: string | null;
+  members?: LobbyRoomMember[];
+  current_user_permissions?: LobbyRoomPermissions;
+  available_roles?: LobbyRoomMember['role'][];
+  can_join?: boolean;
+  join_block_reason?: string | null;
+  is_current_user_joined?: boolean;
+  current_user_role?: LobbyRoomMember['role'] | null;
+  joined?: boolean;
+  participant_role?: LobbyRoomMember['role'];
+  is_moderator?: boolean;
+}
+
+export interface LobbyRoomQuery {
+  keyword?: string;
+  visibility?: DebateVisibility | 'all';
+  status?: LobbyRoomStatus | 'all';
+  sort?: LobbySort;
+  page?: number;
+  page_size?: number;
+}
+
+export interface CreateLobbyRoomParams {
+  room_name?: string;
+  topic: string;
+  description?: string;
+  capacity: number;
+  visibility: DebateVisibility;
+  password?: string;
+  allow_spectators: boolean;
+}
+
+export interface JoinLobbyRoomParams {
+  password?: string;
+}
+
+export interface StudentReservation {
+  reservation_id: string;
+  room_id: string;
+  debate_id: string;
+  topic: string;
+  description?: string | null;
+  duration: number;
+  teacher_id: string;
+  teacher_name?: string | null;
+  scheduled_start_time?: string | null;
+  checkin_open_time?: string | null;
+  checkin_close_time?: string | null;
+  role?: LobbyRoomMember['role'] | null;
+  invitation_status: ReservationInvitationStatus;
+  read_status: ReservationReadStatus;
+  checkin_status: ReservationCheckinStatus;
+  checked_in_at?: string | null;
+  status: ReservationStatus;
+  room_status: LobbyRoomStatus;
+  can_check_in: boolean;
+  checkin_block_reason?: string | null;
+  room_entry_enabled: boolean;
+  checked_in?: boolean;
+  participant_role?: LobbyRoomMember['role'];
+  can_speak?: boolean;
+  can_moderate?: boolean;
+}
+
+export interface ReservationReminder {
+  reservation_id: string;
+  room_id: string;
+  topic: string;
+  reminder_type: string;
+  title: string;
+  scheduled_start_time?: string | null;
+  minutes_until_start?: number;
+  read_status?: ReservationReadStatus;
+}
+
 // 数据分析
 export interface StudentAnalytics {
   total_debates: number;
@@ -477,6 +612,131 @@ class StudentService {
       return await api.post<Debate>('/api/student/debates/join', params);
     } catch (error) {
       console.error('[StudentService] Join debate failed:', error);
+      throw error;
+    }
+  }
+
+  // ==================== 匹配大厅与预约 ====================
+
+  static async getLobbyRooms(params: LobbyRoomQuery = {}): Promise<PaginatedResponse<LobbyRoom>> {
+    try {
+      const { visibility, status, page, page_size, ...rest } = params;
+      return await api.get<PaginatedResponse<LobbyRoom>>('/api/student/lobby/rooms', {
+        params: {
+          ...rest,
+          ...(visibility && visibility !== 'all' ? { visibility } : {}),
+          ...(status && status !== 'all' ? { status } : {}),
+          ...(page ? { page } : {}),
+          ...(page_size ? { page_size } : {}),
+        },
+      });
+    } catch (error) {
+      console.error('[StudentService] Get lobby rooms failed:', error);
+      throw error;
+    }
+  }
+
+  static async getLobbyRoomDetail(roomId: string): Promise<LobbyRoom> {
+    try {
+      return await api.get<LobbyRoom>(`/api/student/lobby/rooms/${roomId}`);
+    } catch (error) {
+      console.error('[StudentService] Get lobby room detail failed:', error);
+      throw error;
+    }
+  }
+
+  static async createLobbyRoom(params: CreateLobbyRoomParams): Promise<LobbyRoom> {
+    try {
+      return await api.post<LobbyRoom>('/api/student/lobby/rooms', params);
+    } catch (error) {
+      console.error('[StudentService] Create lobby room failed:', error);
+      throw error;
+    }
+  }
+
+  static async joinLobbyRoom(roomId: string, params: JoinLobbyRoomParams = {}): Promise<LobbyRoom> {
+    try {
+      return await api.post<LobbyRoom>(`/api/student/lobby/rooms/${roomId}/join`, params);
+    } catch (error) {
+      console.error('[StudentService] Join lobby room failed:', error);
+      throw error;
+    }
+  }
+
+  static async getMyLobbyRooms(): Promise<LobbyRoom[]> {
+    try {
+      const response = await this.getLobbyRooms({
+        sort: 'latest',
+        page: 1,
+        page_size: 40,
+      });
+      const candidateRooms = response.items.filter((room) => room.current_count > 0);
+      const details = await Promise.allSettled(
+        candidateRooms.map((room) => this.getLobbyRoomDetail(room.room_id))
+      );
+      return details
+        .filter((result): result is PromiseFulfilledResult<LobbyRoom> => result.status === 'fulfilled')
+        .map((result) => result.value)
+        .filter((room) => !!room.current_user_permissions?.is_joined || !!room.is_current_user_joined);
+    } catch (error) {
+      console.error('[StudentService] Get my lobby rooms failed:', error);
+      throw error;
+    }
+  }
+
+  static async getMyReservations(params: {
+    status?: ReservationStatus | 'all';
+    include_cancelled?: boolean;
+    page?: number;
+    page_size?: number;
+  } = {}): Promise<PaginatedResponse<StudentReservation>> {
+    try {
+      const { status, ...rest } = params;
+      return await api.get<PaginatedResponse<StudentReservation>>('/api/student/reservations', {
+        params: {
+          ...rest,
+          ...(status && status !== 'all' ? { status } : {}),
+        },
+      });
+    } catch (error) {
+      console.error('[StudentService] Get my reservations failed:', error);
+      throw error;
+    }
+  }
+
+  static async respondReservationInvitation(
+    reservationId: string,
+    action: 'accept' | 'reject'
+  ): Promise<StudentReservation> {
+    try {
+      return await api.post<StudentReservation>(`/api/student/reservations/${reservationId}/respond`, {
+        action,
+      });
+    } catch (error) {
+      console.error('[StudentService] Respond reservation invitation failed:', error);
+      throw error;
+    }
+  }
+
+  static async checkInReservation(reservationId: string): Promise<StudentReservation> {
+    try {
+      return await api.post<StudentReservation>(`/api/student/reservations/${reservationId}/check-in`);
+    } catch (error) {
+      console.error('[StudentService] Check in reservation failed:', error);
+      throw error;
+    }
+  }
+
+  static async getReservationReminders(options: {
+    unread_only?: boolean;
+    limit?: number;
+  } = {}): Promise<ReservationReminder[]> {
+    try {
+      return await api.get<ReservationReminder[]>('/api/student/reservation-reminders', {
+        params: options,
+      });
+    } catch (error) {
+      console.error('[StudentService] Get reservation reminders failed:', error);
       throw error;
     }
   }
