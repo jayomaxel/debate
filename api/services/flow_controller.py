@@ -249,6 +249,55 @@ class DebateFlowController:
     def _now(self) -> datetime:
         return datetime.utcnow() + timedelta(hours=8)
 
+    def _resolve_segment_match_state(self, segment_id: str) -> Optional[str]:
+        mapping = {
+            "opening_positive_1": "OPENING_PRO",
+            "opening_negative_1": "OPENING_CON",
+            "questioning_1_ai2_ask": "REBUTTAL_CON2",
+            "questioning_1_pos_answer": "REBUTTAL_PRO2",
+            "questioning_2_pos2_ask": "REBUTTAL_PRO3",
+            "questioning_2_neg_answer": "REBUTTAL_CON3",
+            "questioning_3_ai3_ask": "REBUTTAL_CON3",
+            "questioning_3_pos_answer": "REBUTTAL_PRO3",
+            "questioning_4_pos3_ask": "SUMMARY_PRO",
+            "questioning_4_neg_answer": "SUMMARY_CON",
+            "questioning_neg_summary": "SUMMARY_CON",
+            "questioning_pos_summary": "SUMMARY_PRO",
+            "free_debate": "FREE_DEBATE",
+            "closing_negative_4": "CLOSING_CON",
+            "closing_positive_4": "CLOSING_PRO",
+        }
+        return mapping.get(str(segment_id or ""))
+
+    def _resolve_segment_duration(self, segment: Dict[str, Any]) -> int:
+        try:
+            return max(0, int(segment.get("duration") or 0))
+        except Exception:
+            return 0
+
+    def _resolve_segment_remaining(self, room_state: Any, segment: Dict[str, Any]) -> int:
+        if getattr(room_state, "timer_status", "running") == "paused":
+            try:
+                return max(0, int(getattr(room_state, "segment_time_remaining", 0) or 0))
+            except Exception:
+                return 0
+
+        segment_start_time = getattr(room_state, "segment_start_time", None)
+        if isinstance(segment_start_time, datetime):
+            elapsed = (self._now() - segment_start_time).total_seconds()
+            return max(0, self._resolve_segment_duration(segment) - int(elapsed))
+
+        try:
+            return max(0, int(getattr(room_state, "segment_time_remaining", 0) or self._resolve_segment_duration(segment)))
+        except Exception:
+            return self._resolve_segment_duration(segment)
+
+    @staticmethod
+    def _shift_datetime(value: Optional[datetime], delta: timedelta) -> Optional[datetime]:
+        if not isinstance(value, datetime):
+            return value
+        return value + delta
+
     def _build_ai_draft_key(self, segment_id: Optional[str], speaker_role: Optional[str]) -> str:
         return f"{str(segment_id or '')}:{str(speaker_role or '')}"
 
@@ -2729,21 +2778,41 @@ class DebateFlowController:
 
         current_speaker = None
         speaker_options = list(segment.get("speaker_roles") or [])
+        segment_id = str(segment.get("id") or "")
+        match_state = str(segment.get("match_state") or self._resolve_segment_match_state(segment_id) or "")
+        rebuttal_turn_type = "idle"
+        rebuttal_target_role = None
+        sub_timer_limit_sec = None
+        sub_timer_started_at = None
+        sub_timer_remaining = None
+        if "ask" in segment_id:
+            rebuttal_turn_type = "ask"
+            sub_timer_limit_sec = 10
+            sub_timer_started_at = now
+            sub_timer_remaining = 10
+        elif "answer" in segment_id:
+            rebuttal_turn_type = "answer"
+            sub_timer_limit_sec = 20
+            sub_timer_started_at = now
+            sub_timer_remaining = 20
         if segment.get("mode") == "fixed" and speaker_options:
             current_speaker = speaker_options[0]
         elif segment.get("mode") == "choice" and speaker_options:
             all_ai_options = all(str(role or "").startswith("ai_") for role in speaker_options)
             if all_ai_options:
                 current_speaker = self._select_random_ai_speaker(speaker_options)
+        if rebuttal_turn_type in {"ask", "answer"}:
+            rebuttal_target_role = current_speaker
 
         await room_manager.update_room_state(
             room_id,
             current_phase=segment["phase"],
+            match_state=match_state,
             phase_start_time=now if phase_changed else room_state.phase_start_time,
             time_remaining=int(segment["duration"]),
             current_speaker=current_speaker,
             segment_index=index,
-            segment_id=str(segment.get("id")),
+            segment_id=segment_id,
             segment_title=str(segment.get("title")),
             segment_start_time=now,
             segment_time_remaining=int(segment["duration"]),
@@ -2752,6 +2821,17 @@ class DebateFlowController:
             mic_owner_user_id=None,
             mic_owner_role=None,
             mic_expires_at=None,
+            timer_status="running",
+            timer_paused_at=None,
+            timer_warning_fired=False,
+            timer_warning_30_fired=False,
+            timer_warning_10_fired=False,
+            rebuttal_turn_type=rebuttal_turn_type,
+            rebuttal_target_role=rebuttal_target_role,
+            rebuttal_question_count=1 if rebuttal_turn_type in {"ask", "answer"} else 0,
+            sub_timer_started_at=sub_timer_started_at,
+            sub_timer_limit_sec=sub_timer_limit_sec,
+            sub_timer_remaining=sub_timer_remaining,
             free_debate_next_side=(
                 "human"
                 if segment.get("phase") == DebatePhase.FREE_DEBATE
@@ -2791,7 +2871,11 @@ class DebateFlowController:
                 room_id,
                 {
                     "type": "phase_change",
-                    "data": {"phase": segment["phase"], "timestamp": now.isoformat()},
+                    "data": {
+                        "phase": segment["phase"],
+                        "match_state": match_state,
+                        "timestamp": now.isoformat(),
+                    },
                 },
             )
 
@@ -2804,6 +2888,7 @@ class DebateFlowController:
                     "segment_id": segment.get("id"),
                     "segment_title": segment.get("title"),
                     "phase": segment["phase"],
+                    "match_state": match_state,
                     "speaker_mode": segment.get("mode"),
                     "speaker_options": speaker_options,
                     "timestamp": now.isoformat(),
@@ -2817,6 +2902,7 @@ class DebateFlowController:
                 "data": {
                     "time_remaining": int(segment["duration"]),
                     "phase": segment["phase"],
+                    "match_state": match_state,
                     "segment_index": index,
                     "segment_id": segment.get("id"),
                     "segment_title": segment.get("title"),
@@ -4590,6 +4676,115 @@ class DebateFlowController:
 
             logger.info(f"Stopped timer for room {room_id}")
 
+    async def pause_timer(
+        self,
+        room_id: str,
+        *,
+        actor_user_id: Optional[str] = None,
+        actor_role: Optional[str] = None,
+        db: Optional[Any] = None,
+        reason: str = "host_pause",
+    ) -> bool:
+        room_state = room_manager.get_room_state(room_id)
+        if not room_state or getattr(room_state, "timer_status", "running") == "paused":
+            return False
+
+        segments = self.segments.get(room_id) or self._build_default_segments()
+        current_index = int(getattr(room_state, "segment_index", 0) or 0)
+        segment = segments[current_index] if current_index < len(segments) else {}
+        remaining = self._resolve_segment_remaining(room_state, segment)
+        now = self._now()
+
+        await room_manager.update_room_state(
+            room_id,
+            timer_status="paused",
+            timer_paused_at=now,
+            segment_time_remaining=remaining,
+            time_remaining=remaining,
+        )
+        await room_manager.record_event(
+            room_id,
+            event_type="timer_pause",
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            payload={
+                "reason": reason,
+                "segment_id": getattr(room_state, "segment_id", None),
+                "remaining": remaining,
+                "timestamp": now.isoformat(),
+            },
+            db=db,
+        )
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "timer_pause",
+                "data": {
+                    "reason": reason,
+                    "segment_id": getattr(room_state, "segment_id", None),
+                    "remaining": remaining,
+                    "timestamp": now.isoformat(),
+                },
+            },
+        )
+        return True
+
+    async def resume_timer(
+        self,
+        room_id: str,
+        *,
+        actor_user_id: Optional[str] = None,
+        actor_role: Optional[str] = None,
+        db: Optional[Any] = None,
+        reason: str = "host_resume",
+    ) -> bool:
+        room_state = room_manager.get_room_state(room_id)
+        if not room_state or getattr(room_state, "timer_status", "running") != "paused":
+            return False
+
+        paused_at = getattr(room_state, "timer_paused_at", None)
+        if not isinstance(paused_at, datetime):
+            paused_at = self._now()
+        now = self._now()
+        delta = now - paused_at
+
+        updates: Dict[str, Any] = {
+            "timer_status": "running",
+            "timer_paused_at": None,
+        }
+        for field in ("segment_start_time", "mic_expires_at", "playback_gate_deadline_at", "sub_timer_started_at"):
+            value = getattr(room_state, field, None)
+            if isinstance(value, datetime):
+                updates[field] = self._shift_datetime(value, delta)
+
+        await room_manager.update_room_state(room_id, **updates)
+        await room_manager.record_event(
+            room_id,
+            event_type="timer_resume",
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            payload={
+                "reason": reason,
+                "segment_id": getattr(room_state, "segment_id", None),
+                "paused_for_sec": int(delta.total_seconds()),
+                "timestamp": now.isoformat(),
+            },
+            db=db,
+        )
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": "timer_resume",
+                "data": {
+                    "reason": reason,
+                    "segment_id": getattr(room_state, "segment_id", None),
+                    "paused_for_sec": int(delta.total_seconds()),
+                    "timestamp": now.isoformat(),
+                },
+            },
+        )
+        return True
+
     async def _timer_loop(self, room_id: str) -> None:
         """
         定时器循环
@@ -4614,22 +4809,15 @@ class DebateFlowController:
                         await self._finalize_playback_gate(room_id, status="timeout")
                         continue
 
-                if room_state.segment_start_time:
-                    if await self._release_expired_free_debate_mic(room_id, room_state):
-                        room_state = room_manager.get_room_state(room_id) or room_state
-                    segments = (
-                        self.segments.get(room_id) or self._build_default_segments()
-                    )
+                if getattr(room_state, "timer_status", "running") == "paused":
+                    segments = self.segments.get(room_id) or self._build_default_segments()
                     segment = (
                         segments[room_state.segment_index]
                         if room_state.segment_index < len(segments)
                         else None
                     )
                     if segment:
-                        elapsed = (
-                            (datetime.utcnow() + timedelta(hours=8)) - room_state.segment_start_time
-                        ).total_seconds()
-                        time_remaining = max(0, int(segment["duration"]) - int(elapsed))
+                        time_remaining = self._resolve_segment_remaining(room_state, segment)
                         await room_manager.update_room_state(
                             room_id,
                             time_remaining=time_remaining,
@@ -4645,6 +4833,82 @@ class DebateFlowController:
                                     "segment_index": room_state.segment_index,
                                     "segment_id": room_state.segment_id,
                                     "segment_title": room_state.segment_title,
+                                    "timer_status": "paused",
+                                    "paused_at": (
+                                        room_state.timer_paused_at.isoformat()
+                                        if isinstance(room_state.timer_paused_at, datetime)
+                                        else None
+                                    ),
+                                    "timestamp": self._now().isoformat(),
+                                },
+                            },
+                        )
+                    await asyncio.sleep(1)
+                    continue
+
+                if room_state.segment_start_time:
+                    if await self._release_expired_free_debate_mic(room_id, room_state):
+                        room_state = room_manager.get_room_state(room_id) or room_state
+                    segments = (
+                        self.segments.get(room_id) or self._build_default_segments()
+                    )
+                    segment = (
+                        segments[room_state.segment_index]
+                        if room_state.segment_index < len(segments)
+                        else None
+                    )
+                    if segment:
+                        time_remaining = self._resolve_segment_remaining(room_state, segment)
+                        warning_30 = (
+                            time_remaining <= 30
+                            and time_remaining > 10
+                            and not getattr(room_state, "timer_warning_30_fired", False)
+                        )
+                        warning_10 = (
+                            time_remaining <= 10
+                            and time_remaining > 0
+                            and not getattr(room_state, "timer_warning_10_fired", False)
+                        )
+                        if warning_30 or warning_10:
+                            await room_manager.update_room_state(
+                                room_id,
+                                timer_warning_fired=True,
+                                timer_warning_30_fired=bool(
+                                    getattr(room_state, "timer_warning_30_fired", False) or warning_30
+                                ),
+                                timer_warning_10_fired=bool(
+                                    getattr(room_state, "timer_warning_10_fired", False) or warning_10
+                                ),
+                            )
+                            await websocket_manager.broadcast_to_room(
+                                room_id,
+                                {
+                                    "type": "bell",
+                                    "data": {
+                                        "segment_id": room_state.segment_id,
+                                        "time_remaining": time_remaining,
+                                        "warning": 30 if warning_30 else 10,
+                                        "timestamp": self._now().isoformat(),
+                                    },
+                                },
+                            )
+                        await room_manager.update_room_state(
+                            room_id,
+                            time_remaining=time_remaining,
+                            segment_time_remaining=time_remaining,
+                        )
+                        await websocket_manager.broadcast_to_room(
+                            room_id,
+                            {
+                                "type": "timer_update",
+                                "data": {
+                                    "time_remaining": time_remaining,
+                                    "phase": room_state.current_phase,
+                                    "segment_index": room_state.segment_index,
+                                    "segment_id": room_state.segment_id,
+                                    "segment_title": room_state.segment_title,
+                                    "timer_status": getattr(room_state, "timer_status", "running"),
+                                    "warning_fired": getattr(room_state, "timer_warning_fired", False),
                                     "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
                                 },
                             },

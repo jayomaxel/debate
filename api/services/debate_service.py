@@ -39,7 +39,7 @@ class DebateService:
 
     @staticmethod
     def _room_source_value(mode: str) -> str:
-        return "teacher_created" if str(mode) == "teacher_reserved" else "student_created"
+        return "student_created" if str(mode) == "student_lobby" else "teacher_created"
 
     @staticmethod
     def _config_source_value(mode: str) -> str:
@@ -644,6 +644,16 @@ class DebateService:
             participation.last_seen_at = now
             participation.is_moderator = False
             participation.is_room_owner = False
+
+            if mode == "teacher_reserved":
+                invitation = db.query(DebateReservationInvitation).filter(
+                    DebateReservationInvitation.debate_id == debate.id,
+                    DebateReservationInvitation.student_id == student_uuid,
+                    DebateReservationInvitation.revoked_at.is_(None),
+                ).first()
+                if invitation:
+                    invitation.attendance_status = "absent"
+                    invitation.updated_at = now
 
             remaining = db.query(DebateParticipation).filter(
                 DebateParticipation.debate_id == debate.id,
@@ -1492,7 +1502,8 @@ class DebateService:
         # 获取该班级已发布的辩论
         debates = db.query(Debate).filter(
             Debate.class_id == student.class_id,
-            Debate.status.in_(['published', 'draft'])
+            Debate.status.in_(['published', 'draft']),
+            Debate.mode == 'teacher_assigned'
         ).order_by(Debate.created_at.desc()).all()
         
         result = []
@@ -1553,6 +1564,8 @@ class DebateService:
                 "topic": debate.topic,
                 "description": debate.description,
                 "duration": debate.duration,
+                "mode": DebateService._room_mode(debate),
+                "room_source": DebateService._room_source_value(DebateService._room_mode(debate)),
                 "invitation_code": debate.invitation_code,
                 "participant_count": participant_count,
                 "is_joined": participation is not None,
@@ -2643,19 +2656,23 @@ class DebateService:
         # 查找辩论
         debate = db.query(Debate).filter(
             Debate.invitation_code == invitation_code,
-            Debate.status.in_(['published', 'draft'])
+            Debate.status.in_(["published", "draft"])
         ).first()
-        
+
         if not debate:
             raise ValueError("邀请码无效或辩论未发布")
-        
+
+        mode = DebateService._room_mode(debate)
+        if mode != "teacher_assigned":
+            raise ValueError("该邀请码不属于教师发布的辩论")
+
         # 检查是否已参与
         existing = db.query(DebateParticipation).filter(
             DebateParticipation.debate_id == debate.id,
             DebateParticipation.user_id == uuid.UUID(student_id),
             DebateParticipation.left_at.is_(None),
         ).first()
-        
+
         if existing:
             return {
                 "id": str(debate.id),
@@ -2663,13 +2680,15 @@ class DebateService:
                 "description": debate.description,
                 "duration": debate.duration,
                 "status": debate.status,
+                "mode": mode,
+                "room_source": DebateService._room_source_value(mode),
                 "invitation_code": debate.invitation_code,
                 "role": existing.role,
                 "role_reason": existing.role_reason,
                 "is_joined": True,
                 "message": "验证成功，进入辩论"
             }
-            
+
         # 如果未参与，提示不在邀请名单中
         # 根据需求：老师创建房间并指定学生，学生只能验证进入，不能动态加入
         raise ValueError("您不在该辩论的邀请名单中")

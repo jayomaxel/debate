@@ -36,6 +36,39 @@ class DebatePhase(str, Enum):
     FINISHED = "finished"  # 已结束
 
 
+STANDARD_MATCH_STATE_MAP = {
+    "IDLE": DebatePhase.WAITING,
+    "OPENING_PRO": DebatePhase.OPENING,
+    "OPENING_CON": DebatePhase.OPENING,
+    "REBUTTAL_PRO2": DebatePhase.QUESTIONING,
+    "REBUTTAL_CON2": DebatePhase.QUESTIONING,
+    "REBUTTAL_PRO3": DebatePhase.QUESTIONING,
+    "REBUTTAL_CON3": DebatePhase.QUESTIONING,
+    "SUMMARY_PRO": DebatePhase.QUESTIONING,
+    "SUMMARY_CON": DebatePhase.QUESTIONING,
+    "FREE_DEBATE": DebatePhase.FREE_DEBATE,
+    "CLOSING_CON": DebatePhase.CLOSING,
+    "CLOSING_PRO": DebatePhase.CLOSING,
+    "FINISHED": DebatePhase.FINISHED,
+}
+
+STANDARD_MATCH_STATE_LABELS = {
+    "IDLE": "待机",
+    "OPENING_PRO": "正方开篇立论",
+    "OPENING_CON": "反方开篇立论",
+    "REBUTTAL_PRO2": "正方二辩攻辩",
+    "REBUTTAL_CON2": "反方二辩攻辩",
+    "REBUTTAL_PRO3": "正方三辩攻辩",
+    "REBUTTAL_CON3": "反方三辩攻辩",
+    "SUMMARY_PRO": "正方攻辩小结",
+    "SUMMARY_CON": "反方攻辩小结",
+    "FREE_DEBATE": "自由辩论",
+    "CLOSING_CON": "反方总结陈词",
+    "CLOSING_PRO": "正方总结陈词",
+    "FINISHED": "比赛结束",
+}
+
+
 class RoomState:
     """房间状态"""
 
@@ -52,6 +85,7 @@ class RoomState:
         segment_title: Optional[str] = None,
         segment_start_time: Optional[datetime] = None,
         segment_time_remaining: int = 0,
+        match_state: Optional[str] = None,
         speaker_mode: Optional[str] = None,
         speaker_options: Optional[List[str]] = None,
         mic_owner_user_id: Optional[str] = None,
@@ -79,6 +113,17 @@ class RoomState:
         playback_gate_started_at: Optional[datetime] = None,
         playback_gate_deadline_at: Optional[datetime] = None,
         pending_post_playback_action: Optional[str] = None,
+        timer_status: str = "idle",
+        timer_paused_at: Optional[datetime] = None,
+        timer_warning_fired: bool = False,
+        timer_warning_30_fired: bool = False,
+        timer_warning_10_fired: bool = False,
+        rebuttal_turn_type: Optional[str] = None,
+        rebuttal_target_role: Optional[str] = None,
+        rebuttal_question_count: int = 0,
+        sub_timer_started_at: Optional[datetime] = None,
+        sub_timer_limit_sec: Optional[int] = None,
+        sub_timer_remaining: Optional[int] = None,
         room_capacity: int = 4,
         required_roles: Optional[List[str]] = None,
         waiting_checklists: Optional[Dict[str, dict]] = None,
@@ -106,6 +151,7 @@ class RoomState:
         self.segment_title = segment_title
         self.segment_start_time = segment_start_time
         self.segment_time_remaining = segment_time_remaining
+        self.match_state = match_state
         self.speaker_mode = speaker_mode
         self.speaker_options = speaker_options or []
         self.mic_owner_user_id = mic_owner_user_id
@@ -133,6 +179,17 @@ class RoomState:
         self.playback_gate_started_at = playback_gate_started_at
         self.playback_gate_deadline_at = playback_gate_deadline_at
         self.pending_post_playback_action = pending_post_playback_action
+        self.timer_status = timer_status
+        self.timer_paused_at = timer_paused_at
+        self.timer_warning_fired = timer_warning_fired
+        self.timer_warning_30_fired = timer_warning_30_fired
+        self.timer_warning_10_fired = timer_warning_10_fired
+        self.rebuttal_turn_type = rebuttal_turn_type
+        self.rebuttal_target_role = rebuttal_target_role
+        self.rebuttal_question_count = rebuttal_question_count
+        self.sub_timer_started_at = sub_timer_started_at
+        self.sub_timer_limit_sec = sub_timer_limit_sec
+        self.sub_timer_remaining = sub_timer_remaining
         self.room_capacity = room_capacity
         self.required_roles = required_roles or list(
             ROOM_ROLE_ORDER[: max(1, min(len(ROOM_ROLE_ORDER), int(room_capacity or 4)))]
@@ -320,6 +377,36 @@ class RoomState:
             "ready_to_start": ready_to_start,
         }
 
+    @staticmethod
+    def normalize_match_state(value: object | None) -> Optional[str]:
+        normalized = str(value or "").strip().upper()
+        return normalized or None
+
+    @staticmethod
+    def match_state_to_phase(match_state: object | None) -> Optional[DebatePhase]:
+        normalized = RoomState.normalize_match_state(match_state)
+        if not normalized:
+            return None
+        return STANDARD_MATCH_STATE_MAP.get(normalized)
+
+    @staticmethod
+    def phase_to_match_state(phase: object | None, fallback: Optional[str] = None) -> Optional[str]:
+        normalized_phase = str(getattr(phase, "value", phase) or "").strip()
+        if fallback:
+            return RoomState.normalize_match_state(fallback)
+        reverse_map = {
+            DebatePhase.WAITING: "IDLE",
+            DebatePhase.OPENING: "OPENING_PRO",
+            DebatePhase.QUESTIONING: "REBUTTAL_PRO2",
+            DebatePhase.FREE_DEBATE: "FREE_DEBATE",
+            DebatePhase.CLOSING: "CLOSING_CON",
+            DebatePhase.FINISHED: "FINISHED",
+        }
+        for phase_key, match_state in reverse_map.items():
+            if normalized_phase == phase_key.value:
+                return match_state
+        return None
+
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
@@ -338,6 +425,7 @@ class RoomState:
                 self.segment_start_time.isoformat() if self.segment_start_time else None
             ),
             "segment_time_remaining": self.segment_time_remaining,
+            "match_state": self.match_state,
             "speaker_mode": self.speaker_mode,
             "speaker_options": self.speaker_options,
             "mic_owner_user_id": self.mic_owner_user_id,
@@ -379,6 +467,23 @@ class RoomState:
                 else None
             ),
             "pending_post_playback_action": self.pending_post_playback_action,
+            "timer_status": self.timer_status,
+            "timer_paused_at": (
+                self.timer_paused_at.isoformat() if self.timer_paused_at else None
+            ),
+            "timer_warning_fired": self.timer_warning_fired,
+            "timer_warning_30_fired": self.timer_warning_30_fired,
+            "timer_warning_10_fired": self.timer_warning_10_fired,
+            "rebuttal_turn_type": self.rebuttal_turn_type,
+            "rebuttal_target_role": self.rebuttal_target_role,
+            "rebuttal_question_count": self.rebuttal_question_count,
+            "sub_timer_started_at": (
+                self.sub_timer_started_at.isoformat()
+                if self.sub_timer_started_at
+                else None
+            ),
+            "sub_timer_limit_sec": self.sub_timer_limit_sec,
+            "sub_timer_remaining": self.sub_timer_remaining,
             "room_mode": self.room_mode,
             "visibility": self.visibility,
             "host_user_id": self.host_user_id,
@@ -1088,6 +1193,12 @@ class DebateRoomManager:
         for key, value in kwargs.items():
             if hasattr(room_state, key):
                 setattr(room_state, key, value)
+        if "match_state" in kwargs and kwargs.get("match_state") is not None and not kwargs.get("current_phase"):
+            inferred_phase = RoomState.match_state_to_phase(kwargs.get("match_state"))
+            if inferred_phase is not None:
+                room_state.current_phase = inferred_phase
+        if "current_phase" in kwargs and kwargs.get("current_phase") is not None and not kwargs.get("match_state"):
+            room_state.match_state = RoomState.phase_to_match_state(kwargs.get("current_phase"), getattr(room_state, "match_state", None))
 
         # 广播状态更新
         await self.broadcast_state_update(room_id)
@@ -1140,6 +1251,7 @@ class DebateRoomManager:
 
         # 更新房间状态
         room_state.current_phase = DebatePhase.OPENING
+        room_state.match_state = "OPENING_PRO"
         room_state.phase_start_time = (datetime.utcnow() + timedelta(hours=8))
         room_state.time_remaining = 0
         room_state.current_speaker = None
@@ -1155,6 +1267,17 @@ class DebateRoomManager:
         room_state.ai_turn_segment_id = None
         room_state.ai_turn_segment_title = None
         room_state.ai_turn_speaker_role = None
+        room_state.timer_status = "running"
+        room_state.timer_paused_at = None
+        room_state.timer_warning_fired = False
+        room_state.timer_warning_30_fired = False
+        room_state.timer_warning_10_fired = False
+        room_state.rebuttal_turn_type = None
+        room_state.rebuttal_target_role = None
+        room_state.rebuttal_question_count = 0
+        room_state.sub_timer_started_at = None
+        room_state.sub_timer_limit_sec = None
+        room_state.sub_timer_remaining = None
 
         logger.info(f"Debate started in room {room_id}")
 
@@ -1223,6 +1346,7 @@ class DebateRoomManager:
 
         # 更新房间状态
         room_state.current_phase = DebatePhase.FINISHED
+        room_state.match_state = "FINISHED"
         room_state.current_speaker = None
         room_state.time_remaining = 0
         room_state.segment_time_remaining = 0
@@ -1255,6 +1379,11 @@ class DebateRoomManager:
         room_state.playback_gate_started_at = None
         room_state.playback_gate_deadline_at = None
         room_state.pending_post_playback_action = None
+        room_state.timer_status = "idle"
+        room_state.timer_paused_at = None
+        room_state.timer_warning_fired = False
+        room_state.timer_warning_30_fired = False
+        room_state.timer_warning_10_fired = False
 
         logger.info(f"Debate ended in room {room_id}")
 
@@ -1452,6 +1581,49 @@ class DebateRoomManager:
         await websocket_manager.broadcast_to_room(
             room_id, {"type": "state_update", "data": room_state.to_dict()}
         )
+
+    async def record_event(
+        self,
+        room_id: str,
+        *,
+        event_type: str,
+        actor_user_id: Optional[str] = None,
+        actor_role: Optional[str] = None,
+        payload: Optional[dict] = None,
+        db: Optional[Session] = None,
+    ) -> bool:
+        if db is None or room_id not in self.rooms:
+            return False
+        room_state = self.rooms[room_id]
+        try:
+            debate_uuid = uuid.UUID(str(room_state.debate_id))
+            actor_uuid = uuid.UUID(str(actor_user_id)) if actor_user_id else None
+        except ValueError:
+            return False
+
+        try:
+            debate = db.execute(select(Debate).where(Debate.id == debate_uuid)).scalar_one_or_none()
+            if not debate:
+                return False
+            from models.debate import DebateEventLog
+
+            db.add(
+                DebateEventLog(
+                    debate_id=debate_uuid,
+                    room_id=str(room_id),
+                    event_type=str(event_type),
+                    match_state=str(getattr(room_state, "match_state", None) or RoomState.phase_to_match_state(room_state.current_phase) or ""),
+                    actor_user_id=actor_uuid,
+                    actor_role=str(actor_role) if actor_role else None,
+                    payload=payload or {},
+                )
+            )
+            db.commit()
+            return True
+        except Exception as exc:  # pragma: no cover - best effort
+            db.rollback()
+            logger.warning("Failed to record debate event: %s", exc)
+            return False
 
 
 # 创建全局房间管理器实例

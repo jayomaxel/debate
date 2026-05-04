@@ -38,22 +38,6 @@ vi.mock('@/store/auth.context', () => ({
   }),
 }));
 
-vi.mock('./waiting-status-bar', () => ({
-  default: ({
-    hasAssignedRole,
-    participantCount,
-    isReady,
-  }: {
-    hasAssignedRole: boolean;
-    participantCount: number;
-    isReady: boolean;
-  }) => (
-    <div>
-      WaitingStatusBar {String(hasAssignedRole)} {participantCount} {String(isReady)}
-    </div>
-  ),
-}));
-
 vi.mock('./debate-topic-card', () => ({
   default: ({ debate }: { debate: Debate }) => <div>DebateTopicCard {debate.topic}</div>,
 }));
@@ -121,12 +105,24 @@ describe('StudentOnboarding', () => {
       await screen.findByText('先确认你的辩位和参赛名单，四位辩手全部完成准备后会自动进入正式辩论。')
     ).toBeInTheDocument();
     expect(screen.getByText('DebateTopicCard AI 是否应该替代部分教师工作')).toBeInTheDocument();
-    expect(screen.getByText('WaitingStatusBar true 3 false')).toBeInTheDocument();
     expect(screen.getByText('邀请码 ABC123')).toBeInTheDocument();
     expect(screen.getByText('我的辩位')).toBeInTheDocument();
     expect(screen.getByText('二辩')).toBeInTheDocument();
     expect(screen.getByText('测试学生')).toBeInTheDocument();
+    expect(screen.getByText('准备状态')).toBeInTheDocument();
+    expect(screen.queryByText(/WaitingStatusBar/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '等待四人全部准备完成' })).toBeDisabled();
+  });
+
+  it('shows a back button and calls it on the waiting page', async () => {
+    vi.mocked(StudentService.getAvailableDebates).mockResolvedValue([baseDebate]);
+    const onBackToLogin = vi.fn();
+
+    render(<StudentOnboarding onBackToLogin={onBackToLogin} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '返回上一页' }));
+
+    expect(onBackToLogin).toHaveBeenCalledTimes(1);
   });
 
   it('loads participants on demand when the joined debate is missing roster data', async () => {

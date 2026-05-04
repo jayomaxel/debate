@@ -281,16 +281,27 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
         await StudentService.leaveLobbyRoom(room.room_id, { permanent });
         toast({
           variant: 'success',
-          title: permanent ? '已退出房间' : '已临时退出',
-          description: permanent
-            ? '你已从该房间移除，若要返回需重新从大厅加入。'
-            : '你仍保留当前席位，稍后可直接返回此房间。',
+          title: permanent
+            ? room.mode === 'teacher_reserved'
+              ? '已退出预约候场'
+              : '已退出房间'
+            : '已临时退出',
+          description:
+            permanent && room.mode === 'teacher_reserved'
+              ? '你已退出当前预约候场，该场次会从比赛入口列表中移除。'
+              : permanent
+                ? '你已从该房间移除，若要返回需重新从大厅加入。'
+                : '你仍保留当前席位，稍后可直接返回此房间。',
         });
         onBack();
       } catch (err: any) {
         toast({
           variant: 'destructive',
-          title: permanent ? '退出失败' : '临时退出失败',
+          title: permanent
+            ? room.mode === 'teacher_reserved'
+              ? '退出预约候场失败'
+              : '退出失败'
+            : '临时退出失败',
           description:
             err?.response?.data?.detail || err?.message || '请稍后重试',
         });
@@ -321,11 +332,6 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
       </div>
     );
   }
-
-  const occupancy = Math.min(
-    100,
-    (participantCount / Math.max(room.capacity, 1)) * 100
-  );
 
   return (
     <div className="student-container py-6 pb-14">
@@ -396,16 +402,24 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                       onClick={() => void handleLeaveRoom(false)}
                       className="student-light-button h-auto px-5 py-3"
                     >
-                      临时退出
+                      {room.mode === 'teacher_reserved' ? '临时离开' : '临时退出'}
                     </Button>
                     <Button
                       variant="outline"
                       onClick={() => void handleLeaveRoom(true)}
                       className="h-auto border-red-200 px-5 py-3 text-red-600 hover:bg-red-50"
                     >
-                      退出房间
+                      {room.mode === 'teacher_reserved' ? '退出预约候场' : '退出房间'}
                     </Button>
                   </>
+                ) : room.mode === 'teacher_reserved' ? (
+                  <Button
+                    variant="outline"
+                    disabled
+                    className="student-light-button h-auto px-5 py-3"
+                  >
+                    请先在预约卡片完成签到后再进入候场
+                  </Button>
                 ) : room.visibility === 'private' ? (
                   <Button
                     disabled={!room.can_join}
@@ -465,21 +479,10 @@ const LobbyRoomWaiting: React.FC<LobbyRoomWaitingProps> = ({
                 <CardTitle className="text-lg text-slate-900">候场成员</CardTitle>
               </CardHeader>
               <CardContent className="px-5 pb-5 pt-5 md:px-6">
-                <div className="h-2 overflow-hidden rounded-full bg-[#ece3d8]">
-                  <div
-                    className="h-full rounded-full bg-[#1b2436] transition-all"
-                    style={{ width: `${occupancy}%` }}
-                  />
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-                  <span>
-                    当前进度：{participantCount}/{room.capacity}
-                  </span>
-                  <span>
-                    {readyCount > 0
-                      ? `已完成准备 ${readyCount}/${requiredCount}`
-                      : '等待所有辩手进入并完成准备'}
-                  </span>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  {readyCount > 0
+                    ? `当前已有 ${readyCount}/${requiredCount} 位辩手完成全部准备，请继续等待其余同学完成清单。`
+                    : '当前房间尚未有人完成全部准备，请先核对辩位、材料与设备状态。'}
                 </div>
 
                 <div className="mt-5 grid gap-3 md:grid-cols-2">

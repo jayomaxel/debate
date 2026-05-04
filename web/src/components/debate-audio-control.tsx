@@ -1,24 +1,15 @@
-import React, { useState, useRef } from 'react';
-import { Button } from '@/components/ui/button';
+import React, { useRef, useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import AudioRecorder from '@/lib/audio-recorder';
-import {
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  AlertCircle,
-  Radio,
-} from 'lucide-react';
+import { AlertCircle, Mic, MicOff, Radio } from 'lucide-react';
 
 interface DebateAudioControlProps {
   isMuted?: boolean;
-  isVideoOff?: boolean;
   canGrabMic?: boolean;
   showSpeakingControls?: boolean;
   micStatusText?: string;
   onToggleMic?: () => void;
-  onToggleVideo?: () => void;
   onRequestStartRecording?: () => Promise<boolean>;
   onSendAudio?: (audioBlob: Blob, clientTranscript?: string) => void | Promise<void>;
   onGrabMic?: () => void;
@@ -27,12 +18,10 @@ interface DebateAudioControlProps {
 
 const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
   isMuted = false,
-  isVideoOff = false,
   canGrabMic = false,
   showSpeakingControls = true,
   micStatusText,
   onToggleMic,
-  onToggleVideo,
   onRequestStartRecording,
   onSendAudio,
   onGrabMic,
@@ -51,6 +40,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       clientTranscriptRef.current = '';
       return;
     }
+
     try {
       const recognition = new SpeechRecognition();
       recognition.lang = 'zh-CN';
@@ -82,10 +72,10 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
     } finally {
       speechRecognitionRef.current = null;
     }
+
     return clientTranscriptRef.current.trim();
   };
 
-  // 开始语音录制
   const handleStartRecording = async () => {
     try {
       setRecordingError(null);
@@ -93,9 +83,11 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
         setRecordingError('当前浏览器不支持麦克风录音，请使用 Chrome、Edge 或 Safari 的较新版本。');
         return;
       }
+
       if (!audioRecorderRef.current) {
         audioRecorderRef.current = new AudioRecorder({ sampleRate: 16000 });
       }
+
       await audioRecorderRef.current.startRecording();
       startClientSpeechRecognition();
       setIsRecording(true);
@@ -105,21 +97,21 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
     }
   };
 
-  // 停止语音录制并发送
   const handleStopRecording = async () => {
     try {
       if (!audioRecorderRef.current) {
         return;
       }
+
       const clientTranscript = stopClientSpeechRecognition();
       const audioBlob = await audioRecorderRef.current.stopRecording();
       setIsRecording(false);
+
       if (!audioBlob || audioBlob.size < 1024) {
         setRecordingError('录音内容太短或没有检测到声音，请重新录制后再发送。');
         return;
       }
-      
-      // 发送音频
+
       await onSendAudio?.(audioBlob, clientTranscript);
     } catch (err: any) {
       stopClientSpeechRecognition();
@@ -136,7 +128,6 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
     onEndTurn?.();
   };
 
-  // 抢麦
   const handleGrabMic = () => {
     if (!canGrabMic) {
       return;
@@ -154,8 +145,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
         </p>
       </div>
 
-      {/* 顶部状态图标 */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         <div className="relative group">
           <Button
             onClick={onToggleMic}
@@ -166,30 +156,14 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
                 : 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
             }`}
           >
-            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
             <span className="ml-2 text-sm font-semibold">{isMuted ? '麦克风关' : '麦克风开'}</span>
-          </Button>
-        </div>
-
-        <div className="relative group">
-          <Button
-            onClick={onToggleVideo}
-            size="icon"
-            className={`h-12 w-full rounded-[14px] shadow-sm transition-all duration-300 ${
-              isVideoOff
-                ? 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                : 'border border-[#d8e7f2] bg-[#e2eef8] text-slate-800 hover:bg-[#d6e8f6]'
-            }`}
-          >
-            {isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-            <span className="ml-2 text-sm font-semibold">{isVideoOff ? '摄像头关' : '摄像头开'}</span>
           </Button>
         </div>
       </div>
 
       <div className="h-px w-full bg-[#ece4da]" />
 
-      {/* 状态提示文本 */}
       {micStatusText && (
         <div className="rounded-[16px] border border-[#ece4da] bg-[#fbf7f1] px-4 py-4">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">当前状态</p>
@@ -200,7 +174,7 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
       )}
 
       {recordingError && (
-        <Alert variant="destructive" className="w-full py-2 px-3">
+        <Alert variant="destructive" className="w-full px-3 py-2">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-xs leading-relaxed">
             {recordingError}
@@ -208,62 +182,63 @@ const DebateAudioControl: React.FC<DebateAudioControlProps> = ({
         </Alert>
       )}
 
-      {/* 核心操作区 */}
       <div className="flex w-full flex-col gap-3">
-        {/* 抢麦按钮 - 移到这里，更显眼 */}
         {showSpeakingControls && canGrabMic && (
           <Button
             onClick={handleGrabMic}
             className="h-14 w-full rounded-[14px] border border-[#e0d8ef] bg-[#171717] text-white shadow-[0_18px_38px_rgba(15,23,42,0.2)] transition-colors hover:bg-[#2a2a2a]"
           >
-            <Radio className="w-5 h-5 text-white" />
+            <Radio className="h-5 w-5 text-white" />
             <span className="text-sm font-semibold text-white">抢麦发言</span>
           </Button>
         )}
 
-        {showSpeakingControls && <Button
-          onClick={async () => {
-            if (isRecording) {
-              await handleStopRecording();
-              return;
-            }
-            const allowed = (await onRequestStartRecording?.()) ?? false;
-            if (!allowed) return;
-            await handleStartRecording();
-          }}
-          className={`flex h-14 w-full items-center justify-center gap-2 rounded-[14px] shadow-sm transition-colors ${
-            isRecording
-              ? 'border border-red-200 bg-red-600 text-white hover:bg-red-700'
-              : 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-          }`}
-        >
-          {isRecording ? (
-            <>
-              <Radio className="w-5 h-5 text-white" />
-              <span className="font-medium text-white">停止录音</span>
-            </>
-          ) : (
-            <>
-              <Mic className="w-5 h-5" />
-              <span className="font-medium">点击录音</span>
-            </>
-          )}
-        </Button>}
+        {showSpeakingControls && (
+          <Button
+            onClick={async () => {
+              if (isRecording) {
+                await handleStopRecording();
+                return;
+              }
 
-        {showSpeakingControls && <Button
-          onClick={handleEndTurn}
-          className="flex h-12 w-full items-center justify-center gap-2 rounded-[14px] border border-[#f0d6c0] bg-[#f9ecde] text-slate-900 shadow-sm transition-colors hover:bg-[#f5e2cf]"
-        >
-          <div className="w-5 h-5 flex items-center justify-center border-2 border-current rounded-sm p-0.5">
-            <div className="w-full h-full bg-current rounded-[1px]" />
-          </div>
-          <span className="font-medium text-slate-900">结束发言</span>
-        </Button>}
+              const allowed = (await onRequestStartRecording?.()) ?? false;
+              if (!allowed) return;
+              await handleStartRecording();
+            }}
+            className={`flex h-14 w-full items-center justify-center gap-2 rounded-[14px] shadow-sm transition-colors ${
+              isRecording
+                ? 'border border-red-200 bg-red-600 text-white hover:bg-red-700'
+                : 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+            }`}
+          >
+            {isRecording ? (
+              <>
+                <Radio className="h-5 w-5 text-white" />
+                <span className="font-medium text-white">停止录音</span>
+              </>
+            ) : (
+              <>
+                <Mic className="h-5 w-5" />
+                <span className="font-medium">点击录音</span>
+              </>
+            )}
+          </Button>
+        )}
+
+        {showSpeakingControls && (
+          <Button
+            onClick={handleEndTurn}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-[14px] border border-[#f0d6c0] bg-[#f9ecde] text-slate-900 shadow-sm transition-colors hover:bg-[#f5e2cf]"
+          >
+            <div className="flex h-5 w-5 items-center justify-center rounded-sm border-2 border-current p-0.5">
+              <div className="h-full w-full rounded-[1px] bg-current" />
+            </div>
+            <span className="font-medium text-slate-900">结束发言</span>
+          </Button>
+        )}
       </div>
 
-      {/* 底部功能区 - 移除抢麦按钮 */}
-      <div className="mt-auto w-full">
-      </div>
+      <div className="mt-auto w-full" />
     </div>
   );
 };

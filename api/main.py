@@ -5,6 +5,7 @@ FastAPI application entrypoint.
 from pathlib import Path
 
 import uvicorn
+import database as database_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from config import settings
-from database import SessionLocal, get_redis, init_db, init_engine, init_redis
+from database import get_redis, init_db, init_engine, init_redis
 from logging_config import get_logger, setup_logging
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
 from services.kb_seed_service import KBSeedService
@@ -59,10 +60,13 @@ app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads"
 
 def _database_health() -> tuple[bool, str | None]:
     """Run a lightweight query to verify database connectivity."""
-    if SessionLocal is None:
-        init_engine()
+    if database_module.SessionLocal is None:
+        database_module.init_engine()
 
-    db = SessionLocal()
+    if database_module.SessionLocal is None:
+        return False, "database session factory is not initialized"
+
+    db = database_module.SessionLocal()
     try:
         db.execute(text("SELECT 1"))
         return True, None

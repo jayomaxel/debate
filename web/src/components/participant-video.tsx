@@ -1,17 +1,9 @@
 import React from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  User,
-  Crown,
-  Signal,
-} from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Crown, Mic, MicOff, Signal, User } from 'lucide-react';
 
 export interface Participant {
   id: string;
@@ -20,7 +12,6 @@ export interface Participant {
   position: '一辩' | '二辩' | '三辩' | '四辩';
   isAI?: boolean;
   isMuted?: boolean;
-  isVideoOff?: boolean;
   isSpeaking?: boolean;
   signalStrength?: number;
   role?: 'captain' | 'member';
@@ -31,7 +22,6 @@ interface ParticipantVideoProps {
   isActive?: boolean;
   isCurrentUser?: boolean;
   onToggleMic?: () => void;
-  onToggleVideo?: () => void;
 }
 
 const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
@@ -39,7 +29,6 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
   isActive = false,
   isCurrentUser = false,
   onToggleMic,
-  onToggleVideo
 }) => {
   const getSignalColor = (strength?: number) => {
     if (!strength) return 'text-slate-500';
@@ -50,13 +39,11 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
 
   const getActiveStyles = () => {
     if (!isActive) return '';
-
     return 'translate-y-[-2px] ring-2 ring-[#1f2937]/15 ring-offset-4 ring-offset-[#f8f5f1]';
   };
 
   const getSpeakingStyles = () => {
     if (!participant.isSpeaking) return '';
-
     return participant.isAI
       ? 'border-[#cfc3e8] bg-[#f3effa]'
       : 'border-[#c4dced] bg-[#eef6fb]';
@@ -65,13 +52,13 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
   const isOffline = typeof participant.signalStrength !== 'number';
 
   return (
-    <Card className={`
-      group relative overflow-hidden rounded-[26px] transition-all duration-300
-      bg-[linear-gradient(145deg,rgba(255,255,255,0.96)_0%,rgba(242,248,252,0.92)_54%,rgba(255,250,245,0.9)_100%)]
+    <Card
+      className={`
+      group relative overflow-hidden rounded-[26px] border bg-[linear-gradient(145deg,rgba(255,255,255,0.96)_0%,rgba(242,248,252,0.92)_54%,rgba(255,250,245,0.9)_100%)] shadow-[0_22px_54px_rgba(82,72,61,0.10)] transition-all duration-300
       ${getActiveStyles()} ${getSpeakingStyles()}
-      border ${participant.isSpeaking ? 'border-[#b9d6ea]' : 'border-white/80'}
-      shadow-[0_22px_54px_rgba(82,72,61,0.10)]
-    `}>
+      ${participant.isSpeaking ? 'border-[#b9d6ea]' : 'border-white/80'}
+    `}
+    >
       <CardContent className="relative h-[218px] p-5">
         <div className="pointer-events-none absolute inset-0 opacity-70">
           <div className="absolute -right-12 -top-14 h-32 w-32 rounded-full bg-[#d8e7f2]" />
@@ -107,11 +94,13 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
               </div>
             </div>
 
-            <div className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${
-              isOffline
-                ? 'border-slate-200 bg-white/70 text-slate-500'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-            }`}>
+            <div
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${
+                isOffline
+                  ? 'border-slate-200 bg-white/70 text-slate-500'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              }`}
+            >
               <Signal className={`h-3 w-3 ${getSignalColor(participant.signalStrength)}`} />
               {isOffline ? '未入场' : '在线'}
             </div>
@@ -119,9 +108,11 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
 
           <div className="mt-auto flex items-end justify-between gap-4">
             <div className="flex items-center gap-3">
-              <Avatar className={`h-16 w-16 border-4 border-white shadow-[0_16px_34px_rgba(82,72,61,0.14)] ${
-                participant.isSpeaking ? 'ring-4 ring-emerald-100' : ''
-              }`}>
+              <Avatar
+                className={`h-16 w-16 border-4 border-white shadow-[0_16px_34px_rgba(82,72,61,0.14)] ${
+                  participant.isSpeaking ? 'ring-4 ring-emerald-100' : ''
+                }`}
+              >
                 <AvatarImage src={participant.avatar} alt={participant.name} />
                 <AvatarFallback className="bg-[#e2eef8] text-slate-800">
                   <User className="h-8 w-8" />
@@ -129,9 +120,15 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
               </Avatar>
               <div>
                 <p className="text-xs text-slate-500">当前状态</p>
-                <p className={`mt-1 text-sm font-semibold ${
-                  participant.isSpeaking ? 'text-emerald-700' : isOffline ? 'text-slate-500' : 'text-slate-900'
-                }`}>
+                <p
+                  className={`mt-1 text-sm font-semibold ${
+                    participant.isSpeaking
+                      ? 'text-emerald-700'
+                      : isOffline
+                        ? 'text-slate-500'
+                        : 'text-slate-900'
+                  }`}
+                >
                   {participant.isSpeaking ? '正在发言' : isOffline ? '等待入场' : '准备中'}
                 </p>
               </div>
@@ -144,16 +141,14 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
             )}
           </div>
 
-          {/* AI 标识 */}
           {participant.isAI && (
-            <div className="absolute top-2 left-2">
+            <div className="absolute left-2 top-2">
               <Badge className="border-[#e0d8ef] bg-[#eae6f6] text-xs text-slate-800">
                 AI
               </Badge>
             </div>
           )}
 
-          {/* 控制按钮 */}
           {isCurrentUser && (
             <div className="absolute bottom-5 right-5 flex justify-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
               <Button
@@ -161,33 +156,20 @@ const ParticipantVideo: React.FC<ParticipantVideoProps> = ({
                 variant="secondary"
                 onClick={onToggleMic}
                 className={`h-8 w-8 rounded-full ${
-                  participant.isMuted ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-white/90 text-slate-800 hover:bg-white'
+                  participant.isMuted
+                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    : 'bg-white/90 text-slate-800 hover:bg-white'
                 }`}
               >
                 {participant.isMuted ? (
-                  <MicOff className="w-4 h-4 text-white" />
+                  <MicOff className="h-4 w-4 text-white" />
                 ) : (
-                  <Mic className="w-4 h-4 text-slate-800" />
-                )}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={onToggleVideo}
-                className={`h-8 w-8 rounded-full ${
-                  participant.isVideoOff ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-white/90 text-slate-800 hover:bg-white'
-                }`}
-              >
-                {participant.isVideoOff ? (
-                  <VideoOff className="w-4 h-4 text-white" />
-                ) : (
-                  <Video className="w-4 h-4 text-slate-800" />
+                  <Mic className="h-4 w-4 text-slate-800" />
                 )}
               </Button>
             </div>
           )}
 
-          {/* 静音状态指示 */}
           {participant.isMuted && !isCurrentUser && (
             <div className="absolute bottom-5 right-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-600/90 shadow-sm">

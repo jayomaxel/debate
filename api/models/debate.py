@@ -100,9 +100,35 @@ class Debate(Base):
     )
     documents: Mapped[List["Document"]] = relationship("Document", back_populates="debate")
     speeches: Mapped[List["Speech"]] = relationship("Speech", back_populates="debate")
+    event_logs: Mapped[List["DebateEventLog"]] = relationship(
+        "DebateEventLog",
+        back_populates="debate",
+    )
     
     def __repr__(self):
         return f"<Debate(id={self.id}, topic={self.topic[:30]}, status={self.status})>"
+
+
+class DebateEventLog(Base):
+    __tablename__ = "debate_event_logs"
+    __table_args__ = (
+        Index("idx_debate_event_logs_debate_created", "debate_id", "created_at"),
+        Index("idx_debate_event_logs_room_created", "room_id", "created_at"),
+        Index("idx_debate_event_logs_type_state", "event_type", "match_state"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    debate_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=False)
+    room_id = Column(String(64), nullable=False)
+    event_type = Column(String(32), nullable=False)
+    match_state = Column(String(32), nullable=True)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    actor_role = Column(String(32), nullable=True)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    debate: Mapped["Debate"] = relationship("Debate", back_populates="event_logs")
+    actor: Mapped["User"] = relationship("User", foreign_keys=[actor_user_id])
 
 
 class DebateParticipation(Base):

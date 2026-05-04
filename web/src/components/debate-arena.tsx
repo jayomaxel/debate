@@ -135,7 +135,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [currentSpeakerRole, setCurrentSpeakerRole] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [subtitle, setSubtitle] = useState<string>('');
   const [speakerMode, setSpeakerMode] = useState<string | null>(null);
@@ -522,7 +521,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       position: roleToPosition(role) as Participant['position'],
       isAI: false,
       isMuted: p && isCurrent ? isMuted : false,
-      isVideoOff: !isOnline || (isCurrent ? isVideoOff : false),
       isSpeaking: roleMatches(role, currentSpeakerRole) || (speakerMode === 'free' && roleMatches(role, micOwnerRole)),
       signalStrength: isOnline ? 85 : undefined, // 只有在线用户才有信号强度
       role: idx === 0 ? 'captain' : 'member',
@@ -960,10 +958,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
   const handleToggleMic = () => {
     setIsMuted(!isMuted);
-  };
-
-  const handleToggleVideo = () => {
-    setIsVideoOff(!isVideoOff);
   };
 
   const handleSendMessage = (message: string) => {
@@ -1541,7 +1535,6 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
                       isActive={!!participant.isSpeaking}
                       isCurrentUser={isCurrent}
                       onToggleMic={isCurrent ? handleToggleMic : undefined}
-                      onToggleVideo={isCurrent ? handleToggleVideo : undefined}
                     />
                   );
                 })}
@@ -1627,12 +1620,10 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
           <DebateAudioControl
             isMuted={isMuted}
-            isVideoOff={isVideoOff}
             canGrabMic={canGrabMic}
             showSpeakingControls={!isTeacherModeratorMode}
             micStatusText={micStatusText}
             onToggleMic={handleToggleMic}
-            onToggleVideo={handleToggleVideo}
             onRequestStartRecording={handleRequestStartRecording}
             onSendAudio={handleSendAudio}
             onGrabMic={handleGrabMic}

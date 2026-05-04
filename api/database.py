@@ -142,6 +142,13 @@ def _ensure_speech_columns():
 
     existing_columns = {col["name"] for col in inspector.get_columns("speeches")}
     required_columns = [
+        ("match_state", "VARCHAR(32)"),
+        ("side", "VARCHAR(16)"),
+        ("speaker_position", "INTEGER"),
+        ("started_at", "TIMESTAMP"),
+        ("ended_at", "TIMESTAMP"),
+        ("official_duration_sec", "INTEGER"),
+        ("actual_duration_sec", "INTEGER"),
         ("transcription_status", "VARCHAR(20)"),
         ("transcription_error", "TEXT"),
         ("is_valid_for_scoring", "BOOLEAN NOT NULL DEFAULT true"),

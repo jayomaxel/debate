@@ -58,6 +58,8 @@ export interface Debate {
   status: 'draft' | 'published' | 'in_progress' | 'completed';
   invitation_code: string;
   created_at: string;
+  mode?: DebateMode;
+  room_source?: 'teacher_created' | 'student_created';
   class_id?: string;
   student_ids?: string[];
   participant_count?: number;
@@ -702,14 +704,17 @@ class StudentService {
         page: 1,
         page_size: 40,
       });
-      const candidateRooms = response.items.filter((room) => room.current_count > 0);
       const details = await Promise.allSettled(
-        candidateRooms.map((room) => this.getLobbyRoomDetail(room.room_id))
+        response.items.map((room) => this.getLobbyRoomDetail(room.room_id))
       );
       return details
         .filter((result): result is PromiseFulfilledResult<LobbyRoom> => result.status === 'fulfilled')
         .map((result) => result.value)
-        .filter((room) => !!room.current_user_permissions?.is_joined || !!room.is_current_user_joined);
+        .filter(
+          (room) =>
+            room.mode === 'student_lobby' &&
+            (!!room.current_user_permissions?.is_joined || !!room.is_current_user_joined)
+        );
     } catch (error) {
       console.error('[StudentService] Get my lobby rooms failed:', error);
       throw error;

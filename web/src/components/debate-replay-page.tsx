@@ -139,7 +139,6 @@ const DebateReplayPage: React.FC<DebateReplayPageProps> = ({ debateId, onBack })
         position: roleToPosition(role) as Participant['position'],
         isAI: false,
         isMuted: false,
-        isVideoOff: false,
         isSpeaking: false,
         signalStrength: undefined,
         role: idx === 0 ? 'captain' : 'member',
