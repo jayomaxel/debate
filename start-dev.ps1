@@ -1,6 +1,6 @@
 param(
   [string]$PublicBaseUrl = "",
-  [int]$ApiPort = 7860,
+  [int]$ApiPort = 7861,
   [int]$WebPort = 8860
 )
 
@@ -109,7 +109,13 @@ $frontendDevCommand = Get-FrontendDevCommand -WebDir $webDir
 
 $backendCommand = @"
 `$env:DEBUG = 'true'
+`$env:DATABASE_URL = 'postgresql://pgvector:pgvector@127.0.0.1:5432/debate_system'
+`$env:REDIS_HOST = '127.0.0.1'
+`$env:REDIS_PORT = '6379'
+`$env:REDIS_DB = '0'
+`$env:REDIS_PASSWORD = ''
 Write-Host 'Starting API on http://localhost:$ApiPort (DEBUG=true)...' -ForegroundColor Cyan
+Write-Host 'Using local PostgreSQL and Redis for this dev session.' -ForegroundColor Green
 if ('$escapedPublicBaseUrl') {
   `$env:PUBLIC_BASE_URL = '$escapedPublicBaseUrl'
   Write-Host "Resolved PUBLIC_BASE_URL: `$env:PUBLIC_BASE_URL" -ForegroundColor Green
@@ -121,8 +127,11 @@ if ('$escapedPublicBaseUrl') {
 "@
 
 $frontendCommand = @"
+`$env:VITE_DEV_API_PROXY_TARGET = 'http://localhost:$ApiPort'
+`$env:VITE_DEV_WS_PROXY_TARGET = 'ws://localhost:$ApiPort'
 Write-Host "Starting Web on http://localhost:$WebPort ..." -ForegroundColor Cyan
 Write-Host "Web working directory: $webDir" -ForegroundColor Green
+Write-Host "Vite API proxy target: `$env:VITE_DEV_API_PROXY_TARGET" -ForegroundColor Green
 $frontendDevCommand
 "@
 

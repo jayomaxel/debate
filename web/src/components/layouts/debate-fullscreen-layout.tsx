@@ -7,5 +7,9 @@ interface DebateFullscreenLayoutProps {
 export default function DebateFullscreenLayout({
   children,
 }: DebateFullscreenLayoutProps) {
-  return <div className="min-h-screen bg-slate-950">{children}</div>;
+  return (
+    <div className="student-theme">
+      <div className="student-shell">{children}</div>
+    </div>
+  );
 }

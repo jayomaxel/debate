@@ -2,6 +2,7 @@
 认证API路由
 """
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Optional
@@ -67,17 +68,36 @@ async def get_public_classes(db: Session = Depends(get_db)):
     from models.user import User
     
     try:
-        classes = db.query(Class).join(User, Class.teacher_id == User.id).all()
+        student_counts = (
+            db.query(
+                User.class_id.label("class_id"),
+                func.count(User.id).label("student_count"),
+            )
+            .filter(User.user_type == "student")
+            .group_by(User.class_id)
+            .subquery()
+        )
+
+        classes = (
+            db.query(
+                Class,
+                User.name.label("teacher_name"),
+                func.coalesce(student_counts.c.student_count, 0).label("student_count"),
+            )
+            .join(User, Class.teacher_id == User.id)
+            .outerjoin(student_counts, student_counts.c.class_id == Class.id)
+            .order_by(Class.created_at.desc())
+            .all()
+        )
         
         result = []
-        for cls in classes:
-            teacher = db.query(User).filter(User.id == cls.teacher_id).first()
+        for cls, teacher_name, student_count in classes:
             result.append({
                 "id": str(cls.id),
                 "name": cls.name,
                 "code": cls.code,
-                "teacher_name": teacher.name if teacher else "未知",
-                "student_count": db.query(User).filter(User.class_id == cls.id).count()
+                "teacher_name": teacher_name or "未知",
+                "student_count": int(student_count or 0)
             })
         
         return {
