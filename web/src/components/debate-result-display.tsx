@@ -20,6 +20,8 @@ interface DebateResult {
   userStance: 'positive' | 'negative';
   duration: string;
   completedAt?: string | null;
+  viewLabel?: string;
+  viewValue?: string;
   keyMetrics: {
     logicScore: number;
     argumentScore: number;
@@ -88,8 +90,10 @@ const DebateResultDisplay: React.FC<DebateResultDisplayProps> = ({
   const infoItems = [
     { label: '辩题', value: result.debateTopic },
     {
-      label: '你的立场',
-      value: result.userStance === 'positive' ? '正方（支持）' : '反方（反对）',
+      label: result.viewLabel || '你的立场',
+      value:
+        result.viewValue ||
+        (result.userStance === 'positive' ? '正方（支持）' : '反方（反对）'),
     },
     { label: '辩论时长', value: result.duration },
     completedAt ? { label: '完成时间', value: completedAt } : null,

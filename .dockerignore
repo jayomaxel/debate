@@ -24,6 +24,10 @@ Thumbs.db
 *.log
 api/logs/
 
+# Local secrets
+.env
+api/.env
+
 # Dependencies (will be installed in container)
 node_modules/
 web/node_modules/
@@ -51,6 +55,7 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+~$*
 
 # Backups
 backups/

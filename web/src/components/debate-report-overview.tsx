@@ -3,11 +3,19 @@ import { useAuth } from '../store/auth.context';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import AbilityRadarChart from './ability-radar-chart';
 import SpeakingTimeChart from './speaking-time-chart';
 import DebateResultDisplay from './debate-result-display';
 import AIMentorFeedback from './ai-mentor-feedback';
 import type { DebateReport } from '../services/student.service';
+import { formatDebateRole, formatDebateStance } from '@/lib/student-display';
 import {
   Award,
   BarChart3,
@@ -28,6 +36,8 @@ interface DebateReportOverviewProps {
   onDownloadReport?: (format: 'pdf' | 'excel') => void | Promise<void>;
   onViewDetails?: () => void;
   studentMode?: boolean;
+  selectedParticipantId?: string;
+  onSelectedParticipantIdChange?: (id: string) => void;
 }
 
 const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
@@ -36,16 +46,76 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
   onDownloadReport,
   onViewDetails,
   studentMode = false,
+  selectedParticipantId,
+  onSelectedParticipantIdChange,
 }) => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('summary');
+  const isTeacherView = !studentMode && user?.user_type !== 'student';
+  const effectiveSelectedParticipantId =
+    selectedParticipantId ||
+    (studentMode
+      ? report.participants.find((p) => p.user_id === user?.id)?.user_id || 'all'
+      : 'all');
+
+  const selectedParticipant = useMemo(() => {
+    if (effectiveSelectedParticipantId === 'all') return null;
+    return report.participants.find((p) => p.user_id === effectiveSelectedParticipantId) || null;
+  }, [effectiveSelectedParticipantId, report.participants]);
+
+  const totalSpeechCount = report.participants.reduce(
+    (sum, participant) => sum + Number(participant.final_score?.speech_count || 0),
+    0,
+  );
+  const scoredParticipants = report.participants.filter(
+    (participant) => Number(participant.final_score?.speech_count || 0) > 0,
+  );
+  const averageScore = (key: keyof DebateReport['participants'][number]['final_score']) =>
+    scoredParticipants.length > 0
+      ? scoredParticipants.reduce(
+          (sum, participant) => sum + Number(participant.final_score?.[key] || 0),
+          0,
+        ) / scoredParticipants.length
+      : 0;
+  const classAverageScore = averageScore('overall_score');
+  const aggregateParticipant = {
+    user_id: 'all',
+    name: '全场/班级视角',
+    role: 'all',
+    stance: 'positive',
+    is_ai: false,
+    has_speech: totalSpeechCount > 0,
+    score_status: totalSpeechCount > 0 ? 'ready' : 'no_speech',
+    speech_count: totalSpeechCount,
+    final_score: {
+      logic_score: averageScore('logic_score'),
+      argument_score: averageScore('argument_score'),
+      response_score: averageScore('response_score'),
+      persuasion_score: averageScore('persuasion_score'),
+      teamwork_score: averageScore('teamwork_score'),
+      overall_score: classAverageScore,
+      speech_count: totalSpeechCount,
+      total_duration: report.participants.reduce(
+        (sum, participant) => sum + Number(participant.final_score?.total_duration || 0),
+        0,
+      ),
+    },
+  };
+
+  const displayParticipant =
+    selectedParticipant ||
+    (!studentMode && aggregateParticipant) ||
+    report.participants.find((p) => p.user_id === user?.id) ||
+    report.participants.find((p) => !p.is_ai) ||
+    report.participants[0];
+
+  const participantLabel = selectedParticipant
+    ? `${selectedParticipant.name} · ${formatDebateRole(selectedParticipant.role)}`
+    : '全场/班级视角';
 
   const debateResult = useMemo(() => {
     const stats = report.statistics as any;
-    const participant =
-      report.participants.find((p) => p.user_id === user?.id) ||
-      report.participants.find((p) => !p.is_ai) ||
-      report.participants[0];
+    const participant = displayParticipant;
 
     const humanStats = stats?.human || null;
     const aiStats = stats?.ai || null;
@@ -69,6 +139,10 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
       aiScore: Math.round(resolvedAiStats?.avg_score || 0),
       debateTopic: report.topic,
       userStance: (participant?.stance || 'positive') as 'positive' | 'negative',
+      viewLabel: selectedParticipant ? '查看对象' : '当前视角',
+      viewValue: selectedParticipant
+        ? `${selectedParticipant.name}（${formatDebateStance(selectedParticipant.stance)}）`
+        : '全场/班级视角',
       duration: `${report.duration || 0} 分钟`,
       completedAt: report.end_time,
       keyMetrics: {
@@ -86,15 +160,10 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         teamworkScore: resolvedAiStats?.avg_teamwork_score || 0,
       },
     };
-  }, [report, user?.id]);
+  }, [displayParticipant, report, selectedParticipant]);
 
   const abilityScores = useMemo(() => {
-    const participant =
-      report.participants.find((p) => p.user_id === user?.id) ||
-      report.participants.find((p) => !p.is_ai) ||
-      report.participants[0];
-
-    const scores = participant?.final_score;
+    const scores = displayParticipant?.final_score;
     if (!scores) return [];
 
     return [
@@ -134,7 +203,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         color: '#10b981',
       },
     ];
-  }, [report, user?.id]);
+  }, [displayParticipant]);
 
   const speakingData = useMemo(() => {
     const humanColors = ['#171717', '#3a3a3a', '#5a5a5a', '#7c7c7c'];
@@ -148,6 +217,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
           ? aiColors[idx % aiColors.length]
           : humanColors[idx % humanColors.length];
         return {
+          participantId: p.user_id,
           name: p.name,
           role: p.role,
           time: duration,
@@ -209,8 +279,9 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
   }, [report]);
 
   const userParticipant = report.participants.find((p) => p.user_id === user?.id);
-  const userSpeechCount = userParticipant?.final_score?.speech_count || 0;
-  const userScore = userParticipant?.final_score?.overall_score || 0;
+  const summaryParticipant = selectedParticipant || (studentMode ? userParticipant : null);
+  const userSpeechCount = summaryParticipant?.final_score?.speech_count || totalSpeechCount;
+  const userScore = summaryParticipant?.final_score?.overall_score || classAverageScore;
   const grade =
     userScore >= 90 ? 'S' : userScore >= 85 ? 'A+' : userScore >= 80 ? 'A' : userScore >= 75 ? 'B+' : 'B';
 
@@ -224,6 +295,34 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
 
   return (
     <div className="space-y-5">
+      {isTeacherView ? (
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">报告查看视角</div>
+              <div className="mt-1 text-sm text-slate-500">{participantLabel}</div>
+            </div>
+            <Select
+              value={effectiveSelectedParticipantId}
+              onValueChange={(value) => onSelectedParticipantIdChange?.(value)}
+            >
+              <SelectTrigger className="w-full sm:w-[260px]">
+                <SelectValue placeholder="选择查看对象" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全场/班级视角</SelectItem>
+                {report.participants.map((participant) => (
+                  <SelectItem key={participant.user_id} value={participant.user_id}>
+                    {participant.name} · {formatDebateRole(participant.role)}
+                    {participant.is_ai ? ' · AI' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <DebateResultDisplay
         result={debateResult}
         studentMode={studentMode}
@@ -256,7 +355,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
             <SummaryStat
               icon={<Award className="h-6 w-6 text-slate-700" />}
               value={userScore.toFixed(1)}
-              label="综合得分"
+              label={summaryParticipant ? '综合得分' : '全场均分'}
               badge={
                 debateResult.winner === 'human'
                   ? '胜利'
@@ -275,13 +374,13 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
             <SummaryStat
               icon={<Users className="h-6 w-6 text-slate-700" />}
               value={String(userSpeechCount)}
-              label="发言次数"
+              label={summaryParticipant ? '发言次数' : '全场发言次数'}
               tone="student-card-soft-lavender"
             />
             <SummaryStat
               icon={<Star className="h-6 w-6 text-slate-700" />}
               value={grade}
-              label="表现等级"
+              label={summaryParticipant ? '表现等级' : '整体等级'}
               tone="student-card-muted"
             />
           </div>
@@ -312,7 +411,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
 
         <TabsContent value="speaking" className="space-y-5">
           <SpeakingTimeChart
-            data={speakingData}
+            data={selectedParticipant ? speakingData.filter((item) => item.participantId === selectedParticipant.user_id) : speakingData}
             title="详细发言时间分析"
             studentMode={studentMode}
           />
@@ -321,11 +420,42 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         <TabsContent value="feedback" className="space-y-5">
           <AIMentorFeedback
             feedbacks={mentorFeedbacks}
-            userName={resolvedStudentName}
+            userName={selectedParticipant?.name || resolvedStudentName}
             studentMode={studentMode}
           />
         </TabsContent>
       </Tabs>
+
+      {isTeacherView && !selectedParticipant ? (
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardContent className="p-4">
+            <div className="mb-3 text-sm font-semibold text-slate-900">参与者表现列表</div>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              {report.participants.map((participant) => (
+                <button
+                  key={participant.user_id}
+                  type="button"
+                  onClick={() => onSelectedParticipantIdChange?.(participant.user_id)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-slate-400 hover:bg-white"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-slate-900">{participant.name}</div>
+                    <Badge className="student-pill">
+                      {participant.is_ai ? 'AI' : formatDebateStance(participant.stance)}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {formatDebateRole(participant.role)} · 发言 {participant.final_score?.speech_count || 0} 次
+                  </div>
+                  <div className="mt-3 text-2xl font-bold text-slate-900">
+                    {Number(participant.final_score?.overall_score || 0).toFixed(1)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 };

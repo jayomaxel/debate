@@ -39,6 +39,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        APT_MIRROR: ${APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
     image: debate-api:local
     container_name: aidebate-api
     environment:
@@ -68,7 +71,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 90s
     restart: unless-stopped
 
   web:

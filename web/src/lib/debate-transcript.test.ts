@@ -3,6 +3,7 @@ import {
   normalizeTranscriptEntry,
   upsertTranscriptEntry,
   TRANSCRIPT_PENDING_TEXT,
+  isTranscriptAudioEntry,
 } from './debate-transcript';
 
 describe('debate-transcript', () => {
@@ -33,6 +34,23 @@ describe('debate-transcript', () => {
     expect(mergedTwice[0].message).toBe('这是补回来的ASR文本');
     expect(mergedTwice[0].audioUrl).toBe('/uploads/audio-001.mp3');
     expect(mergedTwice[0].isPendingText).toBe(false);
+  });
+
+  it('should not treat human audio as a playable transcript audio entry', () => {
+    const humanEntry = normalizeTranscriptEntry({
+      speech_id: 'speech-human-001',
+      role: 'debater_1',
+      name: '瀛︾敓A',
+      audio_url: '/uploads/human-001.mp3',
+      audio_format: 'mp3',
+      timestamp: '2026-03-21T10:10:00+08:00',
+    });
+
+    expect(humanEntry.isAI).toBe(false);
+    expect(humanEntry.audioUrl).toBe('/uploads/human-001.mp3');
+    expect(humanEntry.audioFormat).toBe('mp3');
+    expect(humanEntry.audioSourceUrl).toBe('/uploads/human-001.mp3');
+    expect(isTranscriptAudioEntry(humanEntry)).toBe(false);
   });
 
   it('should merge text-first and audio-later events into one transcript entry', () => {

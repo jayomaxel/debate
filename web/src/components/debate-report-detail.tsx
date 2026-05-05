@@ -10,8 +10,14 @@ import {
 } from 'lucide-react';
 import StudentService, { type DebateReport } from '../services/student.service';
 import { useAuth } from '../store/auth.context';
-import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   formatDebateRole,
   formatDebateStance,
@@ -23,22 +29,32 @@ interface ReportDetailProps {
   debateId: string;
   onBack: () => void;
   studentMode?: boolean;
+  initialReport?: DebateReport | null;
+  selectedParticipantId?: string;
+  onSelectedParticipantIdChange?: (id: string) => void;
 }
 
 export const DebateReportDetail: React.FC<ReportDetailProps> = ({
   debateId,
   onBack,
   studentMode = false,
+  initialReport = null,
+  selectedParticipantId,
+  onSelectedParticipantIdChange,
 }) => {
-  const { toast } = useToast();
-  const [report, setReport] = useState<DebateReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [report, setReport] = useState<DebateReport | null>(initialReport);
+  const [loading, setLoading] = useState(!initialReport);
   const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
   const { user } = useAuth();
 
   useEffect(() => {
+    if (initialReport) {
+      setReport(initialReport);
+      setLoading(false);
+      return;
+    }
     loadReport();
-  }, [debateId]);
+  }, [debateId, initialReport]);
 
   const loadReport = async () => {
     try {
@@ -120,8 +136,31 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
     );
   }
 
+  const effectiveSelectedParticipantId =
+    selectedParticipantId ||
+    (studentMode
+      ? report.participants.find((p) => p.user_id === user?.id)?.user_id || 'all'
+      : 'all');
+  const selectedParticipant =
+    effectiveSelectedParticipantId === 'all'
+      ? null
+      : report.participants.find((p) => p.user_id === effectiveSelectedParticipantId) || null;
   const participant =
-    report.participants.find((p) => p.user_id === user?.id) || report.participants[0];
+    selectedParticipant ||
+    (studentMode ? report.participants.find((p) => p.user_id === user?.id) : null) ||
+    null;
+  const isTeacherView = !studentMode && user?.user_type !== 'student';
+  const visibleSpeeches = selectedParticipant
+    ? report.speeches.filter((speech) => {
+        if (selectedParticipant.is_ai) {
+          return `ai:${speech.speaker_role}` === selectedParticipant.user_id;
+        }
+        return (
+          speech.speaker_user_id === selectedParticipant.user_id ||
+          (speech.speaker_type === 'human' && speech.speaker_name === selectedParticipant.name)
+        );
+      })
+    : report.speeches;
 
   const statistics = report.statistics as unknown as {
     positive: { avg_score: number; speech_count: number; total_duration: number };
@@ -134,10 +173,6 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
     : 'min-h-screen bg-gray-50 p-6';
   const contentWidthClassName = studentMode ? '' : 'max-w-6xl mx-auto';
   const cardClassName = studentMode ? 'student-card p-5 md:p-6' : 'bg-white rounded-lg shadow-sm p-6';
-  const mutedCardClassName = studentMode
-    ? 'student-card-muted p-4'
-    : 'bg-white rounded-lg shadow-sm p-6';
-
   return (
     <div className={detailShellClassName}>
       <div className={contentWidthClassName}>
@@ -266,81 +301,103 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
         </div>
       )}
 
-      {participant ? (
-        <div className={contentWidthClassName}>
-          <div className={cardClassName}>
-            <h2 className="mb-4 flex items-center gap-2 text-xl font-semibold text-slate-900">
+      <div className={contentWidthClassName}>
+        <div className={cardClassName}>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-xl font-semibold text-slate-900">
               <Award className="h-5 w-5 text-slate-700" />
               个人表现总览
             </h2>
-            <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-              <div className="student-card-soft-blue p-4 text-center">
-                <div className="text-3xl font-bold text-slate-900">
-                  {participant.final_score.overall_score.toFixed(1)}
-                </div>
-                <div className="mt-1 text-sm text-slate-600">总分</div>
-              </div>
-              <div className="student-card-muted p-4 text-center">
-                <div className="text-3xl font-bold text-slate-900">
-                  {participant.final_score.speech_count}
-                </div>
-                <div className="mt-1 text-sm text-slate-600">发言次数</div>
-              </div>
-              <div className="student-card-soft-lavender p-4 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {formatDebateStance(participant.stance)}
-                </div>
-                <div className="mt-1 text-sm text-slate-600">立场</div>
-              </div>
-              <div className="student-card-soft-peach p-4 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {formatDebateRole(participant.role)}
-                </div>
-                <div className="mt-1 text-sm text-slate-600">角色</div>
-              </div>
-            </div>
+            {isTeacherView ? (
+              <Select
+                value={effectiveSelectedParticipantId}
+                onValueChange={(value) => onSelectedParticipantIdChange?.(value)}
+              >
+                <SelectTrigger className="w-full sm:w-[260px]">
+                  <SelectValue placeholder="选择查看对象" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全场/班级视角</SelectItem>
+                  {report.participants.map((item) => (
+                    <SelectItem key={item.user_id} value={item.user_id}>
+                      {item.name} · {formatDebateRole(item.role)}
+                      {item.is_ai ? ' · AI' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+          </div>
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-              <div className="student-card-muted p-3 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {participant.final_score.logic_score.toFixed(1)}
+          {participant ? (
+            <>
+              <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="student-card-soft-blue p-4 text-center">
+                  <div className="text-3xl font-bold text-slate-900">
+                    {participant.final_score.overall_score.toFixed(1)}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">总分</div>
                 </div>
-                <div className="text-sm text-slate-600">逻辑建构力</div>
-              </div>
-              <div className="student-card-muted p-3 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {participant.final_score.argument_score.toFixed(1)}
+                <div className="student-card-muted p-4 text-center">
+                  <div className="text-3xl font-bold text-slate-900">
+                    {participant.final_score.speech_count}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">发言次数</div>
                 </div>
-                <div className="text-sm text-slate-600">AI 核心知识运用</div>
-              </div>
-              <div className="student-card-muted p-3 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {participant.final_score.response_score.toFixed(1)}
+                <div className="student-card-soft-lavender p-4 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {formatDebateStance(participant.stance)}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">立场</div>
                 </div>
-                <div className="text-sm text-slate-600">批判性思维</div>
-              </div>
-              <div className="student-card-muted p-3 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {participant.final_score.persuasion_score.toFixed(1)}
+                <div className="student-card-soft-peach p-4 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {formatDebateRole(participant.role)}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">角色</div>
                 </div>
-                <div className="text-sm text-slate-600">语言表达力</div>
               </div>
-              <div className="student-card-muted p-3 text-center">
-                <div className="text-2xl font-bold text-slate-900">
-                  {participant.final_score.teamwork_score.toFixed(1)}
+
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="student-card-muted p-3 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {participant.final_score.logic_score.toFixed(1)}
+                  </div>
+                  <div className="text-sm text-slate-600">逻辑建构力</div>
                 </div>
-                <div className="text-sm text-slate-600">AI 伦理与科技素养</div>
+                <div className="student-card-muted p-3 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {participant.final_score.argument_score.toFixed(1)}
+                  </div>
+                  <div className="text-sm text-slate-600">AI 核心知识运用</div>
+                </div>
+                <div className="student-card-muted p-3 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {participant.final_score.response_score.toFixed(1)}
+                  </div>
+                  <div className="text-sm text-slate-600">批判性思维</div>
+                </div>
+                <div className="student-card-muted p-3 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {participant.final_score.persuasion_score.toFixed(1)}
+                  </div>
+                  <div className="text-sm text-slate-600">语言表达力</div>
+                </div>
+                <div className="student-card-muted p-3 text-center">
+                  <div className="text-2xl font-bold text-slate-900">
+                    {participant.final_score.teamwork_score.toFixed(1)}
+                  </div>
+                  <div className="text-sm text-slate-600">AI 伦理与科技素养</div>
+                </div>
               </div>
+            </>
+          ) : (
+            <div className="student-card-muted p-4 text-center text-slate-500">
+              {isTeacherView ? '当前为全场视角，请选择具体参与者查看个人表现。' : '您未参与该辩论，无法查看个人表现数据'}
             </div>
-          </div>
+          )}
         </div>
-      ) : (
-        <div className={contentWidthClassName}>
-          <div className={`${mutedCardClassName} text-center text-slate-500`}>
-            您未参与该辩论，无法查看个人表现数据
-          </div>
-        </div>
-      )}
+      </div>
 
       <div className={contentWidthClassName}>
         <div className={cardClassName}>
@@ -349,7 +406,7 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
             发言详情与评分
           </h2>
           <div className="space-y-4">
-            {report.speeches.map((speech) => (
+            {visibleSpeeches.map((speech) => (
               <div key={speech.id} className="student-card-muted p-4">
                 <div className="mb-2 flex items-start justify-between gap-4">
                   <div>
@@ -413,6 +470,11 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
                 )}
               </div>
             ))}
+            {visibleSpeeches.length === 0 ? (
+              <div className="student-card-muted p-4 text-center text-sm text-slate-500">
+                当前查看对象暂无有效发言记录
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

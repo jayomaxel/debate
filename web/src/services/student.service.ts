@@ -52,6 +52,8 @@ export interface AssessmentResult {
 // 辩论
 export interface Debate {
   id: string;
+  room_id?: string;
+  debate_id?: string;
   topic: string;
   description?: string;
   duration: number;
@@ -405,6 +407,9 @@ export interface DebateReport {
     role: string;
     stance: string;
     is_ai?: boolean;
+    has_speech?: boolean;
+    score_status?: 'ready' | 'no_speech' | 'processing' | 'failed' | string;
+    speech_count?: number;
     final_score: {
       logic_score: number;
       argument_score: number;
@@ -418,6 +423,7 @@ export interface DebateReport {
   }>;
   speeches: Array<{
     id: string;
+    speaker_user_id?: string | null;
     speaker_type?: string;
     speaker_role?: string;
     speaker_name?: string;

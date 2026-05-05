@@ -53,6 +53,8 @@ export type EventHandler = (data: Record<string, unknown>) => void;
 
 export const getWebSocketBaseUrl = getRuntimeWebSocketBaseUrl;
 
+const replayableMessageTypes = new Set<MessageType>(['room_joined', 'state_update']);
+
 interface WebSocketClientOptions {
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -74,6 +76,7 @@ export const buildDebateWebSocketUrl = (roomId: string, token?: string) => {
 export default class WebSocketClient {
   private socket: WebSocket | null = null;
   private handlers = new Map<MessageType, Set<EventHandler>>();
+  private lastReplayableMessages = new Map<MessageType, Record<string, unknown>>();
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
@@ -102,6 +105,7 @@ export default class WebSocketClient {
     this.closedByUser = false;
     this.currentRoomId = roomId;
     this.currentToken = token;
+    this.lastReplayableMessages.clear();
 
     const url = buildDebateWebSocketUrl(roomId, token);
     const debugUrl = buildDebateWebSocketUrl(roomId);
@@ -151,6 +155,15 @@ export default class WebSocketClient {
           closedByUser: this.closedByUser,
         });
         this.onClose?.(event);
+        if (!this.closedByUser && !this.hasConnected) {
+          reject(
+            new Error(
+              event.reason
+                ? `WebSocket closed before connection: ${event.reason}`
+                : `WebSocket closed before connection with code ${event.code}`
+            )
+          );
+        }
         if (!this.closedByUser && this.hasConnected) {
           this.scheduleReconnect();
         }
@@ -192,6 +205,14 @@ export default class WebSocketClient {
     }
 
     this.handlers.get(type)?.add(handler);
+    const lastPayload = this.lastReplayableMessages.get(type);
+    if (lastPayload) {
+      window.queueMicrotask(() => {
+        if (this.handlers.get(type)?.has(handler)) {
+          handler(lastPayload);
+        }
+      });
+    }
   }
 
   off(type: MessageType, handler: EventHandler): void {
@@ -210,6 +231,9 @@ export default class WebSocketClient {
       }
 
       const payload = message.data || {};
+      if (replayableMessageTypes.has(message.type)) {
+        this.lastReplayableMessages.set(message.type, payload);
+      }
       this.handlers.get(message.type)?.forEach((handler) => handler(payload));
     } catch (error) {
       console.error('[WebSocketClient] Failed to parse message:', error);

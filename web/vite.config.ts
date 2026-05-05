@@ -6,7 +6,7 @@ import path from 'path';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const apiProxyTarget =
-    env.VITE_DEV_API_PROXY_TARGET || 'http://localhost:7860';
+    env.VITE_DEV_API_PROXY_TARGET || 'http://localhost:7861';
   const wsProxyTarget =
     env.VITE_DEV_WS_PROXY_TARGET || apiProxyTarget.replace(/^http/, 'ws');
 

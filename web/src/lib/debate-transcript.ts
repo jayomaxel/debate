@@ -78,6 +78,15 @@ const normalizeString = (value: unknown): string => {
   return String(value).trim();
 };
 
+const isAiSpeaker = (entry: TranscriptEntry): boolean => {
+  if (entry.isAI === true) {
+    return true;
+  }
+
+  const role = normalizeString(entry.speakerRole).toLowerCase();
+  return role === 'ai' || role.startsWith('ai_');
+};
+
 const resolveSpeechId = (event: TranscriptEvent): string => {
   return normalizeString(event.speech_id || event.message_id || event.id);
 };
@@ -356,6 +365,10 @@ export const upsertTranscriptEntry = (
 };
 
 export const isTranscriptAudioEntry = (entry: TranscriptEntry): boolean => {
+  if (!isAiSpeaker(entry)) {
+    return false;
+  }
+
   if (entry.audioSourceUrl || entry.audioUrl || entry.audioFormat) {
     return true;
   }

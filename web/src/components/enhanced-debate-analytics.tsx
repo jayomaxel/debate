@@ -59,6 +59,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
   const [loading, setLoading] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedParticipantId, setSelectedParticipantId] = useState('all');
   const isStudentMode = userType === 'student';
 
   useEffect(() => {
@@ -69,6 +70,10 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
         setLoading(true);
         const data = await StudentService.getReport(debateId);
         setReport(data);
+        const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
+        setSelectedParticipantId(
+          isStudentMode && currentUserParticipant ? currentUserParticipant.user_id : 'all',
+        );
       } catch (error) {
         toast({
           title: '获取报告失败',
@@ -81,7 +86,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
     };
 
     fetchReport();
-  }, [debateId, toast]);
+  }, [debateId, isStudentMode, toast, user?.id]);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -232,6 +237,8 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
             report={report}
             studentName={resolvedStudentName}
             studentMode={isStudentMode}
+            selectedParticipantId={selectedParticipantId}
+            onSelectedParticipantIdChange={setSelectedParticipantId}
             onDownloadReport={(format) => handleDownloadReport(format)}
           />
         );
@@ -277,6 +284,10 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
                         setLoading(true);
                         const data = await StudentService.getReport(item.debate_id);
                         setReport(data);
+                        const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
+                        setSelectedParticipantId(
+                          isStudentMode && currentUserParticipant ? currentUserParticipant.user_id : 'all',
+                        );
                         setActiveView('overview');
                       } catch (error) {
                         toast({

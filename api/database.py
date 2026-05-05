@@ -59,12 +59,15 @@ def init_redis():
             _redis_missing_dependency_logged = True
         return None
 
+    redis_password = settings.REDIS_PASSWORD or None
     redis_client = redis.Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         db=settings.REDIS_DB,
-        password=settings.REDIS_PASSWORD,
+        password=redis_password,
         decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
     )
     return redis_client
 

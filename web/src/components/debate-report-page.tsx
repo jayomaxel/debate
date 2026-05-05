@@ -5,6 +5,7 @@ import StudentService, { type DebateReport } from '../services/student.service';
 import DebateReportOverview from './debate-report-overview';
 import { DebateReportDetail } from './debate-report-detail';
 import { ChevronLeft, Download, Loader2 } from 'lucide-react';
+import { useAuth } from '../store/auth.context';
 
 interface DebateReportPageProps {
   debateId: string;
@@ -20,10 +21,12 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
   studentMode = false,
 }) => {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [report, setReport] = useState<DebateReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
   const [view, setView] = useState<'overview' | 'detail'>('overview');
+  const [selectedParticipantId, setSelectedParticipantId] = useState('all');
 
   useEffect(() => {
     const fetchReport = async () => {
@@ -31,6 +34,10 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
         setLoading(true);
         const data = await StudentService.getReport(debateId);
         setReport(data);
+        const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
+        setSelectedParticipantId(
+          studentMode && currentUserParticipant ? currentUserParticipant.user_id : 'all',
+        );
       } catch (error: any) {
         toast({
           title: '获取报告失败',
@@ -42,7 +49,7 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
       }
     };
     fetchReport();
-  }, [debateId, toast]);
+  }, [debateId, studentMode, toast, user?.id]);
 
   const handleDownload = async (format: 'pdf' | 'excel') => {
     try {
@@ -107,6 +114,9 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
         debateId={debateId}
         onBack={() => setView('overview')}
         studentMode={studentMode}
+        initialReport={report}
+        selectedParticipantId={selectedParticipantId}
+        onSelectedParticipantIdChange={setSelectedParticipantId}
       />
     );
   }
@@ -153,6 +163,8 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
             report={report}
             studentName={studentName}
             studentMode
+            selectedParticipantId={selectedParticipantId}
+            onSelectedParticipantIdChange={setSelectedParticipantId}
             onDownloadReport={(format) => handleDownload(format)}
             onViewDetails={() => setView('detail')}
           />
@@ -198,6 +210,8 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
           report={report}
           studentName={studentName}
           studentMode={studentMode}
+          selectedParticipantId={selectedParticipantId}
+          onSelectedParticipantIdChange={setSelectedParticipantId}
           onDownloadReport={(format) => handleDownload(format)}
           onViewDetails={() => setView('detail')}
         />

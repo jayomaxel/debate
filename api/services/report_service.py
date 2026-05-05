@@ -4,9 +4,10 @@
 """
 import asyncio
 import json
+import uuid
 
 from logging_config import get_logger
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime
@@ -79,6 +80,15 @@ class Report:
 
 class ReportGenerator:
     """报告生成器"""
+
+    @staticmethod
+    def _uuid_value(value: Any) -> Any:
+        if value is None or isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError, AttributeError):
+            return value
     
     @staticmethod
     def generate_student_report(
@@ -98,16 +108,18 @@ class ReportGenerator:
             报告对象
         """
         try:
+            debate_uuid = ReportGenerator._uuid_value(debate_id)
+            student_uuid = ReportGenerator._uuid_value(student_id)
             # 获取辩论信息
             debate = db.execute(
-                select(Debate).where(Debate.id == debate_id)
+                select(Debate).where(Debate.id == debate_uuid)
             ).scalar_one_or_none()
             
             if not debate:
                 logger.error(f"辩论不存在: {debate_id}")
                 return None
             
-            viewer = db.execute(select(User).where(User.id == student_id)).scalar_one_or_none()
+            viewer = db.execute(select(User).where(User.id == student_uuid)).scalar_one_or_none()
             if not viewer:
                 logger.error(f"用户不存在: user_id={student_id}")
                 return None
@@ -115,8 +127,8 @@ class ReportGenerator:
             if viewer.user_type == "student":
                 participation = db.execute(
                     select(DebateParticipation).where(
-                        DebateParticipation.debate_id == debate_id,
-                        DebateParticipation.user_id == student_id
+                        DebateParticipation.debate_id == debate_uuid,
+                        DebateParticipation.user_id == student_uuid
                     )
                 ).scalar_one_or_none()
 
@@ -126,7 +138,7 @@ class ReportGenerator:
 
             all_participations = (
                 db.execute(
-                    select(DebateParticipation).where(DebateParticipation.debate_id == debate_id)
+                    select(DebateParticipation).where(DebateParticipation.debate_id == debate_uuid)
                 )
                 .scalars()
                 .all()
@@ -144,7 +156,7 @@ class ReportGenerator:
             speeches: List[Speech] = (
                 db.execute(
                     select(Speech)
-                    .where(Speech.debate_id == debate_id)
+                    .where(Speech.debate_id == debate_uuid)
                     .where(Speech.is_valid_for_scoring.is_(True))
                     .order_by(Speech.timestamp)
                 )
@@ -161,7 +173,7 @@ class ReportGenerator:
                 db.execute(
                     select(Score, Speech)
                     .join(Speech, Score.speech_id == Speech.id)
-                    .where(Speech.debate_id == debate_id)
+                    .where(Speech.debate_id == debate_uuid)
                     .where(Speech.is_valid_for_scoring.is_(True))
                 )
                 .all()
@@ -197,13 +209,18 @@ class ReportGenerator:
                     key = str(sp.speaker_role)
                     ai_speeches_by_role.setdefault(key, []).append(sp)
 
-            participants: List[Dict] = []
-
             def _compute_final_score(speech_list: List[Speech]) -> Dict:
                 speech_count = len(speech_list)
                 total_duration = sum(max(0, int(s.duration or 0)) for s in speech_list)
                 scored = [score_by_speech_id.get(str(s.id)) for s in speech_list]
                 scored = [s for s in scored if s is not None]
+                score_status = (
+                    "no_speech"
+                    if speech_count == 0
+                    else "ready"
+                    if len(scored) >= speech_count
+                    else "processing"
+                )
                 if not scored:
                     return {
                         "logic_score": 0.0,
@@ -213,6 +230,8 @@ class ReportGenerator:
                         "teamwork_score": 0.0,
                         "overall_score": 0.0,
                         "speech_count": speech_count,
+                        "scored_count": len(scored),
+                        "score_status": score_status,
                         "total_duration": total_duration,
                     }
                 logic_avg = sum(float(s.logic_score) for s in scored) / len(scored)
@@ -229,33 +248,79 @@ class ReportGenerator:
                     "teamwork_score": round(teamwork_avg, 2),
                     "overall_score": round(overall_avg, 2),
                     "speech_count": speech_count,
+                    "scored_count": len(scored),
+                    "score_status": score_status,
                     "total_duration": total_duration,
                 }
 
+            participants: List[Dict] = []
+            seen_participant_keys = set()
+
+            for participation_item in all_participations:
+                role = str(participation_item.role)
+                stance = str(participation_item.stance)
+                if participation_item.user_id:
+                    user_id_str = str(participation_item.user_id)
+                    user = user_by_id.get(user_id_str)
+                    speech_list_for_user = human_speeches_by_user.get(user_id_str, [])
+                    final_score = _compute_final_score(speech_list_for_user)
+                    participants.append(
+                        {
+                            "user_id": user_id_str,
+                            "name": user.name if user else "未知用户",
+                            "role": role,
+                            "stance": stance,
+                            "is_ai": False,
+                            "has_speech": bool(speech_list_for_user),
+                            "score_status": final_score["score_status"],
+                            "speech_count": final_score["speech_count"],
+                            "final_score": final_score,
+                        }
+                    )
+                    seen_participant_keys.add(f"human:{user_id_str}")
+                    continue
+
+                ai_role = f"ai_{role.split('_', 1)[1]}" if role.startswith("debater_") else role
+                speech_list_for_ai = ai_speeches_by_role.get(ai_role, [])
+                final_score = _compute_final_score(speech_list_for_ai)
+                participants.append(
+                    {
+                        "user_id": f"ai:{ai_role}",
+                        "name": _ai_role_to_name(ai_role),
+                        "role": ai_role,
+                        "stance": stance or "negative",
+                        "is_ai": True,
+                        "has_speech": bool(speech_list_for_ai),
+                        "score_status": final_score["score_status"],
+                        "speech_count": final_score["speech_count"],
+                        "final_score": final_score,
+                    }
+                )
+                seen_participant_keys.add(f"ai:{ai_role}")
+
             for user_id_str, speech_list_for_user in human_speeches_by_user.items():
+                if f"human:{user_id_str}" in seen_participant_keys:
+                    continue
                 user = user_by_id.get(user_id_str)
-                participation_for_user = participation_by_user_id.get(user_id_str)
-                role = (
-                    str(participation_for_user.role)
-                    if participation_for_user
-                    else str(speech_list_for_user[0].speaker_role)
-                )
-                stance = (
-                    str(participation_for_user.stance) if participation_for_user else None
-                )
+                final_score = _compute_final_score(speech_list_for_user)
                 participants.append(
                     {
                         "user_id": user_id_str,
                         "name": user.name if user else "未知用户",
-                        "role": role,
-                        "stance": stance,
+                        "role": str(speech_list_for_user[0].speaker_role),
+                        "stance": None,
                         "is_ai": False,
-                        "final_score": _compute_final_score(speech_list_for_user),
+                        "has_speech": True,
+                        "score_status": final_score["score_status"],
+                        "speech_count": final_score["speech_count"],
+                        "final_score": final_score,
                     }
                 )
 
             for ai_role, speech_list_for_ai in ai_speeches_by_role.items():
-                mapped_role = _ai_role_to_mapped_debater_role(ai_role)
+                if f"ai:{ai_role}" in seen_participant_keys:
+                    continue
+                final_score = _compute_final_score(speech_list_for_ai)
                 participants.append(
                     {
                         "user_id": f"ai:{ai_role}",
@@ -263,7 +328,10 @@ class ReportGenerator:
                         "role": ai_role,
                         "stance": "negative",
                         "is_ai": True,
-                        "final_score": _compute_final_score(speech_list_for_ai),
+                        "has_speech": True,
+                        "score_status": final_score["score_status"],
+                        "speech_count": final_score["speech_count"],
+                        "final_score": final_score,
                     }
                 )
 
@@ -303,6 +371,7 @@ class ReportGenerator:
                 speech_list.append(
                     {
                         "id": str(sp.id),
+                        "speaker_user_id": str(sp.speaker_id) if sp.speaker_id else None,
                         "speaker_type": speaker_type,
                         "speaker_role": speaker_role,
                         "speaker_name": speaker_name,
@@ -327,7 +396,7 @@ class ReportGenerator:
                 )
             
             # 获取辩论统计
-            statistics = ScoringService.get_debate_statistics(db, debate_id)
+            statistics = ScoringService.get_debate_statistics(db, debate_uuid)
             
             # 如果有全局评分报告，覆盖统计数据
             if debate.report:

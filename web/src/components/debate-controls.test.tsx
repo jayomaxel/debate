@@ -24,7 +24,7 @@ describe('DebateControls', () => {
     });
   });
 
-  it('should autoplay audio entries one by one', async () => {
+  it('should autoplay AI audio entries only', async () => {
     const transcript: TranscriptEntry[] = [
       {
         id: 'speech-001',
@@ -54,15 +54,9 @@ describe('DebateControls', () => {
     );
 
     const hiddenAutoPlayer = container.querySelector('audio.hidden') as HTMLAudioElement | null;
+    const visibleAudios = Array.from(container.querySelectorAll('audio:not(.hidden)')) as HTMLAudioElement[];
     expect(hiddenAutoPlayer).not.toBeNull();
-
-    await waitFor(() => {
-      expect(hiddenAutoPlayer?.src).toContain('/uploads/audio-001.mp3');
-    });
-
-    act(() => {
-      fireEvent.ended(hiddenAutoPlayer as HTMLAudioElement);
-    });
+    expect(visibleAudios).toHaveLength(1);
 
     await waitFor(() => {
       expect(hiddenAutoPlayer?.src).toContain('/uploads/audio-002.mp3');
@@ -139,27 +133,29 @@ describe('DebateControls', () => {
     expect(hiddenAutoPlayer?.getAttribute('src')).toBeNull();
   });
 
-  it('should pause autoplay and other visible audio when user manually plays another audio', async () => {
+  it('should pause autoplay and other visible audio when user manually plays another AI audio', async () => {
     const transcript: TranscriptEntry[] = [
       {
         id: 'speech-manual-001',
-        speaker: '学生A',
+        speaker: 'AI一辩',
         position: '一辩',
         message: '第一段语音',
         timestamp: new Date('2026-03-21T10:00:00+08:00'),
         audioUrl: '/uploads/manual-001.mp3',
         audioSourceUrl: '/uploads/manual-001.mp3',
         audioFormat: 'mp3',
+        isAI: true,
       },
       {
         id: 'speech-manual-002',
-        speaker: '学生B',
+        speaker: 'AI二辩',
         position: '二辩',
         message: '第二段语音',
         timestamp: new Date('2026-03-21T10:00:02+08:00'),
         audioUrl: '/uploads/manual-002.mp3',
         audioSourceUrl: '/uploads/manual-002.mp3',
         audioFormat: 'mp3',
+        isAI: true,
       },
     ];
 
@@ -215,27 +211,29 @@ describe('DebateControls', () => {
     expect(secondVisiblePauseSpy).not.toHaveBeenCalled();
   });
 
-  it('should keep unplayed queued audio available after toggling autoplay off and on', async () => {
+  it('should keep unplayed queued AI audio available after toggling autoplay off and on', async () => {
     const transcript: TranscriptEntry[] = [
       {
         id: 'speech-toggle-001',
-        speaker: '学生A',
+        speaker: 'AI一辩',
         position: '一辩',
         message: '第一段语音',
         timestamp: new Date('2026-03-21T10:00:00+08:00'),
         audioUrl: '/uploads/toggle-001.mp3',
         audioSourceUrl: '/uploads/toggle-001.mp3',
         audioFormat: 'mp3',
+        isAI: true,
       },
       {
         id: 'speech-toggle-002',
-        speaker: '学生B',
+        speaker: 'AI二辩',
         position: '二辩',
         message: '第二段语音',
         timestamp: new Date('2026-03-21T10:00:02+08:00'),
         audioUrl: '/uploads/toggle-002.mp3',
         audioSourceUrl: '/uploads/toggle-002.mp3',
         audioFormat: 'mp3',
+        isAI: true,
       },
     ];
 

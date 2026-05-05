@@ -2,6 +2,7 @@ type ImportMetaWithRuntimeEnv = ImportMeta & {
   env?: {
     DEV?: boolean;
     VITE_API_BASE_URL?: string;
+    VITE_DEV_API_PROXY_TARGET?: string;
     VITE_DEV_API_ORIGIN?: string;
     VITE_WS_BASE_URL?: string;
   };
@@ -52,7 +53,11 @@ export const getWebSocketBaseUrl = () => {
   const env = (import.meta as ImportMetaWithRuntimeEnv).env;
   const hostname = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : '';
   if (env?.DEV && isLoopbackHostname(hostname)) {
-    const devApiOrigin = stripTrailingSlashes(env.VITE_DEV_API_ORIGIN || 'http://localhost:7860');
+    const devApiOrigin = stripTrailingSlashes(
+      env.VITE_DEV_API_ORIGIN ||
+        env.VITE_DEV_API_PROXY_TARGET ||
+        'http://localhost:7861'
+    );
     return devApiOrigin
       .replace(/^https:/i, 'wss:')
       .replace(/^http:/i, 'ws:')

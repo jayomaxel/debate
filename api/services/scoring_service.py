@@ -2,8 +2,10 @@
 评分服务
 负责实时评分、关键词加分、违规检测、最终得分计算
 """
+import uuid
+
 from logging_config import get_logger
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime
@@ -18,6 +20,15 @@ logger = get_logger(__name__)
 
 class ScoringService:
     """评分服务"""
+
+    @staticmethod
+    def _uuid_value(value: Any) -> Any:
+        if value is None or isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError, AttributeError):
+            return value
     
     # 预定义关键词列表（可以从配置中读取）
     POSITIVE_KEYWORDS = [
@@ -260,6 +271,8 @@ class ScoringService:
             评分记录
         """
         try:
+            speech_uuid = ScoringService._uuid_value(speech_id)
+            participation_uuid = ScoringService._uuid_value(participation_id)
             # 调用裁判AI进行评分
             judge = JudgeAgent(db)
             score_breakdown = await judge.score_speech(
@@ -300,8 +313,8 @@ class ScoringService:
             
             # 创建评分记录
             score = Score(
-                participation_id=participation_id,
-                speech_id=speech_id,
+                participation_id=participation_uuid,
+                speech_id=speech_uuid,
                 logic_score=score_breakdown.logic_score,
                 argument_score=score_breakdown.argument_score,
                 response_score=score_breakdown.response_score,
@@ -325,8 +338,8 @@ class ScoringService:
             
             # 返回默认评分
             score = Score(
-                participation_id=participation_id,
-                speech_id=speech_id,
+                participation_id=ScoringService._uuid_value(participation_id),
+                speech_id=ScoringService._uuid_value(speech_id),
                 logic_score=70.0,
                 argument_score=70.0,
                 response_score=70.0,
@@ -362,8 +375,9 @@ class ScoringService:
             全场评分报告
         """
         try:
+            debate_uuid = ScoringService._uuid_value(debate_id)
             # 1. 使用本地确定性规则快速生成每条发言评分，避免外部模型慢或无响应导致报告为空。
-            debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one_or_none()
+            debate = db.execute(select(Debate).where(Debate.id == debate_uuid)).scalar_one_or_none()
             topic = str(debate.topic) if debate else ""
             speech_map = {str(s.id): s for s in speeches}
             speech_scores = [
@@ -398,7 +412,7 @@ class ScoringService:
                     
                     ai_participation = db.execute(
                         select(DebateParticipation).where(
-                            DebateParticipation.debate_id == debate_id,
+                            DebateParticipation.debate_id == debate_uuid,
                             DebateParticipation.role == mapped_role,
                             DebateParticipation.user_id == None,
                         )
@@ -407,7 +421,7 @@ class ScoringService:
                     if not ai_participation:
                         ai_participation = db.execute(
                             select(DebateParticipation).where(
-                                DebateParticipation.debate_id == debate_id,
+                                DebateParticipation.debate_id == debate_uuid,
                                 DebateParticipation.role == mapped_role,
                                 DebateParticipation.stance == "negative",
                             )
@@ -415,10 +429,10 @@ class ScoringService:
 
                     if not ai_participation:
                         ai_participation = DebateParticipation(
-                            debate_id=debate_id,
+                            debate_id=debate_uuid,
                             user_id=None,
                             role=mapped_role,
-                            stance="negative" # 假设AI是反方
+                            stance="negative"
                         )
                         db.add(ai_participation)
                         db.flush()
@@ -426,7 +440,7 @@ class ScoringService:
                 else:
                     participation = db.execute(
                         select(DebateParticipation).where(
-                            DebateParticipation.debate_id == debate_id,
+                            DebateParticipation.debate_id == debate_uuid,
                             DebateParticipation.user_id == speech.speaker_id
                         )
                     ).scalar_one_or_none()
@@ -438,7 +452,7 @@ class ScoringService:
                     if not role.startswith("debater_"):
                         role = "debater_1"
                     participation = DebateParticipation(
-                        debate_id=debate_id,
+                        debate_id=debate_uuid,
                         user_id=speech.speaker_id,
                         role=role,
                         stance="positive",
@@ -475,7 +489,8 @@ class ScoringService:
                 ).scalar_one_or_none()
 
                 if existing_score:
-                    existing_score.participation_id = participation_id
+                    existing_score.participation_id = ScoringService._uuid_value(participation_id)
+                    existing_score.speech_id = ScoringService._uuid_value(speech.id)
                     existing_score.logic_score = float(scores_data.get("logic_score", 70))
                     existing_score.argument_score = float(scores_data.get("argument_score", 70))
                     existing_score.response_score = float(scores_data.get("response_score", 70))
@@ -486,8 +501,8 @@ class ScoringService:
                     continue
 
                 new_score = Score(
-                    participation_id=participation_id,
-                    speech_id=str(speech.id),
+                    participation_id=ScoringService._uuid_value(participation_id),
+                    speech_id=ScoringService._uuid_value(speech.id),
                     logic_score=float(scores_data.get("logic_score", 70)),
                     argument_score=float(scores_data.get("argument_score", 70)),
                     response_score=float(scores_data.get("response_score", 70)),
@@ -511,6 +526,127 @@ class ScoringService:
             logger.error(f"批量评分服务失败: {e}", exc_info=True)
             db.rollback()
             raise
+
+    @staticmethod
+    async def ensure_debate_scored(db: Session, debate_id: str) -> Dict[str, Any]:
+        """
+        Ensure every valid non-empty speech has a score before a report is read.
+
+        Report viewing can race the background end-of-debate scoring task. This
+        method is intentionally idempotent: it only scores speeches that do not
+        already have a Score row.
+        """
+        debate_uuid = ScoringService._uuid_value(debate_id)
+        speeches: List[Speech] = (
+            db.execute(
+                select(Speech)
+                .where(Speech.debate_id == debate_uuid)
+                .where(Speech.is_valid_for_scoring.is_(True))
+                .order_by(Speech.timestamp)
+            )
+            .scalars()
+            .all()
+        )
+        speeches = [
+            speech
+            for speech in speeches
+            if str(getattr(speech, "content", "") or "").strip()
+        ]
+
+        if not speeches:
+            status = {
+                "generated": False,
+                "ready": True,
+                "speech_count": 0,
+                "scored_count": 0,
+                "missing_score_count": 0,
+                "report_status": "empty",
+            }
+            ScoringService._merge_report_score_status(db, debate_uuid, status)
+            return status
+
+        speech_ids = [speech.id for speech in speeches]
+        existing_scores = (
+            db.execute(select(Score).where(Score.speech_id.in_(speech_ids)))
+            .scalars()
+            .all()
+        )
+        scored_speech_ids = {
+            str(score.speech_id) for score in existing_scores if score.speech_id is not None
+        }
+        missing_speeches = [
+            speech for speech in speeches if str(speech.id) not in scored_speech_ids
+        ]
+
+        generated = False
+        if missing_speeches:
+            context = [
+                {
+                    "speech_id": str(speech.id),
+                    "speaker_role": speech.speaker_role,
+                    "speaker_type": speech.speaker_type,
+                    "phase": speech.phase,
+                    "content": speech.content,
+                    "timestamp": speech.timestamp.isoformat() if speech.timestamp else None,
+                }
+                for speech in missing_speeches
+            ]
+            await ScoringService.batch_score_debate(
+                db=db,
+                debate_id=debate_uuid,
+                speeches=missing_speeches,
+                context=context,
+            )
+            generated = True
+
+        refreshed_scores = (
+            db.execute(select(Score).where(Score.speech_id.in_(speech_ids)))
+            .scalars()
+            .all()
+        )
+        refreshed_scored_ids = {
+            str(score.speech_id) for score in refreshed_scores if score.speech_id is not None
+        }
+        missing_score_count = max(0, len(speeches) - len(refreshed_scored_ids))
+        status = {
+            "generated": generated,
+            "ready": missing_score_count == 0,
+            "speech_count": len(speeches),
+            "scored_count": len(refreshed_scored_ids),
+            "missing_score_count": missing_score_count,
+            "report_status": "ready" if missing_score_count == 0 else "processing",
+        }
+        ScoringService._merge_report_score_status(db, debate_uuid, status)
+        return status
+
+    @staticmethod
+    def _merge_report_score_status(
+        db: Session,
+        debate_id: str,
+        status: Dict[str, Any],
+    ) -> None:
+        debate_uuid = ScoringService._uuid_value(debate_id)
+        debate = db.execute(select(Debate).where(Debate.id == debate_uuid)).scalar_one_or_none()
+        if not debate:
+            return
+
+        existing_report = debate.report if isinstance(debate.report, dict) else {}
+        generated = bool(status.get("generated"))
+        current_revision = int(existing_report.get("score_revision") or 0)
+        next_revision = current_revision + 1 if generated else current_revision
+        now = datetime.utcnow().isoformat()
+
+        debate.report = {
+            **existing_report,
+            "report_status": status.get("report_status", "ready"),
+            "score_revision": next_revision,
+            "score_speech_count": int(status.get("speech_count") or 0),
+            "score_ready_count": int(status.get("scored_count") or 0),
+            "score_missing_count": int(status.get("missing_score_count") or 0),
+            "score_checked_at": now,
+            **({"score_generated_at": now} if generated else {}),
+        }
+        db.commit()
 
     @staticmethod
     def calculate_keyword_bonus(speech_content: str) -> float:
@@ -588,8 +724,9 @@ class ScoringService:
         Returns:
             最终得分详情
         """
+        participation_uuid = ScoringService._uuid_value(participation_id)
         participation = db.execute(
-            select(DebateParticipation).where(DebateParticipation.id == participation_id)
+            select(DebateParticipation).where(DebateParticipation.id == participation_uuid)
         ).scalar_one_or_none()
 
         if not participation:
@@ -645,7 +782,7 @@ class ScoringService:
         total_duration = sum(max(0, int(s.duration or 0)) for s in participant_speeches)
 
         scores = (
-            db.execute(select(Score).where(Score.participation_id == participation_id))
+            db.execute(select(Score).where(Score.participation_id == participation_uuid))
             .scalars()
             .all()
         )
@@ -698,7 +835,7 @@ class ScoringService:
                 Speech.content
             )
             .join(Speech, Score.speech_id == Speech.id)  # 显式连接条件
-            .filter(Speech.debate_id == debate_id)
+            .filter(Speech.debate_id == ScoringService._uuid_value(debate_id))
             .filter(Speech.is_valid_for_scoring.is_(True))
             .filter(Speech.speaker_type == type)
         )
@@ -753,10 +890,11 @@ class ScoringService:
                 return role
             return None
 
+        debate_uuid = ScoringService._uuid_value(debate_id)
         participations = (
             db.execute(
                 select(DebateParticipation).where(
-                    DebateParticipation.debate_id == debate_id
+                    DebateParticipation.debate_id == debate_uuid
                 )
             )
             .scalars()
@@ -770,7 +908,7 @@ class ScoringService:
         speeches = (
             db.execute(
                 select(Speech)
-                .where(Speech.debate_id == debate_id)
+                .where(Speech.debate_id == debate_uuid)
                 .where(Speech.is_valid_for_scoring.is_(True))
             )
             .scalars()

@@ -27,6 +27,7 @@ import {
   parseWaitingRoomState,
   type WaitingRoomState,
 } from '@/lib/waiting-room';
+import { getDebateRoomId } from '@/lib/debate-room-id';
 
 interface StudentOnboardingProps {
   initialDebate?: Debate | null;
@@ -187,7 +188,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
     intervalMs: 12000,
   });
 
-  const roomId = joinedDebate?.id ?? null;
+  const roomId = getDebateRoomId(joinedDebate) || null;
   const { isConnected, send, on, off } = useWebSocket(roomId, {
     onError: () => {
       setError((current) => current ?? '实时房间同步失败，请稍后刷新重试。');
@@ -262,13 +263,13 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
   );
 
   useEffect(() => {
-    if (!joinedDebate?.id || !debateStarted || navigateTriggeredRef.current) {
+    if (!roomId || !debateStarted || navigateTriggeredRef.current) {
       return;
     }
 
     navigateTriggeredRef.current = true;
-    onDebateStart?.(joinedDebate.id);
-  }, [debateStarted, joinedDebate?.id, onDebateStart]);
+    onDebateStart?.(roomId);
+  }, [debateStarted, onDebateStart, roomId]);
 
   const rosterCards = useMemo(() => {
     const rosterByRole = new Map<string, DebateParticipant>();
@@ -475,7 +476,7 @@ const StudentOnboarding: React.FC<StudentOnboardingProps> = ({
               <Button
                 className="student-dark-button h-auto w-full justify-center"
                 disabled={!debateStarted}
-                onClick={() => onDebateStart?.(joinedDebate.id)}
+                onClick={() => onDebateStart?.(roomId || joinedDebate.id)}
               >
                 {debateStarted ? '进入正式辩论' : '等待四人全部准备完成'}
                 <ArrowRight className="ml-2 h-4 w-4" />

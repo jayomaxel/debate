@@ -1403,6 +1403,8 @@ class DebateService:
             
             result.append({
                 "id": str(debate.id),
+                "room_id": str(debate.id),
+                "debate_id": str(debate.id),
                 "topic": debate.topic,
                 "description": debate.description,
                 "duration": debate.duration,

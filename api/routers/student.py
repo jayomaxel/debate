@@ -3,13 +3,14 @@
 """
 import os
 import hashlib
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Dict, Optional
 
 from logging_config import get_logger
 from database import get_db
@@ -17,6 +18,7 @@ from models.user import User
 from services.profile_service import ProfileService
 from services.assessment_service import AssessmentService
 from services.debate_service import DebateService
+from services.scoring_service import ScoringService
 from middleware.auth_middleware import require_student, PermissionChecker, require_role
 
 from models import Debate,Speech
@@ -499,17 +501,57 @@ from services.report_service import ReportGenerator
 from fastapi.responses import Response
 from utils.email_service import EmailService
 
-def _compute_markdown_hash(markdown_text: str) -> str:
-    return hashlib.sha256(markdown_text.encode("utf-8")).hexdigest()
+def _uuid_value(value):
+    if value is None or isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return value
+
+
+def _report_score_revision(debate: Debate) -> int:
+    report = debate.report if isinstance(debate.report, dict) else {}
+    try:
+        return int(report.get("score_revision") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _legacy_pdf_cache_allowed(debate: Debate, report_meta: Dict) -> bool:
+    return (
+        not report_meta.get("report_markdown_hash")
+        and not report_meta.get("report_pdf_markdown_hash")
+        and _report_score_revision(debate) == 0
+    )
+
+
+def _compute_markdown_hash(markdown_text: str, score_revision: int = 0) -> str:
+    payload = f"score_revision:{int(score_revision or 0)}\n{markdown_text}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _get_cached_report_markdown(debate: Debate) -> Optional[str]:
     report = debate.report
     if isinstance(report, dict):
         markdown_text = report.get("report_markdown")
-        if isinstance(markdown_text, str) and markdown_text.strip():
+        markdown_hash = report.get("report_markdown_hash")
+        expected_hash = (
+            _compute_markdown_hash(markdown_text, _report_score_revision(debate))
+            if isinstance(markdown_text, str)
+            else None
+        )
+        if (
+            isinstance(markdown_text, str)
+            and markdown_text.strip()
+            and markdown_hash == expected_hash
+        ):
             return markdown_text
     return None
+
+
+async def _ensure_report_ready(db: Session, debate_id: str) -> Dict[str, object]:
+    return await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
 
 
 async def _get_or_generate_report_markdown(
@@ -521,7 +563,7 @@ async def _get_or_generate_report_markdown(
     if cached:
         report = debate.report if isinstance(debate.report, dict) else {}
         cached_hash = report.get("report_markdown_hash")
-        computed_hash = _compute_markdown_hash(cached)
+        computed_hash = _compute_markdown_hash(cached, _report_score_revision(debate))
         if cached_hash != computed_hash:
             debate.report = {**report, "report_markdown": cached, "report_markdown_hash": computed_hash}
             db.commit()
@@ -542,7 +584,7 @@ async def _get_or_generate_report_markdown(
     debate.report = {
         **existing,
         "report_markdown": markdown_text,
-        "report_markdown_hash": _compute_markdown_hash(markdown_text),
+        "report_markdown_hash": _compute_markdown_hash(markdown_text, _report_score_revision(debate)),
     }
     db.commit()
     return markdown_text
@@ -564,6 +606,8 @@ async def get_student_report(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权访问该辩论报告"
         )
+
+    await _ensure_report_ready(db, debate_id)
     
     # 生成报告
     report = ReportGenerator.generate_student_report(
@@ -600,14 +644,18 @@ async def export_report_pdf(
             detail="无权导出该辩论报告"
         )
 
+    debate_uuid = _uuid_value(debate_id)
     debate = db.execute(
-        select(Debate).where(Debate.id == debate_id)
+        select(Debate).where(Debate.id == debate_uuid)
     ).scalar_one_or_none()
     if not debate:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="该辩论不存在"
         )
+
+    await _ensure_report_ready(db, debate_id)
+    db.refresh(debate)
 
     cached_markdown = _get_cached_report_markdown(debate)
 
@@ -616,7 +664,7 @@ async def export_report_pdf(
         speeches = (
             db.execute(
                 select(Speech)
-                .where(Speech.debate_id == debate_id)
+                .where(Speech.debate_id == debate_uuid)
                 .where(Speech.is_valid_for_scoring.is_(True))
                 .order_by(Speech.timestamp)
             )
@@ -642,8 +690,15 @@ async def export_report_pdf(
     if (
         pdf_path
         and os.path.exists(pdf_path)
-        and markdown_hash
-        and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+        and (
+            (
+                markdown_hash
+                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+            )
+            or (
+                _legacy_pdf_cache_allowed(debate, report_meta)
+            )
+        )
     ):
         pdf_file = Path(pdf_path)
         pdf_data = pdf_file.read_bytes()
@@ -710,6 +765,8 @@ async def export_report_excel(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权导出该辩论报告"
         )
+
+    await _ensure_report_ready(db, debate_id)
     
     # 生成报告
     report = ReportGenerator.generate_student_report(
@@ -758,9 +815,13 @@ async def send_report_email(
         )
     
     # 获取辩论信息
-    debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one_or_none()
+    debate_uuid = _uuid_value(debate_id)
+    debate = db.execute(select(Debate).where(Debate.id == debate_uuid)).scalar_one_or_none()
     if not debate:
         raise HTTPException(status_code=404, detail="辩论不存在")
+
+    await _ensure_report_ready(db, debate_id)
+    db.refresh(debate)
     
     # 确定接收者
     # 如果是学生，发送给自己
@@ -776,7 +837,7 @@ async def send_report_email(
         speeches = (
             db.execute(
                 select(Speech)
-                .where(Speech.debate_id == debate_id)
+                .where(Speech.debate_id == debate_uuid)
                 .where(Speech.is_valid_for_scoring.is_(True))
                 .order_by(Speech.timestamp)
             )
