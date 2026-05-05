@@ -1,7 +1,8 @@
 param(
   [string]$PublicBaseUrl = "",
   [int]$ApiPort = 7861,
-  [int]$WebPort = 8860
+  [int]$WebPort = 8860,
+  [int]$RedisPort = 6380
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,11 +112,12 @@ $backendCommand = @"
 `$env:DEBUG = 'true'
 `$env:DATABASE_URL = 'postgresql://pgvector:pgvector@127.0.0.1:5432/debate_system'
 `$env:REDIS_HOST = '127.0.0.1'
-`$env:REDIS_PORT = '6379'
+`$env:REDIS_PORT = '$RedisPort'
 `$env:REDIS_DB = '0'
 `$env:REDIS_PASSWORD = ''
 Write-Host 'Starting API on http://localhost:$ApiPort (DEBUG=true)...' -ForegroundColor Cyan
 Write-Host 'Using local PostgreSQL and Redis for this dev session.' -ForegroundColor Green
+Write-Host "Redis target: `${env:REDIS_HOST}:`$env:REDIS_PORT" -ForegroundColor Green
 if ('$escapedPublicBaseUrl') {
   `$env:PUBLIC_BASE_URL = '$escapedPublicBaseUrl'
   Write-Host "Resolved PUBLIC_BASE_URL: `$env:PUBLIC_BASE_URL" -ForegroundColor Green

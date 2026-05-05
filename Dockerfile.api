@@ -1,6 +1,9 @@
 # 后端API Dockerfile
 FROM python:3.11-slim-bookworm
 
+ARG APT_MIRROR=http://deb.debian.org/debian
+ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
+
 # 设置时区为上海
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -16,16 +19,37 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
 # 安装系统依赖（仅保留必需的）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    tzdata \
-    libglib2.0-0 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgdk-pixbuf2.0-0 \
-    libffi-dev \
-    shared-mime-info \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i \
+        -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+        -e "s|http://deb.debian.org/debian|${APT_MIRROR}|g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "120";' \
+      'Acquire::https::Timeout "120";' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      'Acquire::http::No-Cache "true";' \
+      > /etc/apt/apt.conf.d/80-retries; \
+    for attempt in 1 2 3; do \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        curl \
+        tzdata \
+        libglib2.0-0 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf2.0-0 \
+        libffi-dev \
+        shared-mime-info && \
+      break; \
+      if [ "$attempt" = "3" ]; then exit 1; fi; \
+      rm -rf /var/lib/apt/lists/*; \
+      sleep 5; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
 COPY api/requirements.txt .
