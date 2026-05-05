@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowRight,
   DoorOpen,
   Loader2,
-  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +19,6 @@ import { usePageActivityRefresh } from '@/hooks/use-page-activity-refresh';
 import StudentReservationList from '@/components/student-reservation-list';
 import StudentService from '@/services/student.service';
 import { useAuth } from '@/store/auth.context';
-import { useAppRouter } from '@/lib/router';
 import {
   consumeAssessmentOnboardingPrompt,
   shouldShowAssessmentOnboardingPrompt,
@@ -36,7 +34,7 @@ interface StudentCommandCenterProps {
   onViewReport?: (matchId: string) => void;
   onViewReplay?: (debateId: string) => void;
   onNavigateToAnalytics?: (tab?: StudentAnalyticsTab) => void;
-  onNavigateToPreparation?: () => void;
+  onNavigateToQuickMatch?: () => void;
   onNavigateToSettings?: (tab?: 'info' | 'password' | 'ability') => void;
   onNavigateToLobby?: () => void;
   onEnterLobbyRoom?: (roomId: string) => void;
@@ -63,16 +61,14 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
   onViewReport,
   onViewReplay,
   onNavigateToAnalytics,
-  onNavigateToPreparation,
+  onNavigateToQuickMatch,
   onNavigateToSettings,
   onNavigateToLobby,
   onEnterLobbyRoom,
   guestMode = false,
 }) => {
   const { toast } = useToast();
-  const { navigate } = useAppRouter();
   const { user } = useAuth();
-  const loginRedirect = useCallback(() => navigate('/login'), [navigate]);
 
   const studentName = propStudentName?.trim() || user?.name || '同学';
   const welcomeName = studentName === '同学' ? studentName : `${studentName}同学`;
@@ -165,14 +161,6 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
 
   const latestHistory = history[0] || null;
 
-  const statusSummary = useMemo(() => {
-    if (needsAssessment) {
-      return { label: '待完成能力评估' };
-    }
-
-    return { label: '进入比赛区' };
-  }, [needsAssessment]);
-
   const summaryTiles = [
     {
       label: '能力评估',
@@ -255,83 +243,44 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
 
       <div className="student-page-split grid gap-5">
         <div className="space-y-5">
-          <div className="grid items-stretch gap-5 lg:grid-cols-[1.05fr,0.95fr] xl:grid-cols-[minmax(0,1.05fr),minmax(280px,0.95fr)]">
-            <section className="relative overflow-hidden border border-transparent bg-transparent p-6 shadow-none md:p-9">
-              <div className="space-y-4">
-                <h1 className="student-section-title">
-                  欢迎回来，{welcomeName}
-                </h1>
-                <div className="flex flex-wrap gap-3">
-                  {needsAssessment ? (
-                    <Button
-                      className="student-dark-button h-auto"
-                      onClick={() => onNavigateToSettings?.('ability')}
-                    >
-                      现在去评估
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      className="student-dark-button h-auto"
-                      onClick={() => navigate('/student/competition')}
-                    >
-                      前往比赛区
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  )}
+          <section className="relative overflow-hidden border border-transparent bg-transparent p-6 shadow-none md:p-9">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <h1 className="student-section-title">
+                欢迎回来，{welcomeName}
+              </h1>
+              <div className="flex flex-wrap gap-3 md:justify-end">
+                {needsAssessment && (
                   <Button
-                    variant="outline"
-                    className="student-light-button h-auto"
-                    onClick={() => onNavigateToPreparation?.()}
+                    className="student-dark-button h-auto"
+                    onClick={() => onNavigateToSettings?.('ability')}
                   >
-                    打开备赛区
+                    现在去评估
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
-                </div>
+                )}
+                <Button
+                  className="student-dark-button h-auto"
+                  onClick={() => onNavigateToQuickMatch?.()}
+                >
+                  快速比赛
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
               </div>
-            </section>
+            </div>
+          </section>
 
-            <section className="student-card-soft-blue p-6 md:p-9">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-[1.65rem] font-semibold tracking-[-0.04em] text-slate-900">
-                    {statusSummary.label}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="student-card-muted p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                    已完成正式辩论
-                  </div>
-                  <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                    {completedDebates}
-                  </div>
-                </div>
-                <div className="student-card-muted p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                    平均得分
-                  </div>
-                  <div className="mt-1.5 text-[1.85rem] font-semibold tracking-[-0.04em] text-slate-900">
-                    {averageScore.toFixed(1)}
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <section className="student-card px-5 py-6 md:px-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-4">
-                <div className="student-icon-bubble h-12 w-12">
+          <section className="student-card overflow-hidden px-5 py-6 md:px-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="student-icon-bubble h-12 w-12 shrink-0">
                   <DoorOpen className="h-5 w-5 text-slate-800" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950">
                     匹配大厅
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    加入同学发起的房间，或继续等待匹配。
+                    加入同学发起的房间。
                   </p>
                 </div>
               </div>
@@ -442,12 +391,8 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
               disabled={refreshing}
               className="student-light-button h-auto"
             >
-              {refreshing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="mr-2 h-4 w-4" />
-              )}
-              刷新首页摘要
+              {refreshing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              刷新首页
             </Button>
           </div>
         </div>

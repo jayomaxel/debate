@@ -38,8 +38,8 @@ const LobbyRoomCard: React.FC<LobbyRoomCardProps> = ({
   );
 
   return (
-    <Card className="student-card overflow-hidden border-0 shadow-none">
-      <CardContent className="p-5 md:p-6">
+    <Card className="student-card overflow-hidden border-[#d9e8fb] bg-[#f8fbff]">
+      <CardContent className="p-6 md:p-7">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">

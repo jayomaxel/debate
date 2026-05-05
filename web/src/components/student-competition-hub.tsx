@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   CalendarClock,
+  DoorOpen,
   Loader2,
   ShieldCheck,
   Sparkles,
@@ -25,6 +26,7 @@ interface StudentCompetitionHubProps {
   onNavigateToWaiting?: () => void;
   onNavigateToSettings?: (tab?: 'info' | 'password' | 'ability') => void;
   onNavigateToPostMatch?: (debateId: string) => void;
+  onNavigateToLobby?: () => void;
   onNavigateToLobbyRoom?: (roomId: string) => void;
 }
 
@@ -75,6 +77,7 @@ export default function StudentCompetitionHub({
   onNavigateToWaiting,
   onNavigateToSettings,
   onNavigateToPostMatch,
+  onNavigateToLobby,
   onNavigateToLobbyRoom,
 }: StudentCompetitionHubProps) {
   const { toast } = useToast();
@@ -427,6 +430,24 @@ export default function StudentCompetitionHub({
         </section>
 
         <div className="student-page-aside space-y-5">
+          <section className="student-card px-5 py-6">
+            <div className="student-kicker">
+              <DoorOpen className="h-4 w-4" />
+              匹配大厅
+            </div>
+            <h2 className="mt-3 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
+              加入同学发起的房间
+            </h2>
+            <Button
+              variant="outline"
+              onClick={onNavigateToLobby}
+              className="student-light-button mt-5 h-auto w-full justify-center"
+            >
+              进入匹配大厅
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </section>
+
           <section className="student-card px-5 py-6">
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <StatusItem

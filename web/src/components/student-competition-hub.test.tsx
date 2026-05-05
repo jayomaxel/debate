@@ -103,6 +103,16 @@ describe('StudentCompetitionHub', () => {
     expect(onNavigateToLobbyRoom).toHaveBeenCalledWith('room-001');
   });
 
+  it('shows a lobby entry on the competition page', async () => {
+    const onNavigateToLobby = vi.fn();
+
+    render(<StudentCompetitionHub onNavigateToLobby={onNavigateToLobby} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '进入匹配大厅' }));
+
+    expect(onNavigateToLobby).toHaveBeenCalledTimes(1);
+  });
+
   it('does not treat student-created lobby debates as teacher-assigned debates', async () => {
     vi.mocked(StudentService.getAvailableDebates).mockResolvedValue([
       {

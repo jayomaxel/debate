@@ -272,12 +272,12 @@ function GuestHome({ onLogin }: { onLogin: () => void }) {
             <div className="border-b border-black/5 px-6 py-5">
               <div className="flex items-center gap-2 text-slate-950">
                 <DoorOpen className="h-5 w-5 text-sky-700" />
-                待加入房间
+                已加入的比赛
               </div>
             </div>
             <CardContent className="p-6">
               <div className="student-dashed-card py-10 text-center text-slate-500">
-                登录后查看可加入的房间
+                登录后查看已加入的比赛
               </div>
             </CardContent>
           </Card>

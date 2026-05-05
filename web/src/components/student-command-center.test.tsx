@@ -3,7 +3,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StudentCommandCenter from './student-command-center';
 
-const navigateMock = vi.fn();
 const shouldShowPromptMock = vi.fn();
 const consumePromptMock = vi.fn();
 
@@ -29,7 +28,7 @@ vi.mock('@/services/student.service', () => ({
 
 vi.mock('@/lib/router', () => ({
   useAppRouter: () => ({
-    navigate: navigateMock,
+    navigate: vi.fn(),
   }),
 }));
 
@@ -96,7 +95,7 @@ describe('StudentCommandCenter', () => {
     });
   });
 
-  it('uses router navigation when entering the competition area', async () => {
+  it('does not show the competition area shortcut after assessment', async () => {
     const { useStudentAssessment } = await import('@/hooks/use-student-assessment');
     (useStudentAssessment as any).mockReturnValue({
       assessment: { is_default: false },
@@ -112,8 +111,9 @@ describe('StudentCommandCenter', () => {
 
     render(<StudentCommandCenter />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '前往比赛区' }));
+    await screen.findByRole('button', { name: '快速比赛' });
 
-    expect(navigateMock).toHaveBeenCalledWith('/student/competition');
+    expect(screen.queryByText('进入比赛区')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '前往比赛区' })).not.toBeInTheDocument();
   });
 });
