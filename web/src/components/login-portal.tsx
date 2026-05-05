@@ -21,7 +21,6 @@ import {
   Users,
   ShieldCheck,
   BookOpen,
-  BrainCircuit,
   Loader2
 } from 'lucide-react';
 import { useAuth } from '@/store/auth.context';
@@ -29,6 +28,8 @@ import { useAppRouter } from '@/lib/router';
 import AuthService from '@/services/auth.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 import { markAssessmentOnboardingPendingForAccount } from '@/lib/student-assessment-onboarding';
+import brandLogo from '../../../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
+import loginHeroImage from '../../../pic/23c8a94f8f1e972166535d35cf5fd020.jpg';
 
 interface LoginFormData {
   name: string;
@@ -69,10 +70,6 @@ const authTabTriggerClass =
 const authSubmitButtonClass =
   'student-dark-button h-auto w-full justify-center py-3';
 
-const loginHeroImage =
-  'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80';
-
-
 const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
   const { login } = useAuth();
   const { navigate } = useAppRouter();
@@ -92,10 +89,6 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
     password: '',
     confirmPassword: '',
   });
-
-  const roleOptions: UserRole[] = isLogin
-    ? ['student', 'teacher', 'administrator']
-    : ['student', 'teacher'];
 
   // 加载班级列表
   useEffect(() => {
@@ -288,15 +281,12 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                 onClick={() => navigate('/')}
                 className="flex items-center gap-3 text-left"
               >
-                <div className="student-icon-bubble bg-[#151515] text-white shadow-[0_14px_30px_rgba(15,23,42,0.18)]">
-                  <BrainCircuit className="h-6 w-6" />
+                <div className="student-icon-bubble overflow-hidden bg-white p-0 shadow-[0_14px_30px_rgba(15,23,42,0.18)]">
+                  <img src={brandLogo} alt="" className="h-full w-full object-cover" />
                 </div>
                 <div>
                   <div className="text-lg font-semibold tracking-[-0.03em] text-slate-900">
                     碳硅之辩
-                  </div>
-                  <div className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    未登录入口
                   </div>
                 </div>
               </button>
@@ -306,38 +296,24 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                 className="student-light-button h-auto"
                 onClick={() => navigate('/')}
               >
-                浏览公开入口
+                暂不登录
               </Button>
             </div>
           </div>
         </header>
 
-        <main className="student-container flex min-h-[calc(100vh-72px)] items-center py-6 pb-14">
-          <Card className="student-card mx-auto grid w-full max-w-[1180px] overflow-hidden border-[#d7ccbf] p-0 shadow-[0_22px_56px_rgba(58,42,28,0.1)] lg:grid-cols-[minmax(0,1.04fr)_minmax(420px,0.96fr)]">
-            <div className="relative min-h-[260px] overflow-hidden bg-slate-100 lg:min-h-[760px]">
+        <main className="student-container flex min-h-[calc(100vh-72px)] items-center py-4 pb-8 sm:py-6 lg:pb-10">
+          <Card className="student-card mx-auto grid w-full max-w-[min(1180px,calc(100vw_-_2rem))] overflow-hidden border-[#d7ccbf] p-0 shadow-[0_22px_56px_rgba(58,42,28,0.1)] xl:grid-cols-[minmax(0,1fr)_minmax(360px,440px)]">
+            <div className="relative min-h-[220px] overflow-hidden bg-slate-100 sm:min-h-[280px] xl:min-h-[min(720px,calc(100vh_-_8rem))]">
               <img
                 src={loginHeroImage}
                 alt=""
                 className="absolute inset-0 h-full w-full object-cover"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/18 to-transparent" />
-              <div className="absolute bottom-0 left-0 right-0 p-6 text-white sm:p-8">
-                <div className="max-w-md">
-                  <div className="text-xs uppercase tracking-[0.22em] text-white/72">
-                    Debate Workspace
-                  </div>
-                  <h1 className="mt-3 text-[2rem] font-semibold leading-tight md:text-[2.4rem]">
-                    碳硅之辩
-                  </h1>
-                  <p className="mt-3 text-sm leading-7 text-white/82">
-                    选择身份，登录后进入对应的学生、教师或管理工作区。
-                  </p>
-                </div>
-              </div>
             </div>
 
-            <div className="flex items-center">
-              <div className="w-full px-5 py-6 sm:px-8 lg:px-10">
+            <div className="flex min-h-0 items-center xl:max-h-[calc(100vh-8rem)]">
+              <div className="max-h-full w-full overflow-y-auto px-5 py-6 sm:px-8 xl:px-9">
                 <CardHeader className="px-0 pb-4 text-left">
                   <CardTitle className="mb-2 text-[1.65rem] font-semibold text-slate-900">
                     {isLogin ? '欢迎登录' : '欢迎注册'}
@@ -348,36 +324,9 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                 </CardHeader>
 
                 <CardContent className="space-y-6 px-0 pb-0">
-                  <div className="flex items-center justify-center gap-4 text-sm">
-                    <button
-                      type="button"
-                      onClick={() => handleModeChange(true)}
-                      className={`px-4 py-2 rounded-[10px] transition-colors ${
-                        isLogin
-                          ? 'bg-[#171717] text-white'
-                          : 'border border-[#d7ccbf] bg-white/82 text-slate-600 hover:border-[#b8a891] hover:text-slate-900'
-                      }`}
-                    >
-                      登录
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleModeChange(false)}
-                      className={`px-4 py-2 rounded-[10px] transition-colors ${
-                        !isLogin
-                          ? 'bg-[#171717] text-white'
-                          : 'border border-[#d7ccbf] bg-white/82 text-slate-600 hover:border-[#b8a891] hover:text-slate-900'
-                      }`}
-                    >
-                      注册
-                    </button>
-                  </div>
-
                   <Tabs value={activeRole} onValueChange={(value) => setActiveRole(value as UserRole)}>
                     <TabsList
-                      className={`grid h-auto w-full rounded-[12px] border border-[#d7ccbf] bg-[#f6f0e8] p-1.5 ${
-                        isLogin ? 'grid-cols-3' : 'grid-cols-2'
-                      }`}
+                      className="grid h-auto w-full grid-cols-2 rounded-[12px] border border-[#d7ccbf] bg-[#f6f0e8] p-1.5"
                     >
                       <TabsTrigger value="student" className={authTabTriggerClass}>
                         <GraduationCap className="h-4 w-4" />
@@ -387,12 +336,6 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                         <User className="h-4 w-4" />
                         我是老师
                       </TabsTrigger>
-                      {roleOptions.includes('administrator') && (
-                        <TabsTrigger value="administrator" className={authTabTriggerClass}>
-                          <ShieldCheck className="h-4 w-4" />
-                          管理员
-                        </TabsTrigger>
-                      )}
                     </TabsList>
 
                     <TabsContent value="student" className="mt-6 space-y-4">
@@ -575,6 +518,15 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           </>
                         )}
                       </Button>
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleModeChange(!isLogin)}
+                          className="text-sm text-slate-500 underline-offset-4 transition-colors hover:text-slate-900 hover:underline"
+                        >
+                          {isLogin ? '注册账号' : '返回登录'}
+                        </button>
+                      </div>
                       </form>
                     </TabsContent>
 
@@ -707,10 +659,30 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
                           </>
                         )}
                       </Button>
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleModeChange(!isLogin)}
+                          className="text-sm text-slate-500 underline-offset-4 transition-colors hover:text-slate-900 hover:underline"
+                        >
+                          {isLogin ? '注册账号' : '返回登录'}
+                        </button>
+                      </div>
+                      {isLogin ? (
+                        <div className="pt-1 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setActiveRole('administrator')}
+                            className="text-xs text-slate-400 underline-offset-4 transition-colors hover:text-slate-700 hover:underline"
+                          >
+                            管理员登录
+                          </button>
+                        </div>
+                      ) : null}
                       </form>
                     </TabsContent>
 
-                    {roleOptions.includes('administrator') && (
+                    {isLogin && (
                       <TabsContent value="administrator" className="mt-6 space-y-4">
                         <form onSubmit={handleSubmit} className="space-y-4">
                         {/* 账号 */}
@@ -787,3 +759,4 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 };
 
 export default LoginPortal;
+

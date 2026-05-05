@@ -175,8 +175,8 @@ const DebateReplayPage: React.FC<DebateReplayPageProps> = ({ debateId, onBack })
         </div>
       )}
 
-      <div className="sticky top-0 z-40 px-4 py-4 sm:px-6">
-        <div className="student-container">
+      <div className="sticky top-0 z-40 py-4">
+        <div className="w-full">
           <div className="student-header-frame px-4 py-3 sm:px-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex min-w-0 items-center gap-3">

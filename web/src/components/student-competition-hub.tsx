@@ -7,7 +7,6 @@ import {
   ShieldCheck,
   Sparkles,
   Swords,
-  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +20,7 @@ import type { Debate, LobbyRoom, StudentReservation } from '@/services/student.s
 import {
   roomStatusLabelMap,
 } from '@/lib/reservation-display';
+import competitionAsideImage from '../../../pic/27c72e318f175936bf07d8af3a692d80.jpg';
 
 interface StudentCompetitionHubProps {
   onNavigateToWaiting?: () => void;
@@ -159,7 +159,7 @@ export default function StudentCompetitionHub({
     }
 
     if (activeTeacherDebate || activeStudentRoom) {
-      return '继续比赛流程';
+      return '继续比赛';
     }
 
     return '加入本场辩论';
@@ -231,7 +231,8 @@ export default function StudentCompetitionHub({
 
   return (
       <div className="student-container py-6 pb-14">
-      <div className="student-page-split grid gap-5">
+      <div className="student-page-split grid gap-5 lg:grid-cols-[minmax(0,1.32fr)_minmax(320px,0.88fr)]">
+        <div className="space-y-5">
         <section className="student-card px-5 py-6 md:px-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="max-w-2xl">
@@ -405,7 +406,7 @@ export default function StudentCompetitionHub({
                 我的预约辩论
               </div>
               <h2 className="mt-3 text-[1.55rem] font-semibold tracking-[-0.04em] text-slate-900">
-                教师预约给我的辩论场次
+                已预约辩论
               </h2>
             </div>
             <Badge className="student-pill">{teacherReservations.length} 场</Badge>
@@ -428,45 +429,42 @@ export default function StudentCompetitionHub({
             )}
           </div>
         </section>
+        </div>
 
         <div className="student-page-aside space-y-5">
-          <section className="student-card px-5 py-6">
-            <div className="student-kicker">
-              <DoorOpen className="h-4 w-4" />
-              匹配大厅
+          <section className="student-card overflow-hidden px-5 py-6 md:px-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="student-icon-bubble h-12 w-12 shrink-0">
+                  <DoorOpen className="h-5 w-5 text-slate-800" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950">
+                    匹配大厅
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    加入同学发起的房间。
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                onClick={onNavigateToLobby}
+                className="student-light-button h-auto"
+              >
+                进入匹配大厅
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
-            <h2 className="mt-3 text-[1.45rem] font-semibold tracking-[-0.04em] text-slate-900">
-              加入同学发起的房间
-            </h2>
-            <Button
-              variant="outline"
-              onClick={onNavigateToLobby}
-              className="student-light-button mt-5 h-auto w-full justify-center"
-            >
-              进入匹配大厅
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
           </section>
 
-          <section className="student-card px-5 py-6">
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <section className="space-y-3">
+            <div className="grid gap-3">
               <StatusItem
                 icon={<Sparkles className="h-4 w-4 text-slate-700" />}
                 label="能力评估"
                 value={canJoin ? '已完成' : '待完成'}
                 tone={canJoin ? 'student-card-soft-blue' : 'student-card-soft-peach'}
-              />
-              <StatusItem
-                icon={<Users className="h-4 w-4 text-slate-700" />}
-                label="比赛状态"
-                value={
-                  activeTeacherDebate
-                    ? getStatusLabel(activeTeacherDebate.status)
-                    : activeStudentRoom
-                      ? '自主房间进行中'
-                      : '未加入'
-                }
-                tone="student-card-muted"
               />
               <Button
                 variant="outline"
@@ -482,6 +480,14 @@ export default function StudentCompetitionHub({
                 刷新比赛状态
               </Button>
             </div>
+          </section>
+
+          <section className="student-card overflow-hidden p-0">
+            <img
+              src={competitionAsideImage}
+              alt=""
+              className="aspect-square w-full object-contain"
+            />
           </section>
         </div>
       </div>

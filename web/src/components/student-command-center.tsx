@@ -26,6 +26,7 @@ import {
 import { formatDebateRole, formatStudentDate } from '@/lib/student-display';
 import type { DebateHistoryItem } from '@/services/student.service';
 import growthPathJourneyImage from '@/assets/growth-path-journey.png';
+import quickMatchHeroImage from '../../../pic/0a9f0691f14275da43169e9b727416a4.jpg';
 
 type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
 
@@ -241,34 +242,43 @@ const StudentCommandCenter: React.FC<StudentCommandCenterProps> = ({
         </DialogContent>
       </Dialog>
 
-      <div className="student-page-split grid gap-5">
-        <div className="space-y-5">
-          <section className="relative overflow-hidden border border-transparent bg-transparent p-6 shadow-none md:p-9">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <h1 className="student-section-title">
-                欢迎回来，{welcomeName}
-              </h1>
-              <div className="flex flex-wrap gap-3 md:justify-end">
-                {needsAssessment && (
-                  <Button
-                    className="student-dark-button h-auto"
-                    onClick={() => onNavigateToSettings?.('ability')}
-                  >
-                    现在去评估
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
-                )}
+      <section className="relative mb-5 overflow-hidden border border-transparent bg-transparent p-6 shadow-none md:p-9">
+        <div className="grid min-h-[260px] gap-6 xl:grid-cols-[minmax(460px,0.44fr)_minmax(0,0.56fr)] xl:items-start">
+          <div className="hidden overflow-hidden rounded-[24px] md:block">
+            <img
+              src={quickMatchHeroImage}
+              alt=""
+              className="aspect-[16/10] w-full object-cover"
+            />
+          </div>
+          <div className="flex min-h-[220px] max-w-[560px] flex-col items-start justify-start gap-7 text-left xl:pt-4">
+            <h1 className="student-section-title">
+              欢迎回来，{welcomeName}
+            </h1>
+            <div className="flex flex-wrap justify-start gap-3">
+              <Button
+                className="student-dark-button h-auto px-7 py-3 text-base"
+                onClick={() => onNavigateToQuickMatch?.()}
+              >
+                快速比赛
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+              {needsAssessment && (
                 <Button
                   className="student-dark-button h-auto"
-                  onClick={() => onNavigateToQuickMatch?.()}
+                  onClick={() => onNavigateToSettings?.('ability')}
                 >
-                  快速比赛
+                  现在去评估
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
-              </div>
+              )}
             </div>
-          </section>
+          </div>
+        </div>
+      </section>
 
+      <div className="student-page-split grid gap-5">
+        <div className="space-y-5">
           <section className="student-card overflow-hidden px-5 py-6 md:px-6">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex min-w-0 items-center gap-4">

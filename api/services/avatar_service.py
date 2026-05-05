@@ -24,31 +24,31 @@ DEFAULT_AVATAR_SPECS = [
         "key": "minimal-block-01",
         "label": "海盐方格",
         "filename": "default-avatar-01.svg",
-        "palette": ["#F4EFE6", "#2E4057", "#D96C54", "#F0C66E"],
+        "palette": ["#F7F2E8", "#22344A", "#D56A56", "#E9BF61"],
     },
     {
         "key": "minimal-block-02",
         "label": "松石拼片",
         "filename": "default-avatar-02.svg",
-        "palette": ["#EFF7F6", "#4F6D7A", "#56A3A6", "#C0D6DF"],
+        "palette": ["#EEF7F6", "#456A73", "#55A6A5", "#B9DADF"],
     },
     {
         "key": "minimal-block-03",
         "label": "日曜矩阵",
         "filename": "default-avatar-03.svg",
-        "palette": ["#F7F3E9", "#264653", "#E76F51", "#E9C46A"],
+        "palette": ["#F6F0E4", "#223F4A", "#E56D4F", "#E7BD58"],
     },
     {
         "key": "minimal-block-04",
         "label": "雾蓝叠片",
         "filename": "default-avatar-04.svg",
-        "palette": ["#F8FAFC", "#3A506B", "#5BC0BE", "#CDE7F0"],
+        "palette": ["#F7FAFC", "#314B68", "#62BFC0", "#C9E8EF"],
     },
     {
         "key": "minimal-block-05",
         "label": "暖棕几何",
         "filename": "default-avatar-05.svg",
-        "palette": ["#FAF7F2", "#5C4B51", "#C17767", "#E6C79C"],
+        "palette": ["#FAF6EF", "#5A4650", "#BE7464", "#E1BE8D"],
     },
 ]
 

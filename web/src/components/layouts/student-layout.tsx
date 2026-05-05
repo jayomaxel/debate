@@ -1,5 +1,4 @@
 import React from 'react';
-import { BrainCircuit } from 'lucide-react';
 import { useAuth } from '@/store/auth.context';
 import { useAppRouter } from '@/lib/router';
 import { cn } from '@/lib/utils';
@@ -8,6 +7,7 @@ import {
   getStudentSettingsPath,
 } from '@/lib/route-utils';
 import UserMenu from '@/components/user-menu';
+import brandLogo from '../../../../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
 
 interface StudentLayoutProps {
   children: React.ReactNode;
@@ -47,8 +47,8 @@ export default function StudentLayout({ children }: StudentLayoutProps) {
                 onClick={() => navigate('/student')}
                 className="min-w-0 flex items-center gap-3 text-left"
               >
-                <div className="student-icon-bubble bg-[#151515] text-white shadow-[0_14px_30px_rgba(15,23,42,0.18)]">
-                  <BrainCircuit className="h-6 w-6" />
+                <div className="student-icon-bubble overflow-hidden bg-white p-0 shadow-[0_14px_30px_rgba(15,23,42,0.18)]">
+                  <img src={brandLogo} alt="" className="h-full w-full object-cover" />
                 </div>
                 <div className="min-w-0">
                   <div className="truncate text-lg font-semibold tracking-[-0.03em] text-slate-900">
@@ -117,3 +117,4 @@ export default function StudentLayout({ children }: StudentLayoutProps) {
     </div>
   );
 }
+

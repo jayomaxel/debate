@@ -631,8 +631,8 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
                   >
                     <CardContent className="p-5">
                       <div className="flex items-start gap-4">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#1b2436] text-xl text-white">
-                          {achievement.icon || '★'}
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#1b2436] text-white">
+                          <Trophy className="h-5 w-5" />
                         </div>
                         <div className="flex-1">
                           <div className="flex items-start justify-between gap-3">
@@ -670,8 +670,8 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
                 >
                   <CardContent className="p-5">
                     <div className="flex items-start gap-4">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-xl text-slate-500">
-                        {achievement.icon || '○'}
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-slate-500">
+                        <Lock className="h-5 w-5" />
                       </div>
                       <div className="flex-1">
                         <h5 className="font-semibold text-slate-700">
