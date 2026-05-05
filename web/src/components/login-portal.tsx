@@ -28,8 +28,8 @@ import { useAppRouter } from '@/lib/router';
 import AuthService from '@/services/auth.service';
 import { formatErrorMessage } from '@/lib/error-handler';
 import { markAssessmentOnboardingPendingForAccount } from '@/lib/student-assessment-onboarding';
-import brandLogo from '../../../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
-import loginHeroImage from '../../../pic/23c8a94f8f1e972166535d35cf5fd020.jpg';
+import brandLogo from '../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
+import loginHeroImage from '../pic/23c8a94f8f1e972166535d35cf5fd020.jpg';
 
 interface LoginFormData {
   name: string;

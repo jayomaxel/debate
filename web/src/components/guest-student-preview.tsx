@@ -15,7 +15,7 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
-import debateStartJourney from '../../../pic/ac36e2096d056a2f03f171f86930bf06.jpg';
+import debateStartJourney from '../pic/ac36e2096d056a2f03f171f86930bf06.jpg';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

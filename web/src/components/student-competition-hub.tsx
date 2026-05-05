@@ -20,7 +20,7 @@ import type { Debate, LobbyRoom, StudentReservation } from '@/services/student.s
 import {
   roomStatusLabelMap,
 } from '@/lib/reservation-display';
-import competitionAsideImage from '../../../pic/27c72e318f175936bf07d8af3a692d80.jpg';
+import competitionAsideImage from '../pic/27c72e318f175936bf07d8af3a692d80.jpg';
 
 interface StudentCompetitionHubProps {
   onNavigateToWaiting?: () => void;

@@ -26,7 +26,7 @@ import {
 import { formatDebateRole, formatStudentDate } from '@/lib/student-display';
 import type { DebateHistoryItem } from '@/services/student.service';
 import growthPathJourneyImage from '@/assets/growth-path-journey.png';
-import quickMatchHeroImage from '../../../pic/0a9f0691f14275da43169e9b727416a4.jpg';
+import quickMatchHeroImage from '../pic/0a9f0691f14275da43169e9b727416a4.jpg';
 
 type StudentAnalyticsTab = 'history' | 'growth' | 'comparison' | 'achievements';
 

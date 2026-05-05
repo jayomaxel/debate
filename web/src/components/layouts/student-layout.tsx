@@ -7,7 +7,7 @@ import {
   getStudentSettingsPath,
 } from '@/lib/route-utils';
 import UserMenu from '@/components/user-menu';
-import brandLogo from '../../../../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
+import brandLogo from '../../pic/c99ec0bb69f6f215f2fe76bc7536d56a.jpg';
 
 interface StudentLayoutProps {
   children: React.ReactNode;
