@@ -1,190 +1,70 @@
-# Debate 智能辩论教学平台
+# 碳硅之辩 AI 辩论教学平台
 
-本项目是一个面向课堂教学场景的 AI 辩论平台，围绕“教学组织、实时辩论、语音交互、赛后分析、知识准备”构建完整闭环。系统将教师组织能力、学生训练能力与管理员配置能力整合在同一套前后端架构中，支持课堂内的辩题发布、学生参赛、AI 陪练、报告生成、成长分析和知识库辅助备赛。
+一个面向课堂与训练场景的 AI 辩论教学系统，覆盖教师组织、学生参赛、实时辩论、语音交互、赛后报告、成长分析与知识库辅助备赛等完整链路。
 
-## 项目定位
+项目采用前后端分离架构：
 
-平台的核心目标不是单纯做一个在线辩论房间，而是把辩论教学流程产品化：
+- `web/`：React + TypeScript + Vite 前端
+- `api/`：FastAPI 后端服务
+- `PostgreSQL + pgvector`：业务数据与向量检索
+- `Redis`：缓存与实时能力辅助
 
-- 课前，学生可以完成能力评估，并通过知识库助手进行备赛准备。
-- 课中，教师组织班级、发布辩题，学生进入实时辩论房间，与 AI 辩手共同完成完整赛程。
-- 课后，系统自动沉淀发言记录、评分结果、报告导出、成长趋势和班级对比数据。
-- 平台侧，管理员统一管理班级、用户、知识库文档以及模型、语音、向量和智能体配置。
+## 核心能力
 
-## 总体架构
+- 学生端
+  - 登录、加入课堂/比赛、参与实时辩论
+  - 文本与语音发言
+  - 查看个人报告、历史记录、成长趋势、能力画像
+  - 使用知识库问答助手完成备赛准备
+- 教师端
+  - 班级管理、学生管理
+  - 创建和组织辩论活动
+  - 查看课堂数据、比赛记录、复盘内容
+- 管理端
+  - 用户与班级治理
+  - 模型、ASR、TTS、向量、邮件等系统配置
+  - 知识库文档上传、解析、切片、向量化
+- 实时辩论引擎
+  - 基于 WebSocket 的房间通信
+  - 多阶段流程控制，如立论、盘问、自由辩论、总结陈词
+  - AI 辩手、评委、导师等角色化能力接入
 
-系统采用前后端分离架构，后端负责业务编排、实时通信、AI 调用和数据持久化，前端负责角色化交互界面与实时辩论体验。
+## 架构概览
 
-### 1. 前端层
+### 前端
 
-- 位于 `web/` 目录，基于 React 18 + TypeScript + Vite 构建。
-- 以角色为核心组织页面，覆盖学生端、教师端、管理员端三套主视图。
-- 包含学生指挥中心、教师控制台、管理员后台、实时辩论场、分析中心、报告页、回放页、备赛助手等模块。
-- 通过 Axios 调用 REST API，通过 WebSocket 接入实时辩论状态、发言事件和语音交互链路。
+前端位于 `web/`，主要面向学生、教师、管理员三类角色，包含：
 
-### 2. 后端接口层
+- 学生指挥中心、比赛大厅、实时辩论页
+- 教师控制台、预约/组织页面
+- 管理后台配置页
+- 数据分析、报告、回放等页面
 
-- 位于 `api/` 目录，入口为 `api/main.py`，基于 FastAPI 构建。
-- 路由按业务域拆分：
-  - `auth.py`：登录注册、个人资料、密码修改、账号注销。
-  - `student.py`：学生侧能力评估、参赛、报告、历史、分析、成就。
-  - `teacher.py`：教师侧班级、学生、辩论创建与管理。
-  - `admin.py`：管理员侧班级、用户、系统配置。
-  - `admin_kb.py` / `student_kb.py`：知识库文档管理与学生问答。
-  - `voice.py`：ASR 语音识别、TTS 语音合成。
-  - `websocket.py`：实时辩论房间通信。
+技术栈以 React 18、TypeScript、Vite、TailwindCSS、Radix UI 为主，测试使用 Vitest。
 
-### 3. 实时辩论编排层
+### 后端
 
-- `services/room_manager.py` 负责房间状态、参与者、麦克风占用和阶段状态管理。
-- `services/flow_controller.py` 负责编排辩论流程，包括立论、盘问、自由辩论、总结陈词等阶段切换。
-- WebSocket 房间统一使用 `/ws/debate/{room_id}` 进行实时通信。
-- 系统支持文本发言、音频发言、抢麦、指定发言人、开始辩论、推进环节、结束回合和结束整场辩论等消息类型。
+后端位于 `api/`，入口为 `api/main.py`，按业务拆分为多个路由和服务模块：
 
-### 4. AI 与语音能力层
+- `routers/auth.py`：认证、注册、资料相关接口
+- `routers/student.py`：学生侧业务
+- `routers/teacher.py`：教师侧业务
+- `routers/admin.py`：后台管理接口
+- `routers/admin_kb.py` / `routers/student_kb.py`：知识库管理与问答
+- `routers/voice.py`：ASR / TTS
+- `routers/websocket.py`：实时辩论 WebSocket
 
-- `agents/debater_agent.py` 提供 AI 辩手能力，用于生成对手发言。
-- 项目中还包含评委 Agent、导师 Agent 等角色化智能体，用于评分、讲评和教学辅助。
-- `utils/voice_processor.py` 负责统一语音链路处理，配合 `voice.py` 提供 ASR/TTS 能力。
-- 知识准备问答由 `RAGService`、`DocumentService` 等服务实现，支持知识库检索增强问答和会话历史追踪。
+核心业务主要集中在：
 
-### 5. 数据层
-
-- 核心业务数据存储在 PostgreSQL 中。
-- Redis 作为可选运行时基础设施，用于缓存和实时能力辅助初始化。
-- 知识库向量检索依赖 PostgreSQL + pgvector，`KBVectorSchemaService` 会自动对齐 `embedding` 列类型与向量索引。
-
-## 角色功能设计
-
-### 学生端
-
-学生端不是单一的“参赛入口”，而是完整的学习工作台，主要能力包括：
-
-- 账户注册、登录、个人资料维护、密码修改、账号注销。
-- 首次或阶段性能力评估，生成学生个人能力画像。
-- 通过邀请码加入教师发布的辩论活动，查看当前可参与辩题与参赛成员。
-- 进入实时辩论房间，参与立论、盘问、自由辩论、总结陈词等完整流程。
-- 支持文本发言和语音发言，系统可对音频进行识别并记录发言内容及时长。
-- 查看单场辩论报告，支持导出 PDF、导出 Excel、邮件发送报告。
-- 查看历史比赛记录、个人分析、成长趋势、班级对比数据。
-- 查看成就与勋章，支持成就检测与成长激励。
-- 使用备赛助手访问知识库，查看资料列表、发起问答、查看会话历史与引用来源。
-
-### 教师端
-
-教师端承担“教学组织者”和“课堂导演”角色，核心能力包括：
-
-- 创建班级、查看班级列表和班级统计信息。
-- 添加学生、查看班级学生列表，完成教学对象组织。
-- 创建辩论任务，配置辩题、时长、轮次、班级范围、参与学生、知识点等信息。
-- 更新辩论配置，管理历史辩论记录和辩论详情。
-- 查看教师控制台统计数据，包括班级规模、学生参与度、辩论数量等概况。
-- 从教师视角进入报告页和回放页，完成课堂复盘和赛后教学分析。
-- 结合学生表现与比赛记录，持续优化辩题设置和教学安排。
-
-### 管理员端
-
-管理员端负责平台级治理，既管理数据，也管理模型与能力配置：
-
-- 班级管理：查看、创建、修改、删除全平台班级。
-- 用户管理：统一管理教师与学生账户信息。
-- 知识库管理：上传 PDF/DOCX 文档，触发文档解析、切片、向量化和删除。
-- 模型配置：维护通用大模型名称、API 地址、密钥与生成参数。
-- ASR 配置：管理语音识别模型及其参数。
-- TTS 配置：管理语音合成模型及其参数。
-- 向量配置：维护嵌入模型、向量维度和检索相关参数。
-- Coze 配置：维护 AI 辩手 Bot、令牌和相关代理参数。
-- 邮件配置：为报告发送等链路提供邮件服务参数。
-- 安全管理：支持管理员修改自身密码。
-
-## 核心业务流程
-
-### 1. 用户与角色进入
-
-- 教师、学生通过认证接口完成注册与登录。
-- 系统基于用户角色分流到教师控制台、学生指挥中心或管理员后台。
-
-### 2. 教师组织课堂
-
-- 教师先创建班级并管理学生。
-- 然后发布辩论活动，设置辩题、轮次、时长、参与对象与知识点。
-- 辩论发布后，系统将参与关系写入辩论与参赛表。
-
-### 3. 学生备赛与参赛
-
-- 学生进入个人中心完成能力评估。
-- 通过邀请码加入辩论活动。
-- 进入等待与匹配流程，随后进入辩论房间。
-
-### 4. 实时辩论执行
-
-- 前端通过 WebSocket 连接辩论房间。
-- 后端维护房间状态、当前阶段、发言人、剩余时间和抢麦状态。
-- 在固定发言、可选回答和自由辩论场景下，系统按规则动态控制发言权限。
-- 当轮到 AI 辩手发言时，流程控制器会调用 AI Agent 生成内容，并将结果广播到前端。
-
-### 5. 语音与多模态处理
-
-- 学生音频可通过 ASR 接口转为文本。
-- 系统根据音频或文本估算发言时长，并保存到发言记录。
-- AI 文本结果可进一步通过 TTS 合成为语音，服务前端播放。
-
-### 6. 赛后沉淀与成长分析
-
-- 发言记录、评分结果和比赛状态写入数据库。
-- 学生可查看报告、导出文档、发送邮件。
-- 平台根据历史比赛生成个人分析、成长趋势、班级对比和成就结果。
-
-### 7. 知识库辅助备赛
-
-- 管理员上传知识文档后，后台完成解析、切片、向量化和索引。
-- 学生通过问答接口或流式问答接口获取基于知识库的答案。
-- 系统返回答案、来源引用、是否命中知识库和置信度，并保留对话历史。
-
-## 数据库设计
-
-### 1. 核心业务表
-
-系统围绕以下核心实体组织数据：
-
-- `User`：统一管理教师、学生、管理员三类用户。
-- `Class`：班级信息及班级码。
-- `Debate`：辩题、状态、轮次、时长等辩论主数据。
-- `DebateParticipation`：学生与辩论的参与关系。
-- `Speech`：实时发言记录、文本内容、音频地址、时长等。
-- `Score`：评分结果与赛后评价数据。
-- `AbilityAssessment`：学生能力评估结果。
-- `Achievement`：成就与激励数据。
-
-### 2. 知识库相关表
-
-- `KBDocument`：知识库原始文档信息。
-- `KBDocumentChunk`：文档切片及向量数据。
-- `KBConversation`：学生知识库问答历史。
-
-### 3. 系统配置表
-
-- `ModelConfig`：通用大模型配置。
-- `AsrConfig`：语音识别配置。
-- `TtsConfig`：语音合成配置。
-- `CozeConfig`：Coze Agent 配置。
-- `VectorConfig`：向量模型与维度配置。
-- `EmailConfig`：邮件服务配置。
-
-### 4. PostgreSQL + pgvector 的作用
-
-- PostgreSQL 承担主要事务数据与分析数据存储。
-- 知识库切片向量保存在 PostgreSQL 中，并依赖 `pgvector` 做相似度检索。
-- `api/services/kb_vector_schema_service.py` 会确保向量列与 `vector(n)` 类型、`ivfflat` 索引保持一致。
-
-### 5. Redis 的作用
-
-- Redis 在项目中作为可选运行时组件初始化。
-- 主要用于缓存与实时链路辅助能力，支撑更顺滑的在线交互体验。
+- `services/room_manager.py`：房间状态与参赛者管理
+- `services/flow_controller.py`：辩论流程编排
+- `services/debate_service.py`：辩论业务处理
+- `services/report_service.py`：报告与导出
+- `services/rag_service.py`：知识库检索增强问答
 
 ## 技术栈
 
-### 前端技术栈
+### 前端
 
 - React 18
 - TypeScript
@@ -192,10 +72,9 @@
 - TailwindCSS
 - Radix UI
 - Axios
-- 原生 WebSocket 封装
 - Vitest + Testing Library
 
-### 后端技术栈
+### 后端
 
 - FastAPI
 - Uvicorn
@@ -204,47 +83,168 @@
 - PostgreSQL
 - Redis
 - Pydantic / pydantic-settings
-- python-jose
-- passlib + bcrypt
 
-### AI 与智能体技术栈
+### AI 与多模态
 
 - OpenAI
 - CozePy
 - Cohere
-- LangChain
-- LangGraph
+- LangChain / LangGraph
 - DashScope
-- tiktoken
-- 自定义 Debater / Judge / Mentor Agent
 
-### 文档与报告处理
+### 文档与报告
 
-- PyPDF2
 - python-docx
 - ReportLab
 - openpyxl
 - WeasyPrint
 - markdown
-- pygments
-- aiosmtplib
 
-## 项目目录说明
+## 目录结构
 
 ```text
 debate/
-├── web/                     前端应用
-│   └── src/components/      学生端、教师端、管理员端与辩论页面组件
-├── api/                     后端应用
-│   ├── routers/             按角色与业务拆分的 API 路由
-│   ├── services/            业务服务、报告分析、RAG、流程控制
-│   ├── agents/              AI 辩手、评委、导师等智能体
-│   ├── models/              SQLAlchemy 数据模型
-│   ├── schemas/             请求与响应模型
-│   └── utils/               语音、鉴权、邮件、WebSocket 等工具
-└── scripts/                 辅助脚本
+├─ api/                      后端服务
+│  ├─ agents/                AI 智能体
+│  ├─ alembic/               数据库迁移
+│  ├─ models/                数据模型
+│  ├─ routers/               API 路由
+│  ├─ schemas/               请求/响应模型
+│  ├─ services/              核心业务服务
+│  ├─ tests/                 后端测试
+│  └─ utils/                 工具模块
+├─ web/                      前端应用
+│  ├─ src/components/        页面与业务组件
+│  ├─ src/hooks/             自定义 Hooks
+│  ├─ src/lib/               工具与运行时封装
+│  ├─ src/services/          前端接口层
+│  └─ src/store/             状态与上下文
+├─ scripts/                  本地启动辅助脚本
+├─ output/                   生成产物
+└─ readme.md
 ```
 
-## 总结
+## 快速开始
 
-这套系统的核心价值在于把“辩论教学”从一次性课堂活动，升级为可管理、可记录、可分析、可复盘、可持续成长的数字化教学平台。它不仅提供实时辩论能力，还将 AI 智能体、语音交互、知识库检索、报告分析和角色化后台管理整合到同一架构中，形成完整的教学业务闭环。
+### 方式一：本地 Docker 启动整套服务
+
+这是最省心的方式，适合首次运行。
+
+```powershell
+docker compose -f docker-compose.local.yml up --build
+```
+
+默认端口：
+
+- 前端：`http://localhost:8860`
+- 后端：`http://localhost:7860`
+- PostgreSQL：`127.0.0.1:5432`
+- Redis：`127.0.0.1:6380`
+
+### 方式二：本地开发模式
+
+适合前后端分别调试。
+
+#### 1. 准备环境
+
+- Node.js `>= 18`
+- pnpm `>= 10`
+- Python `>= 3.10`
+- PostgreSQL（建议启用 `pgvector`）
+- Redis 7
+
+#### 2. 安装前端依赖
+
+```powershell
+cd web
+pnpm install
+```
+
+#### 3. 安装后端依赖
+
+```powershell
+cd api
+python -m venv venv
+.\venv\Scripts\pip install -r requirements.txt
+```
+
+#### 4. 启动前后端
+
+仓库根目录提供了 Windows 开发脚本：
+
+```powershell
+.\start-dev.ps1
+```
+
+该脚本默认会：
+
+- 启动 API：`http://localhost:7861`
+- 启动 Web：`http://localhost:8860`
+- 连接本地 PostgreSQL：`127.0.0.1:5432/debate_system`
+- 连接本地 Redis：`127.0.0.1:6380`
+
+如果你已经通过 Docker 单独启动了数据库和 Redis，这个脚本会很方便。
+
+## 配置说明
+
+后端主要配置位于 `api/config.py`，环境变量支持：
+
+- `DATABASE_URL`
+- `REDIS_HOST`
+- `REDIS_PORT`
+- `SECRET_KEY`
+- `PUBLIC_BASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `ASR_API_KEY`
+- `TTS_API_KEY`
+- `COZE_API_KEY`
+
+生产环境下需要显式配置数据库、密钥和跨域来源，避免直接使用默认值。
+
+## 测试
+
+### 前端测试
+
+```powershell
+cd web
+pnpm test:run
+```
+
+### 后端测试
+
+```powershell
+cd api
+.\venv\Scripts\python.exe -m pytest
+```
+
+说明：
+
+- 默认后端测试以 SQLite 为主
+- 依赖 `pgvector` 的测试需要额外设置 `TEST_PGVECTOR_DATABASE_URL`
+- 详情可参考 `api/tests/README.md`
+
+## 部署相关
+
+仓库内提供了多套容器与启动文件：
+
+- `docker-compose.yml`：基础容器编排
+- `docker-compose.local.yml`：本地完整联调
+- `docker-compose.dev.yml`：开发环境扩展配置
+- `Dockerfile.api`：后端镜像
+- `Dockerfile.web`：前端镜像
+- `Dockerfile.pgvector`：向量数据库相关镜像
+
+## 推荐阅读
+
+如果你需要继续了解项目设计，可以优先查看这些文档：
+
+- `碳硅之辩_完整功能说明.md`
+- `碳硅之辩_完整架构说明.md`
+- `项目核心代码文档.md`
+- `TECH_STACK_ARCHITECTURE.md`
+- `web/当前前端逻辑说明.md`
+
+## 当前项目定位
+
+这个仓库不只是一个“在线辩论房间”，而是一套把辩论教学流程产品化的系统：从教师发布任务、学生准备与参赛，到 AI 辅助、数据沉淀、报告生成和成长分析，尽量把教学闭环放进同一套平台中。
