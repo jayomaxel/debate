@@ -1825,7 +1825,7 @@ def test_topic_only_ai_turn_has_local_fallback_when_model_is_slow():
     assert len(text) <= AIDebaterAgent.MAX_REPLY_CHARS
 
 
-def test_reactive_ai_fallback_uses_question_or_recent_free_debate_context():
+def test_reactive_ai_fallback_does_not_echo_question_or_recent_context():
     answer_text = flow_controller._build_reactive_fallback_text(
         topic="人工智能是否应该全面进入课堂教学",
         stance="negative",
@@ -1847,10 +1847,66 @@ def test_reactive_ai_fallback_uses_question_or_recent_free_debate_context():
         ],
     )
 
-    assert "不会削弱学生独立思考" in answer_text
-    assert "AI进入课堂能显著提高效率" in free_text
+    assert "针对对方追问，我方回应如下" in answer_text
+    assert "不会削弱学生独立思考" not in answer_text
+    assert "AI进入课堂能显著提高效率" not in free_text
     assert len(answer_text) <= AIDebaterAgent.MAX_REPLY_CHARS
     assert len(free_text) <= AIDebaterAgent.MAX_REPLY_CHARS
+
+
+def test_prompt_context_filters_reactive_fallback_speeches():
+    fallback_text = (
+        "针对这个问题，我方回应如下：我是正方辩，正方二辩，"
+        "相机刚出现时也有人质疑艺术性。"
+    )
+    speeches = [
+        _make_flow_test_speech("ai_2", fallback_text, phase="questioning"),
+        _make_flow_test_speech("debater_2", "请解释 AI 作者资格的法律边界？", phase="questioning"),
+    ]
+
+    context = flow_controller._build_llm_context(speeches)
+    turn_plan = {
+        "speech_type": "response",
+        "dependency_scope": "last_opponent_question",
+    }
+    kwargs = flow_controller._build_generation_kwargs(
+        turn_plan,
+        speeches,
+        "ai_1",
+        segment_id="questioning_2_neg_answer",
+    )
+
+    assert all(fallback_text not in item["content"] for item in context)
+    assert fallback_text not in kwargs["question"]
+    assert "法律边界" in kwargs["question"]
+
+
+def test_rebuttal_argument_uses_latest_effective_opponent_speech_only():
+    speeches = [
+        _make_flow_test_speech("debater_1", "正方早先观点：AI 能提升效率", phase="questioning"),
+        _make_flow_test_speech(
+            "ai_2",
+            "针对这个问题，我方回应如下：我是正方辩，正方二辩。",
+            phase="questioning",
+        ),
+        _make_flow_test_speech("debater_3", "正方最新观点：作者资格应以表达贡献为准", phase="questioning"),
+        _make_flow_test_speech("ai_3", "反方上一轮追问", phase="questioning"),
+    ]
+    turn_plan = {
+        "speech_type": "rebuttal",
+        "dependency_scope": "recent_questioning_exchange",
+    }
+
+    kwargs = flow_controller._build_generation_kwargs(
+        turn_plan,
+        speeches,
+        "ai_1",
+        segment_id="questioning_neg_summary",
+    )
+
+    assert kwargs["opponent_argument"] == "正方最新观点：作者资格应以表达贡献为准"
+    assert "正方早先观点" not in kwargs["opponent_argument"]
+    assert "针对这个问题，我方回应如下" not in kwargs["opponent_argument"]
 
 
 def test_ai_turn_missing_dependency_waits_until_segment_timeout():

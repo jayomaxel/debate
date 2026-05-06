@@ -522,7 +522,8 @@ class AIDebaterAgent:
 2. 提供反驳论据
 3. 强化己方立场
 4. 语言简洁有力
-5. 控制在{self.MAX_REPLY_CHARS}字以内
+5. 不要复述对方原文；最多引用对方关键词，不得整句照抄。直接指出漏洞并反驳
+6. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
         return await self._call_agent(prompt, context, stream_callback=stream_callback)

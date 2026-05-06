@@ -42,6 +42,16 @@ class DebateFlowController:
         "questioning_neg_summary",
         "closing_negative_4",
     }
+    REACTIVE_FALLBACK_CONTEXT_PREFIXES = (
+        "针对这个问题，我方回应如下：",
+        "针对这个问题，我方回应如下:",
+        "针对对方追问，我方回应如下：",
+        "针对对方追问，我方回应如下:",
+        "针对刚才观点，我方回应如下：",
+        "针对刚才观点，我方回应如下:",
+        "我方回应刚才的观点：",
+        "我方回应刚才的观点:",
+    )
 
     def __init__(self):
         # 存储定时器任务: {room_id: asyncio.Task}
@@ -578,11 +588,8 @@ class DebateFlowController:
         stance_text = "正方" if stance == "positive" else "反方"
         clean_topic = str(topic or "本辩题").strip() or "本辩题"
         if speech_type == "response":
-            question = str(generation_kwargs.get("question") or "").strip()
-            if not question:
-                question = "请你方解释自身立场中最关键的前提是否成立"
             text = (
-                f"针对这个问题，我方回应如下：{question}。"
+                "针对对方追问，我方回应如下："
                 f"第一，{stance_text}并不回避问题核心，但判断“{clean_topic}”必须看条件、范围和代价；"
                 f"第二，对方问题默认了一个并不必然成立的前提，因此不能直接推出其结论；"
                 f"第三，我方更强调可验证的事实与可执行的方案，所以我方立场仍然成立。"
@@ -599,7 +606,7 @@ class DebateFlowController:
             )
             if latest_human:
                 text = (
-                    f"我方回应刚才的观点：{latest_human}。这个说法忽略了“{clean_topic}”中的关键约束。"
+                    f"针对刚才观点，我方回应如下：这个说法忽略了“{clean_topic}”中的关键约束。"
                     f"如果只强调理想收益，却不说明成本、边界和执行条件，结论就不够稳固。"
                     f"因此，我方坚持反方立场，请正方进一步说明其方案如何落地。"
                 )
@@ -632,6 +639,26 @@ class DebateFlowController:
             return "empty"
         return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
 
+    def _is_reactive_fallback_context_content(self, content: str) -> bool:
+        normalized = str(content or "").lstrip()
+        return any(
+            normalized.startswith(prefix)
+            for prefix in self.REACTIVE_FALLBACK_CONTEXT_PREFIXES
+        )
+
+    def _is_valid_prompt_context_speech(self, speech: Speech) -> bool:
+        content = str(getattr(speech, "content", "") or "").strip()
+        return bool(content) and not self._is_reactive_fallback_context_content(content)
+
+    def _filter_prompt_context_speeches(
+        self, speeches: List[Speech]
+    ) -> List[Speech]:
+        return [
+            speech
+            for speech in speeches
+            if self._is_valid_prompt_context_speech(speech)
+        ]
+
     def _build_speech_signature_token(self, speech: Speech) -> str:
         return ":".join(
             [
@@ -660,10 +687,34 @@ class DebateFlowController:
                 continue
             if normalized_phase and str(getattr(speech, "phase", "") or "").strip() != normalized_phase:
                 continue
-            if not str(getattr(speech, "content", "") or "").strip():
+            if not self._is_valid_prompt_context_speech(speech):
                 continue
             return speech
         return None
+
+    def _find_latest_effective_opponent_speech(
+        self,
+        recent_speeches: List[Speech],
+        *,
+        opponent_side: Optional[str],
+    ) -> Optional[Speech]:
+        candidates = [
+            speech
+            for speech in recent_speeches
+            if self._speaker_side(getattr(speech, "speaker_role", None)) == opponent_side
+            and self._is_valid_prompt_context_speech(speech)
+        ]
+        latest_human = next(
+            (
+                speech
+                for speech in reversed(candidates)
+                if str(getattr(speech, "speaker_type", "") or "") == "human"
+            ),
+            None,
+        )
+        if latest_human:
+            return latest_human
+        return candidates[-1] if candidates else None
 
     def _summarize_speeches(
         self,
@@ -675,7 +726,7 @@ class DebateFlowController:
         lines: List[str] = []
         for speech in speeches[-max_items:]:
             content = str(getattr(speech, "content", "") or "").strip()
-            if not content:
+            if not content or self._is_reactive_fallback_context_content(content):
                 continue
             prefix = ""
             if with_speaker:
@@ -720,6 +771,7 @@ class DebateFlowController:
         speaker_side = self._speaker_side(speaker_role)
         opponent_side = "negative" if speaker_side == "positive" else "positive"
         questioning_phase = str(DebatePhase.QUESTIONING.value)
+        recent_speeches = self._filter_prompt_context_speeches(recent_speeches)
 
         if segment_id == "questioning_2_neg_answer":
             latest_question = self._find_latest_speech(
@@ -793,9 +845,9 @@ class DebateFlowController:
             return [latest_question] if latest_question else []
 
         if speech_type == "rebuttal":
-            latest_argument = self._find_latest_speech(
+            latest_argument = self._find_latest_effective_opponent_speech(
                 recent_speeches,
-                speaker_side=opponent_side,
+                opponent_side=opponent_side,
             )
             return [latest_argument] if latest_argument else []
 
@@ -1662,7 +1714,7 @@ class DebateFlowController:
 
     def _build_llm_context(self, recent_speeches: List[Speech]) -> List[Dict[str, str]]:
         context: List[Dict[str, str]] = []
-        for speech in recent_speeches[-20:]:
+        for speech in self._filter_prompt_context_speeches(recent_speeches)[-20:]:
             content = str(getattr(speech, "content", "") or "").strip()
             if not content:
                 continue
@@ -1711,15 +1763,18 @@ class DebateFlowController:
         ).strip()
         speaker_side = self._speaker_side(speaker_role)
         opponent_side = "negative" if speaker_side == "positive" else "positive"
+        prompt_context_speeches = self._filter_prompt_context_speeches(
+            recent_speeches
+        )
 
         opponent_speeches = [
             speech
-            for speech in recent_speeches
+            for speech in prompt_context_speeches
             if self._speaker_side(getattr(speech, "speaker_role", None)) == opponent_side
         ]
         same_side_speeches = [
             speech
-            for speech in recent_speeches
+            for speech in prompt_context_speeches
             if self._speaker_side(getattr(speech, "speaker_role", None)) == speaker_side
         ]
 
@@ -1728,22 +1783,20 @@ class DebateFlowController:
             "speaker_role": speaker_role,
         }
         if normalized_segment_id == "questioning_neg_summary":
-            questioning_speeches = self._collect_dependency_speeches(
-                normalized_segment_id,
-                turn_plan,
-                recent_speeches,
-                speaker_role,
+            latest_argument_speech = self._find_latest_effective_opponent_speech(
+                prompt_context_speeches,
+                opponent_side=opponent_side,
             )
-            kwargs["opponent_argument"] = self._summarize_speeches(
-                questioning_speeches,
-                max_items=10,
-                with_speaker=True,
+            kwargs["opponent_argument"] = (
+                str(getattr(latest_argument_speech, "content", "") or "").strip()
+                if latest_argument_speech
+                else ""
             )
         elif speech_type == "question":
             dependency_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
                 turn_plan,
-                recent_speeches,
+                prompt_context_speeches,
                 speaker_role,
             )
             question_inputs = [
@@ -1760,7 +1813,7 @@ class DebateFlowController:
             previous_question_roles = {"ai_2", "ai_3", "debater_2", "debater_3"}
             previous_question_speeches = [
                 speech
-                for speech in recent_speeches
+                for speech in prompt_context_speeches
                 if str(getattr(speech, "phase", "") or "") == str(DebatePhase.QUESTIONING.value)
                 and str(getattr(speech, "speaker_role", "") or "") in previous_question_roles
                 and str(getattr(speech, "speaker_role", "") or "") != str(speaker_role or "")
@@ -1782,7 +1835,7 @@ class DebateFlowController:
             dependency_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
                 turn_plan,
-                recent_speeches,
+                prompt_context_speeches,
                 speaker_role,
             )
             latest_question = (
@@ -1804,7 +1857,7 @@ class DebateFlowController:
             dependency_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
                 turn_plan,
-                recent_speeches,
+                prompt_context_speeches,
                 speaker_role,
             )
             latest_argument = (
@@ -1818,7 +1871,7 @@ class DebateFlowController:
                 closing_speeches = self._collect_dependency_speeches(
                     normalized_segment_id,
                     turn_plan,
-                    recent_speeches,
+                    prompt_context_speeches,
                     speaker_role,
                 )
                 recent_same_side = [
@@ -1852,7 +1905,7 @@ class DebateFlowController:
             dependency_speeches = self._collect_dependency_speeches(
                 normalized_segment_id,
                 turn_plan,
-                recent_speeches,
+                prompt_context_speeches,
                 speaker_role,
             )
             kwargs["recent_speeches"] = [
