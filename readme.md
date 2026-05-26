@@ -141,7 +141,80 @@ docker compose -f docker-compose.local.yml up --build
 - PostgreSQL：`127.0.0.1:5432`
 - Redis：`127.0.0.1:6380`
 
-### 方式二：本地开发模式
+### 方式二：Docker 启动数据库和 Redis，脚本启动前后端
+
+这是本地联调时最推荐的方式：基础依赖交给 Docker，前后端仍然使用本机开发模式运行，便于调试和热更新。
+
+#### 1. 启动 PostgreSQL 和 Redis
+
+在仓库根目录执行：
+
+```powershell
+docker compose -f docker-compose.local.yml up -d db redis
+```
+
+默认会启动：
+
+- PostgreSQL：`127.0.0.1:5432`
+- Redis：`127.0.0.1:6380`
+
+其中数据库默认连接信息为：
+
+- 数据库名：`debate_system`
+- 用户名：`pgvector`
+- 密码：`pgvector`
+
+#### 2. 安装前后端依赖
+
+前端依赖：
+
+```powershell
+cd web
+pnpm install
+```
+
+后端依赖：
+
+```powershell
+cd api
+python -m venv venv
+.\venv\Scripts\pip install -r requirements.txt
+```
+
+#### 3. 使用脚本启动前后端
+
+回到仓库根目录执行：
+
+```powershell
+.\start-dev.ps1
+```
+
+该脚本默认会：
+
+- 启动 API：`http://localhost:7861`
+- 启动 Web：`http://localhost:8860`
+- 连接本地 PostgreSQL：`127.0.0.1:5432/debate_system`
+- 连接本地 Redis：`127.0.0.1:6380`
+
+脚本会新开两个 PowerShell 窗口，分别运行后端和前端服务，适合日常开发调试。
+
+#### 4. 停止服务
+
+关闭前后端：直接关闭脚本打开的两个 PowerShell 窗口即可。
+
+停止数据库和 Redis：
+
+```powershell
+docker compose -f docker-compose.local.yml stop db redis
+```
+
+如果需要连同容器一起删除，可执行：
+
+```powershell
+docker compose -f docker-compose.local.yml down
+```
+
+### 方式三：本地开发模式
 
 适合前后端分别调试。
 
