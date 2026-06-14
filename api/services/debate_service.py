@@ -20,6 +20,7 @@ import random
 import string
 import json
 import httpx
+from copy import deepcopy
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,7 @@ class DebateService:
     """辩论管理服务类"""
 
     ROOM_META_KEY = "__room_meta"
+    DEBATE_CONFIG_META_KEY = "debate_config_meta"
     DEFAULT_ROOM_CAPACITY = 4
     ROLE_ORDER = ["debater_1", "debater_2", "debater_3", "debater_4"]
     ROLE_REASON = {
@@ -35,6 +37,45 @@ class DebateService:
         "debater_2": "补充论据,强化逻辑",
         "debater_3": "反驳对方,抓住漏洞",
         "debater_4": "总结陈词,升华观点",
+    }
+    CONFIG_MODE_VALUES = {"competition", "teaching"}
+    CONFIG_ROLE_ASSIGNMENT_MODE_VALUES = {"strength_first", "growth_first"}
+    CONFIG_ASSIGNMENT_POLICY_VALUES = {"ai_auto_assign", "ai_recommend_then_confirm"}
+    CONFIG_DIFFICULTY_ROUNDS_MIN = 1
+    CONFIG_DIFFICULTY_ROUNDS_MAX = 20
+    CONFIG_LIST_FIELDS = {
+        "knowledge_points",
+        "objective",
+        "evaluation_focus",
+        "forbidden_moves",
+        "support_document_ids",
+    }
+    CONFIG_OPTIONAL_STRING_FIELDS = {
+        "domain_pack_id",
+        "teaching_design_version_id",
+    }
+    CONFIG_ACTIVITY_FOCUS_FIELDS = {
+        "chapter_focus",
+        "training_focus",
+        "classroom_scene",
+    }
+    DEFAULT_DEBATE_CONFIG_META = {
+        "mode": "competition",
+        "role_assignment_mode": "strength_first",
+        "assignment_policy": "ai_recommend_then_confirm",
+        "rounds": 1,
+        "knowledge_points": [],
+        "objective": [],
+        "evaluation_focus": [],
+        "forbidden_moves": [],
+        "support_document_ids": [],
+        "domain_pack_id": None,
+        "teaching_design_version_id": None,
+        "activity_focus": {
+            "chapter_focus": None,
+            "training_focus": None,
+            "classroom_scene": None,
+        },
     }
 
     @staticmethod
@@ -81,6 +122,163 @@ class DebateService:
         report = dict(debate.report) if isinstance(debate.report, dict) else {}
         report[DebateService.ROOM_META_KEY] = dict(meta)
         debate.report = report
+
+    @staticmethod
+    def _clean_optional_string(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
+
+    @staticmethod
+    def _clean_string_list(value: Any, *, field_name: str) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"{field_name} 必须是字符串数组")
+        result: List[str] = []
+        seen = set()
+        for item in value:
+            cleaned = DebateService._clean_optional_string(item)
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result
+
+    @staticmethod
+    def _parse_legacy_debate_config_meta(description: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Best-effort parser for old descriptions that were stored as JSON."""
+        text = (description or "").strip()
+        if not text or not text.startswith("{"):
+            return None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        for key in ("config_meta", "debate_config_meta", "DebateConfigMeta"):
+            value = parsed.get(key)
+            if isinstance(value, dict):
+                return value
+        known_keys = set(DebateService.DEFAULT_DEBATE_CONFIG_META.keys())
+        if known_keys.intersection(parsed.keys()):
+            return parsed
+        return None
+
+    @staticmethod
+    def _apply_debate_config_patch(
+        target: Dict[str, Any],
+        patch: Dict[str, Any],
+        *,
+        strict: bool,
+    ) -> None:
+        if not isinstance(patch, dict):
+            if strict:
+                raise ValueError("config_meta 必须是对象")
+            return
+
+        known_keys = set(DebateService.DEFAULT_DEBATE_CONFIG_META.keys())
+        unknown_keys = set(patch.keys()) - known_keys
+        if unknown_keys and strict:
+            unknown = ", ".join(sorted(unknown_keys))
+            raise ValueError(f"config_meta 包含未知字段: {unknown}")
+
+        if "mode" in patch:
+            mode = DebateService._clean_optional_string(patch.get("mode")) or "competition"
+            if mode not in DebateService.CONFIG_MODE_VALUES:
+                raise ValueError("config_meta.mode 仅支持 competition 或 teaching")
+            target["mode"] = mode
+
+        if "role_assignment_mode" in patch:
+            value = DebateService._clean_optional_string(patch.get("role_assignment_mode")) or "strength_first"
+            if value not in DebateService.CONFIG_ROLE_ASSIGNMENT_MODE_VALUES:
+                raise ValueError("config_meta.role_assignment_mode 仅支持 strength_first 或 growth_first")
+            target["role_assignment_mode"] = value
+
+        if "assignment_policy" in patch:
+            value = DebateService._clean_optional_string(patch.get("assignment_policy")) or "ai_recommend_then_confirm"
+            if value not in DebateService.CONFIG_ASSIGNMENT_POLICY_VALUES:
+                raise ValueError("config_meta.assignment_policy 仅支持 ai_auto_assign 或 ai_recommend_then_confirm")
+            target["assignment_policy"] = value
+
+        if "rounds" in patch:
+            try:
+                rounds = int(patch.get("rounds"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("config_meta.rounds 必须是整数") from exc
+            if rounds < DebateService.CONFIG_DIFFICULTY_ROUNDS_MIN or rounds > DebateService.CONFIG_DIFFICULTY_ROUNDS_MAX:
+                raise ValueError("config_meta.rounds 必须在 1 到 20 之间")
+            target["rounds"] = rounds
+
+        for field_name in DebateService.CONFIG_LIST_FIELDS:
+            if field_name in patch:
+                target[field_name] = DebateService._clean_string_list(
+                    patch.get(field_name),
+                    field_name=f"config_meta.{field_name}",
+                )
+
+        for field_name in DebateService.CONFIG_OPTIONAL_STRING_FIELDS:
+            if field_name in patch:
+                target[field_name] = DebateService._clean_optional_string(patch.get(field_name))
+
+        if "activity_focus" in patch:
+            activity_focus = patch.get("activity_focus") or {}
+            if not isinstance(activity_focus, dict):
+                raise ValueError("config_meta.activity_focus 必须是对象")
+            unknown_focus_keys = set(activity_focus.keys()) - DebateService.CONFIG_ACTIVITY_FOCUS_FIELDS
+            if unknown_focus_keys and strict:
+                unknown = ", ".join(sorted(unknown_focus_keys))
+                raise ValueError(f"config_meta.activity_focus 包含未知字段: {unknown}")
+            target_focus = dict(target.get("activity_focus") or {})
+            for field_name in DebateService.CONFIG_ACTIVITY_FOCUS_FIELDS:
+                if field_name in activity_focus:
+                    target_focus[field_name] = DebateService._clean_optional_string(activity_focus.get(field_name))
+            for field_name in DebateService.CONFIG_ACTIVITY_FOCUS_FIELDS:
+                target_focus.setdefault(field_name, None)
+            target["activity_focus"] = target_focus
+
+    @staticmethod
+    def normalize_debate_config_meta(
+        config_meta: Optional[Dict[str, Any]] = None,
+        *,
+        description: Optional[str] = None,
+        base_meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        normalized = deepcopy(DebateService.DEFAULT_DEBATE_CONFIG_META)
+        legacy_meta = DebateService._parse_legacy_debate_config_meta(description)
+        if legacy_meta:
+            DebateService._apply_debate_config_patch(normalized, legacy_meta, strict=False)
+        if base_meta:
+            DebateService._apply_debate_config_patch(normalized, base_meta, strict=False)
+        if config_meta is not None:
+            DebateService._apply_debate_config_patch(normalized, config_meta, strict=True)
+        return normalized
+
+    @staticmethod
+    def _get_debate_config_meta(debate: Debate) -> Dict[str, Any]:
+        meta = DebateService._get_room_meta(debate)
+        stored_meta = meta.get(DebateService.DEBATE_CONFIG_META_KEY)
+        try:
+            return DebateService.normalize_debate_config_meta(
+                stored_meta if isinstance(stored_meta, dict) else None,
+                description=debate.description,
+            )
+        except ValueError as exc:
+            logger.warning(f"辩论结构化配置解析失败，使用默认配置: {exc}")
+            return DebateService.normalize_debate_config_meta(description=debate.description)
+
+    @staticmethod
+    def _set_debate_config_meta(debate: Debate, config_meta: Dict[str, Any]) -> None:
+        meta = DebateService._get_room_meta(debate)
+        stored_meta = meta.get(DebateService.DEBATE_CONFIG_META_KEY)
+        meta[DebateService.DEBATE_CONFIG_META_KEY] = DebateService.normalize_debate_config_meta(
+            config_meta,
+            description=debate.description,
+            base_meta=stored_meta if isinstance(stored_meta, dict) else None,
+        )
+        DebateService._set_room_meta(debate, meta)
 
     @staticmethod
     def _uuid_or_none(value: Any) -> Optional[uuid.UUID]:
@@ -577,6 +775,7 @@ class DebateService:
             "topic": debate.topic,
             "room_name": debate.room_name or meta.get("room_name") or debate.topic[:30],
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "current_count": participant_count,
             "capacity": DebateService._room_capacity(debate, meta),
             "visibility": DebateService._room_visibility(debate, meta),
@@ -1063,6 +1262,7 @@ class DebateService:
         topic: str,
         duration: int,
         description: Optional[str] = None,
+        config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1076,6 +1276,7 @@ class DebateService:
             topic: 辩题
             duration: 时长（分钟）
             description: 描述（可选）
+            config_meta: 结构化建赛配置（可选）
             student_ids: 学生ID列表（可选）
             
         Returns:
@@ -1086,6 +1287,10 @@ class DebateService:
         """
         DebateService._get_teacher_class(db=db, teacher_id=teacher_id, class_id=class_id)
         normalized_status = DebateService._normalize_editable_status(status)
+        normalized_config_meta = DebateService.normalize_debate_config_meta(
+            config_meta,
+            description=description,
+        )
         selected_student_ids = DebateService._validate_selected_student_ids(
             db=db,
             class_id=class_id,
@@ -1123,6 +1328,7 @@ class DebateService:
             owner_user_id=uuid.UUID(teacher_id),
             host_user_id=uuid.UUID(teacher_id),
         )
+        DebateService._set_debate_config_meta(debate, normalized_config_meta)
         
         try:
             db.add(debate)
@@ -1172,6 +1378,7 @@ class DebateService:
             "id": str(debate.id),
             "topic": debate.topic,
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "duration": debate.duration,
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
@@ -1191,6 +1398,7 @@ class DebateService:
         topic: Optional[str] = None,
         duration: Optional[int] = None,
         description: Optional[str] = None,
+        config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1204,6 +1412,7 @@ class DebateService:
             topic: 辩题（可选）
             duration: 时长（可选）
             description: 描述（可选）
+            config_meta: 结构化建赛配置（可选）
             student_ids: 学生ID列表（可选）
             
         Returns:
@@ -1258,6 +1467,8 @@ class DebateService:
             debate.duration = duration
         if description is not None:
             debate.description = description
+        if config_meta is not None:
+            DebateService._set_debate_config_meta(debate, config_meta)
             
         # 更新参与学生
         if status is not None:
@@ -1314,6 +1525,7 @@ class DebateService:
             "id": str(debate.id),
             "topic": debate.topic,
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "duration": debate.duration,
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
@@ -1407,6 +1619,7 @@ class DebateService:
                 "debate_id": str(debate.id),
                 "topic": debate.topic,
                 "description": debate.description,
+                "config_meta": DebateService._get_debate_config_meta(debate),
                 "duration": debate.duration,
                 "invitation_code": debate.invitation_code,
                 "class_id": str(debate.class_id),
@@ -1470,6 +1683,7 @@ class DebateService:
             "id": str(debate.id),
             "topic": debate.topic,
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "duration": debate.duration,
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
@@ -1863,6 +2077,7 @@ class DebateService:
         topic: str,
         duration: int,
         description: Optional[str] = None,
+        config_meta: Optional[Dict[str, Any]] = None,
         scheduled_start_time: Any = None,
         checkin_open_time: Any = None,
         checkin_close_time: Any = None,
@@ -1879,6 +2094,10 @@ class DebateService:
             raise ValueError("预计时长必须大于 0")
         if visibility not in {"public", "private"}:
             raise ValueError("房间类型参数不正确")
+        normalized_config_meta = DebateService.normalize_debate_config_meta(
+            config_meta,
+            description=description,
+        )
         scheduled_dt = DebateService._normalize_datetime(scheduled_start_time)
         if not scheduled_dt:
             raise ValueError("开赛时间不能为空")
@@ -1934,6 +2153,7 @@ class DebateService:
             reservation_status="scheduled",
             reservation_published_at=datetime.utcnow(),
         )
+        DebateService._set_debate_config_meta(debate, normalized_config_meta)
         if not password:
             debate.join_password_hash = None
             debate.password_updated_at = None
@@ -1997,6 +2217,7 @@ class DebateService:
             "room_id": str(debate.id),
             "topic": debate.topic,
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "duration": debate.duration,
             "class_id": str(debate.class_id),
             "class_name": class_obj.name if class_obj else "",
@@ -2094,6 +2315,7 @@ class DebateService:
         reservation_id: str,
         topic: Optional[str] = None,
         description: Optional[str] = None,
+        config_meta: Optional[Dict[str, Any]] = None,
         duration: Optional[int] = None,
         scheduled_start_time: Any = None,
         checkin_open_time: Any = None,
@@ -2127,6 +2349,8 @@ class DebateService:
             debate.room_name = debate.room_name or topic[:30]
         if description is not None:
             debate.description = description
+        if config_meta is not None:
+            DebateService._set_debate_config_meta(debate, config_meta)
         if duration is not None:
             if int(duration) <= 0:
                 raise ValueError("预计时长必须大于 0")
@@ -2283,6 +2507,7 @@ class DebateService:
             "debate_id": str(debate.id),
             "topic": debate.topic,
             "description": debate.description,
+            "config_meta": DebateService._get_debate_config_meta(debate),
             "duration": debate.duration,
             "teacher_id": str(debate.teacher_id),
             "teacher_name": debate.teacher.name if debate.teacher else "",

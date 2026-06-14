@@ -4,7 +4,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 from logging_config import get_logger
 from database import get_db
@@ -36,11 +36,33 @@ class AddStudentRequest(BaseModel):
     student_id: Optional[str] = None
 
 
+class DebateActivityFocusRequest(BaseModel):
+    chapter_focus: Optional[str] = None
+    training_focus: Optional[str] = None
+    classroom_scene: Optional[str] = None
+
+
+class DebateConfigMetaRequest(BaseModel):
+    mode: Optional[Literal["competition", "teaching"]] = None
+    role_assignment_mode: Optional[Literal["strength_first", "growth_first"]] = None
+    assignment_policy: Optional[Literal["ai_auto_assign", "ai_recommend_then_confirm"]] = None
+    rounds: Optional[int] = None
+    knowledge_points: Optional[List[str]] = None
+    objective: Optional[List[str]] = None
+    evaluation_focus: Optional[List[str]] = None
+    forbidden_moves: Optional[List[str]] = None
+    support_document_ids: Optional[List[str]] = None
+    domain_pack_id: Optional[str] = None
+    teaching_design_version_id: Optional[str] = None
+    activity_focus: Optional[DebateActivityFocusRequest] = None
+
+
 class CreateDebateRequest(BaseModel):
     class_id: str
     topic: str
     duration: int
     description: Optional[str] = None
+    config_meta: Optional[DebateConfigMetaRequest] = None
     student_ids: Optional[List[str]] = None
     status: Optional[str] = None
 
@@ -50,6 +72,7 @@ class CreateReservationRequest(BaseModel):
     topic: str
     duration: int
     description: Optional[str] = None
+    config_meta: Optional[DebateConfigMetaRequest] = None
     scheduled_start_time: str
     checkin_open_time: Optional[str] = None
     checkin_close_time: Optional[str] = None
@@ -63,6 +86,7 @@ class UpdateReservationRequest(BaseModel):
     topic: Optional[str] = None
     duration: Optional[int] = None
     description: Optional[str] = None
+    config_meta: Optional[DebateConfigMetaRequest] = None
     scheduled_start_time: Optional[str] = None
     checkin_open_time: Optional[str] = None
     checkin_close_time: Optional[str] = None
@@ -74,6 +98,10 @@ class UpdateReservationRequest(BaseModel):
 
 class CancelReservationRequest(BaseModel):
     cancel_reason: Optional[str] = None
+
+
+def _config_meta_payload(config_meta: Optional[DebateConfigMetaRequest]) -> Optional[dict]:
+    return config_meta.model_dump(exclude_none=True) if config_meta is not None else None
 
 
 def _serialize_support_document(document: Document) -> dict:
@@ -282,6 +310,7 @@ async def create_debate(
             topic=request.topic,
             duration=request.duration,
             description=request.description,
+            config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
             status=request.status,
         )
@@ -321,6 +350,7 @@ async def update_debate(
             topic=request.topic,
             duration=request.duration,
             description=request.description,
+            config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
             status=request.status,
         )
@@ -433,6 +463,7 @@ async def create_reservation(
             topic=request.topic,
             duration=request.duration,
             description=request.description,
+            config_meta=_config_meta_payload(request.config_meta),
             scheduled_start_time=request.scheduled_start_time,
             checkin_open_time=request.checkin_open_time,
             checkin_close_time=request.checkin_close_time,
@@ -506,6 +537,7 @@ async def update_reservation(
             reservation_id=reservation_id,
             topic=request.topic,
             description=request.description,
+            config_meta=_config_meta_payload(request.config_meta),
             duration=request.duration,
             scheduled_start_time=request.scheduled_start_time,
             checkin_open_time=request.checkin_open_time,
