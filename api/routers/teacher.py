@@ -67,6 +67,16 @@ class CreateDebateRequest(BaseModel):
     status: Optional[str] = None
 
 
+class UpdateDebateRequest(BaseModel):
+    class_id: Optional[str] = None
+    topic: Optional[str] = None
+    duration: Optional[int] = None
+    description: Optional[str] = None
+    config_meta: Optional[DebateConfigMetaRequest] = None
+    student_ids: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
 class CreateReservationRequest(BaseModel):
     class_id: str
     topic: str
@@ -329,13 +339,18 @@ async def create_debate(
 @router.put("/debates/{debate_id}", summary="更新辩论")
 async def update_debate(
     debate_id: str,
-    request: CreateDebateRequest,
+    request: UpdateDebateRequest,
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db)
 ):
     """更新辩论任务"""
     checker = PermissionChecker(db)
-    if not checker.can_access_class(current_user, request.class_id):
+    if not checker.can_modify_debate(current_user, debate_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该辩论"
+        )
+    if request.class_id and not checker.can_access_class(current_user, request.class_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权访问该班级"

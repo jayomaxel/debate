@@ -257,7 +257,8 @@ class DebateService:
         return normalized
 
     @staticmethod
-    def _get_debate_config_meta(debate: Debate) -> Dict[str, Any]:
+    def _deserialize_debate_config_meta(debate: Debate) -> Dict[str, Any]:
+        """Read persisted config from room metadata, with legacy description fallback."""
         meta = DebateService._get_room_meta(debate)
         stored_meta = meta.get(DebateService.DEBATE_CONFIG_META_KEY)
         try:
@@ -270,7 +271,13 @@ class DebateService:
             return DebateService.normalize_debate_config_meta(description=debate.description)
 
     @staticmethod
-    def _set_debate_config_meta(debate: Debate, config_meta: Dict[str, Any]) -> None:
+    def _serialize_debate_config_meta(debate: Debate) -> Dict[str, Any]:
+        """Return the API-safe DebateConfigMeta payload."""
+        return deepcopy(DebateService._deserialize_debate_config_meta(debate))
+
+    @staticmethod
+    def _persist_debate_config_meta(debate: Debate, config_meta: Dict[str, Any]) -> None:
+        """Merge and persist a DebateConfigMeta patch into room metadata."""
         meta = DebateService._get_room_meta(debate)
         stored_meta = meta.get(DebateService.DEBATE_CONFIG_META_KEY)
         meta[DebateService.DEBATE_CONFIG_META_KEY] = DebateService.normalize_debate_config_meta(
@@ -279,6 +286,23 @@ class DebateService:
             base_meta=stored_meta if isinstance(stored_meta, dict) else None,
         )
         DebateService._set_room_meta(debate, meta)
+
+    @staticmethod
+    def _get_debate_config_meta(debate: Debate) -> Dict[str, Any]:
+        return DebateService._serialize_debate_config_meta(debate)
+
+    @staticmethod
+    def _set_debate_config_meta(debate: Debate, config_meta: Dict[str, Any]) -> None:
+        DebateService._persist_debate_config_meta(debate, config_meta)
+
+    @staticmethod
+    def _serialize_debate_base(debate: Debate) -> Dict[str, Any]:
+        return {
+            "topic": debate.topic,
+            "description": debate.description,
+            "config_meta": DebateService._serialize_debate_config_meta(debate),
+            "duration": debate.duration,
+        }
 
     @staticmethod
     def _uuid_or_none(value: Any) -> Optional[uuid.UUID]:
@@ -772,10 +796,8 @@ class DebateService:
         return {
             "room_id": str(debate.id),
             "debate_id": str(debate.id),
-            "topic": debate.topic,
             "room_name": debate.room_name or meta.get("room_name") or debate.topic[:30],
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
+            **DebateService._serialize_debate_base(debate),
             "current_count": participant_count,
             "capacity": DebateService._room_capacity(debate, meta),
             "visibility": DebateService._room_visibility(debate, meta),
@@ -935,28 +957,13 @@ class DebateService:
     @staticmethod
     def _fallback_assign_roles(assessments: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
         remaining = list(assessments.keys())
-        role_to_weight = {
-            "debater_1": {"expression_willingness": 0.45, "knowledge": 0.35, "critical_thinking": 0.2},
-            "debater_2": {"logical_thinking": 0.5, "knowledge": 0.3, "critical_thinking": 0.2},
-            "debater_3": {"critical_thinking": 0.55, "logical_thinking": 0.3, "expression_willingness": 0.15},
-            "debater_4": {"balanced": 1.0},
+        fit_by_user = {
+            user_id: AssessmentService.build_role_fit_matrix(assessments.get(user_id) or {})
+            for user_id in remaining
         }
 
         def score(user_id: str, role: str) -> float:
-            a = assessments[user_id]
-            expression = float(a.get("expression_willingness", 50))
-            logical = float(a.get("logical_thinking", 50))
-            knowledge = (float(a.get("stablecoin_knowledge", 50)) + float(a.get("financial_knowledge", 50))) / 2.0
-            critical = float(a.get("critical_thinking", 50))
-            if role == "debater_4":
-                return (expression + logical + knowledge + critical) / 4.0
-            w = role_to_weight[role]
-            return (
-                w.get("expression_willingness", 0) * expression
-                + w.get("logical_thinking", 0) * logical
-                + w.get("knowledge", 0) * knowledge
-                + w.get("critical_thinking", 0) * critical
-            )
+            return float(fit_by_user[user_id][role]["fit_score"])
 
         assignments: Dict[str, str] = {}
         for role in DebateService.ROLE_ORDER[: len(remaining)]:
@@ -1328,7 +1335,7 @@ class DebateService:
             owner_user_id=uuid.UUID(teacher_id),
             host_user_id=uuid.UUID(teacher_id),
         )
-        DebateService._set_debate_config_meta(debate, normalized_config_meta)
+        DebateService._persist_debate_config_meta(debate, normalized_config_meta)
         
         try:
             db.add(debate)
@@ -1376,10 +1383,7 @@ class DebateService:
 
         return {
             "id": str(debate.id),
-            "topic": debate.topic,
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
-            "duration": debate.duration,
+            **DebateService._serialize_debate_base(debate),
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
             "teacher_id": str(debate.teacher_id),
@@ -1460,6 +1464,8 @@ class DebateService:
         if class_changed and student_ids is None:
             raise ValueError("修改班级时请重新选择辩手")
         
+        existing_config_meta = DebateService._deserialize_debate_config_meta(debate)
+
         # 更新基本字段
         if topic is not None:
             debate.topic = topic
@@ -1467,8 +1473,10 @@ class DebateService:
             debate.duration = duration
         if description is not None:
             debate.description = description
-        if config_meta is not None:
-            DebateService._set_debate_config_meta(debate, config_meta)
+        DebateService._persist_debate_config_meta(
+            debate,
+            config_meta if config_meta is not None else existing_config_meta,
+        )
             
         # 更新参与学生
         if status is not None:
@@ -1523,10 +1531,7 @@ class DebateService:
 
         return {
             "id": str(debate.id),
-            "topic": debate.topic,
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
-            "duration": debate.duration,
+            **DebateService._serialize_debate_base(debate),
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
             "teacher_id": str(debate.teacher_id),
@@ -1617,10 +1622,7 @@ class DebateService:
                 "id": str(debate.id),
                 "room_id": str(debate.id),
                 "debate_id": str(debate.id),
-                "topic": debate.topic,
-                "description": debate.description,
-                "config_meta": DebateService._get_debate_config_meta(debate),
-                "duration": debate.duration,
+                **DebateService._serialize_debate_base(debate),
                 "invitation_code": debate.invitation_code,
                 "class_id": str(debate.class_id),
                 "status": debate.status,
@@ -1681,10 +1683,7 @@ class DebateService:
         
         return {
             "id": str(debate.id),
-            "topic": debate.topic,
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
-            "duration": debate.duration,
+            **DebateService._serialize_debate_base(debate),
             "invitation_code": debate.invitation_code,
             "class_id": str(debate.class_id),
             "teacher_id": str(debate.teacher_id),
@@ -1777,9 +1776,7 @@ class DebateService:
             
             result.append({
                 "id": str(debate.id),
-                "topic": debate.topic,
-                "description": debate.description,
-                "duration": debate.duration,
+                **DebateService._serialize_debate_base(debate),
                 "mode": DebateService._room_mode(debate),
                 "room_source": DebateService._room_source_value(DebateService._room_mode(debate)),
                 "invitation_code": debate.invitation_code,
@@ -2153,7 +2150,7 @@ class DebateService:
             reservation_status="scheduled",
             reservation_published_at=datetime.utcnow(),
         )
-        DebateService._set_debate_config_meta(debate, normalized_config_meta)
+        DebateService._persist_debate_config_meta(debate, normalized_config_meta)
         if not password:
             debate.join_password_hash = None
             debate.password_updated_at = None
@@ -2215,10 +2212,7 @@ class DebateService:
         return {
             "reservation_id": str(debate.id),
             "room_id": str(debate.id),
-            "topic": debate.topic,
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
-            "duration": debate.duration,
+            **DebateService._serialize_debate_base(debate),
             "class_id": str(debate.class_id),
             "class_name": class_obj.name if class_obj else "",
             "scheduled_start_time": DebateService._debate_datetime_iso(debate, "scheduled_start_time", meta),
@@ -2340,6 +2334,7 @@ class DebateService:
         meta = DebateService._get_room_meta(debate)
         if DebateService.resolve_reservation_status(debate) == "cancelled":
             raise ValueError("无法修改已取消预约")
+        existing_config_meta = DebateService._deserialize_debate_config_meta(debate)
 
         if topic is not None:
             topic = topic.strip()
@@ -2349,8 +2344,10 @@ class DebateService:
             debate.room_name = debate.room_name or topic[:30]
         if description is not None:
             debate.description = description
-        if config_meta is not None:
-            DebateService._set_debate_config_meta(debate, config_meta)
+        DebateService._persist_debate_config_meta(
+            debate,
+            config_meta if config_meta is not None else existing_config_meta,
+        )
         if duration is not None:
             if int(duration) <= 0:
                 raise ValueError("预计时长必须大于 0")
@@ -2505,10 +2502,7 @@ class DebateService:
             "reservation_id": str(debate.id),
             "room_id": str(debate.id),
             "debate_id": str(debate.id),
-            "topic": debate.topic,
-            "description": debate.description,
-            "config_meta": DebateService._get_debate_config_meta(debate),
-            "duration": debate.duration,
+            **DebateService._serialize_debate_base(debate),
             "teacher_id": str(debate.teacher_id),
             "teacher_name": debate.teacher.name if debate.teacher else "",
             "scheduled_start_time": DebateService._debate_datetime_iso(debate, "scheduled_start_time", meta),

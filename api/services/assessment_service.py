@@ -2,7 +2,7 @@
 Ability assessment service.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import math
 import uuid
@@ -20,6 +20,144 @@ class AssessmentService:
         "debater_3": "三辩 - 逻辑交锋，快速反应",
         "debater_4": "四辩 - 总结陈词，价值升华",
     }
+    STANDARD_PROFILE_FIELDS = [
+        "expression",
+        "logic",
+        "critical",
+        "knowledge_primary",
+        "knowledge_secondary",
+    ]
+    ROLE_ABILITY_MODEL = {
+        "debater_1": {
+            "expression": 0.30,
+            "logic": 0.30,
+            "knowledge_primary": 0.25,
+            "critical": 0.15,
+        },
+        "debater_2": {
+            "logic": 0.35,
+            "knowledge_primary": 0.30,
+            "critical": 0.20,
+            "expression": 0.15,
+        },
+        "debater_3": {
+            "critical": 0.40,
+            "logic": 0.25,
+            "expression": 0.20,
+            "knowledge_primary": 0.15,
+        },
+        "debater_4": {
+            "expression": 0.25,
+            "logic": 0.25,
+            "critical": 0.20,
+            "knowledge_primary": 0.15,
+            "knowledge_secondary": 0.15,
+        },
+    }
+    ROLE_ASSIGNMENT_REASONS = {
+        "debater_1": "适合承担立论框架、概念界定和首轮观点建构。",
+        "debater_2": "适合承担论据补强、盘问推进和逻辑追问。",
+        "debater_3": "适合承担反驳整合、漏洞识别和临场攻防。",
+        "debater_4": "适合承担总结陈词、价值权衡和全场收束。",
+    }
+
+    @staticmethod
+    def _score(value: Any, default: int = 50) -> int:
+        try:
+            return max(0, min(100, int(round(float(value)))))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def build_standard_profile(assessment: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Map legacy assessment fields into the standard ability profile."""
+
+        assessment = assessment or {}
+        has_self_assessment = bool(assessment)
+        standard_profile = {
+            "expression": AssessmentService._score(assessment.get("expression_willingness")),
+            "logic": AssessmentService._score(assessment.get("logical_thinking")),
+            "critical": AssessmentService._score(assessment.get("critical_thinking")),
+            "knowledge_primary": AssessmentService._score(assessment.get("financial_knowledge")),
+            "knowledge_secondary": AssessmentService._score(assessment.get("stablecoin_knowledge")),
+        }
+        legacy_profile = {
+            "expression_willingness": standard_profile["expression"],
+            "logical_thinking": standard_profile["logic"],
+            "critical_thinking": standard_profile["critical"],
+            "financial_knowledge": standard_profile["knowledge_primary"],
+            "stablecoin_knowledge": standard_profile["knowledge_secondary"],
+        }
+        return {
+            "standard_profile": standard_profile,
+            "legacy_profile": legacy_profile,
+            "analysis_basis": "self_assessment_only" if has_self_assessment else "fallback_rule_only",
+            "data_sources": ["self_assessment"] if has_self_assessment else [],
+            "profile_confidence": "medium" if has_self_assessment else "low",
+        }
+
+    @staticmethod
+    def score_role_fit(
+        assessment: Optional[Dict[str, Any]],
+        role: str,
+        *,
+        assignment_mode: str = "strength_first",
+    ) -> Dict[str, Any]:
+        profile_payload = AssessmentService.build_standard_profile(assessment)
+        standard_profile = profile_payload["standard_profile"]
+        weights = AssessmentService.ROLE_ABILITY_MODEL.get(role, {})
+        if not weights:
+            raise ValueError("辩位不存在")
+
+        dimension_contribution = {
+            dimension: round(standard_profile[dimension] * weight, 2)
+            for dimension, weight in weights.items()
+        }
+        strength_score = round(sum(dimension_contribution.values()), 2)
+        if assignment_mode == "growth_first":
+            target_gap = sum((100 - standard_profile[dimension]) * weight for dimension, weight in weights.items())
+            fit_score = round(target_gap, 2)
+        else:
+            fit_score = strength_score
+
+        return {
+            "role": role,
+            "fit_score": fit_score,
+            "strength_score": strength_score,
+            "dimension_contribution": dimension_contribution,
+            "assignment_reason": AssessmentService.ROLE_ASSIGNMENT_REASONS.get(role, ""),
+            "data_basis": profile_payload["analysis_basis"],
+            "standard_profile": standard_profile,
+        }
+
+    @staticmethod
+    def build_role_fit_matrix(
+        assessment: Optional[Dict[str, Any]],
+        roles: Optional[List[str]] = None,
+        *,
+        assignment_mode: str = "strength_first",
+    ) -> Dict[str, Dict[str, Any]]:
+        roles = roles or list(AssessmentService.ROLE_ABILITY_MODEL.keys())
+        return {
+            role: AssessmentService.score_role_fit(
+                assessment,
+                role,
+                assignment_mode=assignment_mode,
+            )
+            for role in roles
+        }
+
+    @staticmethod
+    def recommend_role_from_profile(
+        assessment: Optional[Dict[str, Any]],
+        *,
+        assignment_mode: str = "strength_first",
+    ) -> str:
+        fit_matrix = AssessmentService.build_role_fit_matrix(
+            assessment,
+            assignment_mode=assignment_mode,
+        )
+        return max(fit_matrix, key=lambda role: fit_matrix[role]["fit_score"])
 
     @staticmethod
     def recommend_role(
@@ -46,7 +184,7 @@ class AssessmentService:
 
     @staticmethod
     def _serialize_assessment(assessment: AbilityAssessment) -> Dict[str, Any]:
-        return {
+        result = {
             "id": str(assessment.id),
             "personality_type": assessment.personality_type,
             "expression_willingness": (
@@ -83,6 +221,16 @@ class AssessmentService:
             if assessment.created_at
             else None,
         }
+        profile_payload = AssessmentService.build_standard_profile(result)
+        result.update(profile_payload)
+        result["role_fit"] = AssessmentService.build_role_fit_matrix(result)
+        result["role_assignment_basis"] = {
+            "self_reported": list(profile_payload["standard_profile"].keys()),
+            "history_scores": [],
+            "speech_stats": [],
+            "analysis_basis": profile_payload["analysis_basis"],
+        }
+        return result
 
     @staticmethod
     def submit_assessment(
@@ -126,10 +274,14 @@ class AssessmentService:
             ),
         )
 
-        recommended_role = AssessmentService.recommend_role(
-            expression_willingness=expression_willingness_10,
-            logical_thinking=logical_thinking_10,
-            personality_type=personality_type,
+        recommended_role = AssessmentService.recommend_role_from_profile(
+            {
+                "expression_willingness": expression_willingness,
+                "logical_thinking": logical_thinking,
+                "stablecoin_knowledge": stablecoin_knowledge,
+                "financial_knowledge": financial_knowledge,
+                "critical_thinking": critical_thinking,
+            }
         )
 
         assessment = (

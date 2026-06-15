@@ -6,6 +6,7 @@ import pytest
 from models.class_model import Class
 from models.debate import Debate
 from models.user import User
+from routers.teacher import UpdateDebateRequest, _config_meta_payload
 from services.debate_service import DebateService
 
 
@@ -153,3 +154,52 @@ def test_normalize_debate_config_meta_accepts_legacy_json_description():
     assert meta["mode"] == "teaching"
     assert meta["rounds"] == 5
     assert meta["activity_focus"]["classroom_scene"] == "demo"
+
+
+@pytest.mark.asyncio
+async def test_update_description_keeps_legacy_config_meta(db_session):
+    teacher, cls = _teacher_class(db_session)
+    created = await DebateService.create_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic="旧描述兼容",
+        duration=20,
+        description='{"mode":"teaching","rounds":5,"support_document_ids":["legacy-doc"]}',
+    )
+
+    updated = await DebateService.update_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        debate_id=created["id"],
+        description="新版纯文本描述",
+    )
+
+    assert updated["description"] == "新版纯文本描述"
+    assert updated["config_meta"]["mode"] == "teaching"
+    assert updated["config_meta"]["rounds"] == 5
+    assert updated["config_meta"]["support_document_ids"] == ["legacy-doc"]
+
+    debate = db_session.query(Debate).filter(Debate.id == uuid.UUID(created["id"])).one()
+    assert debate.description == "新版纯文本描述"
+    assert DebateService._serialize_debate_config_meta(debate)["rounds"] == 5
+
+
+def test_update_debate_request_accepts_config_meta_only():
+    request = UpdateDebateRequest(
+        config_meta={
+            "rounds": 6,
+            "evaluation_focus": ["回应质量"],
+        }
+    )
+
+    assert request.class_id is None
+    assert request.topic is None
+    assert request.duration is None
+    assert request.config_meta is not None
+
+    payload = _config_meta_payload(request.config_meta)
+    assert payload == {
+        "rounds": 6,
+        "evaluation_focus": ["回应质量"],
+    }
