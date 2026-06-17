@@ -3,6 +3,7 @@
 """
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
+import itertools
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.debate import Debate, DebateParticipation, DebateReservationInvitation
@@ -547,6 +548,148 @@ class DebateService:
             .with_entities(DebateReservationInvitation.student_id)
             .all()
         }
+
+    @staticmethod
+    def _role_assignment_snapshot_map(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+        meta = meta or {}
+        snapshot = meta.get("role_assignment_snapshot")
+        if not isinstance(snapshot, list):
+            return {}
+        result: Dict[str, Dict[str, Any]] = {}
+        for item in snapshot:
+            if not isinstance(item, dict):
+                continue
+            user_id = str(item.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            result[user_id] = dict(item)
+        return result
+
+    @staticmethod
+    def _assignment_role_pool(student_count: int) -> List[str]:
+        return DebateService.ROLE_ORDER[: max(0, min(student_count, len(DebateService.ROLE_ORDER)))]
+
+    @staticmethod
+    def _build_role_assignment_plan(
+        db: Session,
+        student_ids: List[str],
+        *,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_mode: str = "strength_first",
+    ) -> Dict[str, Any]:
+        if not student_ids:
+            return {
+                "assignment_mode": assignment_mode,
+                "assignment_source": "rule_model",
+                "role_pool": [],
+                "results": [],
+                "assignment_map": {},
+            }
+
+        users = db.query(User).filter(User.id.in_([uuid.UUID(student_id) for student_id in student_ids])).all()
+        user_by_id = {str(user.id): user for user in users}
+        role_pool = DebateService._assignment_role_pool(len(student_ids))
+
+        fit_matrices: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for student_id in student_ids:
+            assessment = AssessmentService.get_assessment(db=db, user_id=student_id) or {}
+            fit_matrices[student_id] = AssessmentService.build_role_fit_matrix(
+                assessment,
+                roles=role_pool,
+                assignment_mode=assignment_mode,
+            )
+
+        best_assignment: Dict[str, str] = {}
+        best_score = float("-inf")
+        for perm in itertools.permutations(role_pool, len(student_ids)):
+            current_score = 0.0
+            for index, student_id in enumerate(student_ids):
+                current_score += float(fit_matrices[student_id][perm[index]]["fit_score"])
+            if current_score > best_score:
+                best_score = current_score
+                best_assignment = {
+                    student_id: perm[index]
+                    for index, student_id in enumerate(student_ids)
+                }
+
+        teacher_assignment_map: Dict[str, str] = {}
+        teacher_override = False
+        if role_assignments is not None:
+            if len(role_assignments) != len(student_ids):
+                raise ValueError("role_assignments 必须完整覆盖全部学生")
+            allowed_student_ids = set(student_ids)
+            allowed_roles = set(role_pool)
+            seen_student_ids: set[str] = set()
+            seen_roles: set[str] = set()
+            for item in role_assignments:
+                if not isinstance(item, dict):
+                    raise ValueError("role_assignments 格式不正确")
+                student_id = str(item.get("user_id") or "").strip()
+                role = str(item.get("role") or "").strip()
+                if student_id not in allowed_student_ids:
+                    raise ValueError("role_assignments 包含无效学生")
+                if role not in allowed_roles:
+                    raise ValueError("role_assignments 包含无效辩位")
+                if student_id in seen_student_ids or role in seen_roles:
+                    raise ValueError("role_assignments 不能重复分配")
+                seen_student_ids.add(student_id)
+                seen_roles.add(role)
+                teacher_assignment_map[student_id] = role
+            teacher_override = True
+
+        assignment_map = teacher_assignment_map or best_assignment
+        results: List[Dict[str, Any]] = []
+        for student_id in student_ids:
+            user = user_by_id.get(student_id)
+            recommended_role = best_assignment.get(student_id)
+            assigned_role = assignment_map.get(student_id, recommended_role)
+            fit_payload = fit_matrices[student_id].get(recommended_role, {})
+            teacher_changed = assigned_role != recommended_role
+            results.append(
+                {
+                    "user_id": student_id,
+                    "name": user.name if user else "",
+                    "avatar": AvatarService.build_avatar_payload(user)["avatar"] if user else None,
+                    "recommended_role": recommended_role,
+                    "assigned_role": assigned_role,
+                    "assignment_source": "teacher_override" if teacher_override and teacher_changed else (
+                        "teacher_confirmed" if teacher_override else "rule_model"
+                    ),
+                    "teacher_override": teacher_changed,
+                    "fit_score": fit_payload.get("fit_score"),
+                    "strength_score": fit_payload.get("strength_score"),
+                    "dimension_contribution": fit_payload.get("dimension_contribution"),
+                    "assignment_reason": fit_payload.get("assignment_reason"),
+                    "data_basis": fit_payload.get("data_basis"),
+                    "analysis_basis": fit_payload.get("analysis_basis"),
+                    "data_sources": fit_payload.get("data_sources"),
+                    "profile_confidence": fit_payload.get("profile_confidence"),
+                    "standard_profile": fit_payload.get("standard_profile"),
+                }
+            )
+
+        return {
+            "assignment_mode": assignment_mode,
+            "assignment_source": "teacher_override" if teacher_override else "rule_model",
+            "role_pool": role_pool,
+            "results": results,
+            "assignment_map": {item["user_id"]: item["assigned_role"] for item in results},
+        }
+
+    @staticmethod
+    def _persist_role_assignment_snapshot(
+        debate: Debate,
+        snapshot: List[Dict[str, Any]],
+        *,
+        assignment_mode: str,
+        assignment_source: str,
+    ) -> None:
+        meta = DebateService._get_room_meta(debate)
+        meta["role_assignment_snapshot"] = snapshot
+        meta["role_assignment_mode"] = assignment_mode
+        meta["role_assignment_source"] = assignment_source
+        meta["role_assignment_updated_at"] = datetime.utcnow().isoformat()
+        DebateService._set_room_meta(debate, meta)
 
     @staticmethod
     def _ensure_active_participation_available(
@@ -1195,12 +1338,123 @@ class DebateService:
         return normalized_status
 
     @staticmethod
+    def _serialize_assignment_preview_result(item: Dict[str, Any]) -> Dict[str, Any]:
+        assigned_role = item.get("assigned_role")
+        recommended_role = item.get("recommended_role")
+        return {
+            "user_id": item.get("user_id"),
+            "name": item.get("name"),
+            "avatar": item.get("avatar"),
+            "recommended_role": recommended_role,
+            "assigned_role": assigned_role,
+            "role": assigned_role,
+            "role_reason": DebateService.ROLE_REASON.get(assigned_role),
+            "original_recommended_role": recommended_role,
+            "teacher_override": bool(item.get("teacher_override")),
+            "assignment_source": item.get("assignment_source"),
+            "fit_score": item.get("fit_score"),
+            "strength_score": item.get("strength_score"),
+            "dimension_contribution": item.get("dimension_contribution"),
+            "assignment_reason": item.get("assignment_reason"),
+            "data_basis": item.get("data_basis"),
+            "analysis_basis": item.get("analysis_basis"),
+            "data_sources": item.get("data_sources"),
+            "profile_confidence": item.get("profile_confidence"),
+            "standard_profile": item.get("standard_profile"),
+        }
+
+    @staticmethod
+    def _build_grouping_from_participations(
+        db: Session,
+        participations: List[DebateParticipation],
+        snapshot_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        if not participations:
+            return []
+        users = db.query(User).filter(User.id.in_([p.user_id for p in participations])).all()
+        user_by_id = {u.id: u for u in users}
+        role_rank = {r: i for i, r in enumerate(DebateService.ROLE_ORDER)}
+        participations_sorted = sorted(participations, key=lambda p: role_rank.get(p.role, 99))
+        snapshot_map = snapshot_map or {}
+        results: List[Dict[str, Any]] = []
+        for participation in participations_sorted:
+            user_id = str(participation.user_id)
+            snapshot = snapshot_map.get(user_id, {})
+            user = user_by_id.get(participation.user_id)
+            results.append(
+                {
+                    "user_id": user_id,
+                    "name": user.name if user else "",
+                    "avatar": (
+                        AvatarService.build_avatar_payload(user)["avatar"]
+                        if user
+                        else None
+                    ),
+                    "role": participation.role,
+                    "role_reason": participation.role_reason,
+                    "recommended_role": snapshot.get("recommended_role", participation.role),
+                    "assigned_role": participation.role,
+                    "original_recommended_role": snapshot.get("recommended_role", participation.role),
+                    "teacher_override": bool(snapshot.get("teacher_override")),
+                    "assignment_source": snapshot.get("assignment_source", "rule_model"),
+                    "fit_score": snapshot.get("fit_score"),
+                    "strength_score": snapshot.get("strength_score"),
+                    "dimension_contribution": snapshot.get("dimension_contribution"),
+                    "assignment_reason": snapshot.get("assignment_reason"),
+                    "data_basis": snapshot.get("data_basis"),
+                    "analysis_basis": snapshot.get("analysis_basis"),
+                    "data_sources": snapshot.get("data_sources"),
+                    "profile_confidence": snapshot.get("profile_confidence"),
+                    "standard_profile": snapshot.get("standard_profile"),
+                }
+            )
+        return results
+
+    @staticmethod
+    def preview_role_assignment(
+        db: Session,
+        teacher_id: str,
+        class_id: str,
+        student_ids: List[str],
+        *,
+        config_meta: Optional[Dict[str, Any]] = None,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        DebateService._get_teacher_class(db=db, teacher_id=teacher_id, class_id=class_id)
+        normalized_student_ids = DebateService._validate_selected_student_ids(
+            db=db,
+            class_id=class_id,
+            student_ids=student_ids,
+        )
+        normalized_config_meta = DebateService.normalize_debate_config_meta(config_meta)
+        assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
+        plan = DebateService._build_role_assignment_plan(
+            db=db,
+            student_ids=normalized_student_ids,
+            role_assignments=role_assignments,
+            assignment_mode=assignment_mode,
+        )
+        return {
+            "class_id": class_id,
+            "student_ids": normalized_student_ids,
+            "assignment_mode": assignment_mode,
+            "assignment_source": plan["assignment_source"],
+            "role_pool": plan["role_pool"],
+            "results": [
+                DebateService._serialize_assignment_preview_result(item)
+                for item in plan["results"]
+            ],
+        }
+
+    @staticmethod
     async def _assign_students_to_debate(
         db: Session,
         debate: Debate,
         selected_student_ids: List[str],
         *,
         replace_existing: bool,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_mode: str = "strength_first",
     ) -> None:
         if replace_existing:
             db.query(DebateParticipation).filter(
@@ -1209,41 +1463,27 @@ class DebateService:
             ).delete()
 
         if not selected_student_ids:
+            DebateService._persist_role_assignment_snapshot(
+                debate,
+                [],
+                assignment_mode=assignment_mode,
+                assignment_source="rule_model",
+            )
             return
 
-        users = (
-            db.query(User)
-            .filter(User.id.in_([uuid.UUID(student_id) for student_id in selected_student_ids]))
-            .all()
+        plan = DebateService._build_role_assignment_plan(
+            db=db,
+            student_ids=selected_student_ids,
+            role_assignments=role_assignments,
+            assignment_mode=assignment_mode,
         )
-        user_name_by_id = {str(user.id): (user.name or "") for user in users}
-        student_assessments: Dict[str, Dict[str, Any]] = {}
-        students_payload: List[Dict[str, Any]] = []
-
-        for student_id in selected_student_ids:
-            assessment = AssessmentService.get_assessment(db=db, user_id=student_id) or {}
-            student_assessments[student_id] = assessment
-            students_payload.append(
-                {
-                    "user_id": student_id,
-                    "name": user_name_by_id.get(student_id, ""),
-                    "expression_willingness": assessment.get("expression_willingness", 50),
-                    "logical_thinking": assessment.get("logical_thinking", 50),
-                    "stablecoin_knowledge": assessment.get("stablecoin_knowledge", 50),
-                    "financial_knowledge": assessment.get("financial_knowledge", 50),
-                    "critical_thinking": assessment.get("critical_thinking", 50),
-                    "recommended_role": assessment.get("recommended_role"),
-                }
-            )
-
-        if settings.ENABLE_LLM_ROLE_ASSIGNMENT:
-            try:
-                role_by_user_id = await DebateService._openai_assign_roles(db=db, students=students_payload)
-            except Exception as e:
-                logger.warning(f"OpenAI分组失败，使用兜底规则: {e}")
-                role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
-        else:
-            role_by_user_id = DebateService._fallback_assign_roles(student_assessments)
+        role_by_user_id = plan["assignment_map"]
+        DebateService._persist_role_assignment_snapshot(
+            debate,
+            plan["results"],
+            assignment_mode=assignment_mode,
+            assignment_source=plan["assignment_source"],
+        )
 
         for student_id in selected_student_ids:
             role = role_by_user_id.get(student_id)
@@ -1271,6 +1511,7 @@ class DebateService:
         description: Optional[str] = None,
         config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -1298,6 +1539,7 @@ class DebateService:
             config_meta,
             description=description,
         )
+        assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
         selected_student_ids = DebateService._validate_selected_student_ids(
             db=db,
             class_id=class_id,
@@ -1348,6 +1590,8 @@ class DebateService:
                     debate=debate,
                     selected_student_ids=selected_student_ids,
                     replace_existing=False,
+                    role_assignments=role_assignments,
+                    assignment_mode=assignment_mode,
                 )
                 db.commit()
             
@@ -1360,26 +1604,8 @@ class DebateService:
             DebateParticipation.left_at.is_(None),
         ).all()
         user_ids = [str(p.user_id) for p in participations]
-        grouping = []
-        if participations:
-            users = db.query(User).filter(User.id.in_([p.user_id for p in participations])).all()
-            user_by_id = {u.id: u for u in users}
-            role_rank = {r: i for i, r in enumerate(DebateService.ROLE_ORDER)}
-            participations_sorted = sorted(participations, key=lambda p: role_rank.get(p.role, 99))
-            grouping = [
-                {
-                    "user_id": str(p.user_id),
-                    "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
-                    "avatar": (
-                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
-                        if user_by_id.get(p.user_id)
-                        else None
-                    ),
-                    "role": p.role,
-                    "role_reason": p.role_reason,
-                }
-                for p in participations_sorted
-            ]
+        snapshot_map = DebateService._role_assignment_snapshot_map(DebateService._get_room_meta(debate))
+        grouping = DebateService._build_grouping_from_participations(db, participations, snapshot_map)
 
         return {
             "id": str(debate.id),
@@ -1404,6 +1630,7 @@ class DebateService:
         description: Optional[str] = None,
         config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -1477,6 +1704,8 @@ class DebateService:
             debate,
             config_meta if config_meta is not None else existing_config_meta,
         )
+        effective_config_meta = DebateService._deserialize_debate_config_meta(debate)
+        assignment_mode = effective_config_meta.get("role_assignment_mode") or "strength_first"
             
         # 更新参与学生
         if status is not None:
@@ -1494,6 +1723,27 @@ class DebateService:
                 debate=debate,
                 selected_student_ids=selected_student_ids,
                 replace_existing=True,
+                role_assignments=role_assignments,
+                assignment_mode=assignment_mode,
+            )
+        elif role_assignments is not None:
+            if debate.status in ["in_progress", "completed"]:
+                raise ValueError("无法修改进行中或已完成辩论的辩手")
+            active_student_ids = [
+                str(p.user_id)
+                for p in db.query(DebateParticipation).filter(
+                    DebateParticipation.debate_id == debate.id,
+                    DebateParticipation.left_at.is_(None),
+                ).all()
+                if p.user_id
+            ]
+            await DebateService._assign_students_to_debate(
+                db=db,
+                debate=debate,
+                selected_student_ids=active_student_ids,
+                replace_existing=True,
+                role_assignments=role_assignments,
+                assignment_mode=assignment_mode,
             )
         
         try:
@@ -1508,26 +1758,8 @@ class DebateService:
             DebateParticipation.left_at.is_(None),
         ).all()
         user_ids = [str(p.user_id) for p in participations]
-        grouping = []
-        if participations:
-            users = db.query(User).filter(User.id.in_([p.user_id for p in participations])).all()
-            user_by_id = {u.id: u for u in users}
-            role_rank = {r: i for i, r in enumerate(DebateService.ROLE_ORDER)}
-            participations_sorted = sorted(participations, key=lambda p: role_rank.get(p.role, 99))
-            grouping = [
-                {
-                    "user_id": str(p.user_id),
-                    "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
-                    "avatar": (
-                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
-                        if user_by_id.get(p.user_id)
-                        else None
-                    ),
-                    "role": p.role,
-                    "role_reason": p.role_reason,
-                }
-                for p in participations_sorted
-            ]
+        snapshot_map = DebateService._role_assignment_snapshot_map(DebateService._get_room_meta(debate))
+        grouping = DebateService._build_grouping_from_participations(db, participations, snapshot_map)
 
         return {
             "id": str(debate.id),
@@ -1660,26 +1892,8 @@ class DebateService:
         ).all()
         
         student_ids = [str(p.user_id) for p in participations]
-        grouping = []
-        if participations:
-            users = db.query(User).filter(User.id.in_([p.user_id for p in participations])).all()
-            user_by_id = {u.id: u for u in users}
-            role_rank = {r: i for i, r in enumerate(DebateService.ROLE_ORDER)}
-            participations_sorted = sorted(participations, key=lambda p: role_rank.get(p.role, 99))
-            grouping = [
-                {
-                    "user_id": str(p.user_id),
-                    "name": (user_by_id.get(p.user_id).name if user_by_id.get(p.user_id) else ""),
-                    "avatar": (
-                        AvatarService.build_avatar_payload(user_by_id.get(p.user_id))["avatar"]
-                        if user_by_id.get(p.user_id)
-                        else None
-                    ),
-                    "role": p.role,
-                    "role_reason": p.role_reason,
-                }
-                for p in participations_sorted
-            ]
+        snapshot_map = DebateService._role_assignment_snapshot_map(DebateService._get_room_meta(debate))
+        grouping = DebateService._build_grouping_from_participations(db, participations, snapshot_map)
         
         return {
             "id": str(debate.id),
@@ -2079,6 +2293,7 @@ class DebateService:
         checkin_open_time: Any = None,
         checkin_close_time: Any = None,
         student_ids: Optional[List[str]] = None,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
         visibility: str = "private",
         password: Optional[str] = None,
         host_user_id: Optional[str] = None,
@@ -2095,6 +2310,7 @@ class DebateService:
             config_meta,
             description=description,
         )
+        assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
         scheduled_dt = DebateService._normalize_datetime(scheduled_start_time)
         if not scheduled_dt:
             raise ValueError("开赛时间不能为空")
@@ -2158,8 +2374,21 @@ class DebateService:
         try:
             db.add(debate)
             db.flush()
-            for index, student_id in enumerate(selected_student_ids):
-                role = DebateService.ROLE_ORDER[index] if index < len(DebateService.ROLE_ORDER) else None
+            plan = DebateService._build_role_assignment_plan(
+                db=db,
+                student_ids=selected_student_ids,
+                role_assignments=role_assignments,
+                assignment_mode=assignment_mode,
+            )
+            DebateService._persist_role_assignment_snapshot(
+                debate,
+                plan["results"],
+                assignment_mode=assignment_mode,
+                assignment_source=plan["assignment_source"],
+            )
+            for item in plan["results"]:
+                student_id = item["user_id"]
+                role = item["assigned_role"]
                 db.add(
                     DebateReservationInvitation(
                         id=uuid.uuid4(),
@@ -2226,6 +2455,7 @@ class DebateService:
                 DebateService._participant_count(db, debate.id),
             ),
             "invitations": DebateService._reservation_invitations_map(db, debate.id, active_only=False),
+            "role_assignment_snapshot": meta.get("role_assignment_snapshot", []),
             "cancelled_at": debate.cancelled_at.isoformat() if debate.cancelled_at else meta.get("cancelled_at"),
             "cancel_reason": debate.cancel_reason or meta.get("cancel_reason"),
             **counts,
@@ -2315,6 +2545,7 @@ class DebateService:
         checkin_open_time: Any = None,
         checkin_close_time: Any = None,
         student_ids: Optional[List[str]] = None,
+        role_assignments: Optional[List[Dict[str, Any]]] = None,
         visibility: Optional[str] = None,
         password: Optional[str] = None,
         host_user_id: Optional[str] = None,
@@ -2348,6 +2579,8 @@ class DebateService:
             debate,
             config_meta if config_meta is not None else existing_config_meta,
         )
+        effective_config_meta = DebateService._deserialize_debate_config_meta(debate)
+        assignment_mode = effective_config_meta.get("role_assignment_mode") or "strength_first"
         if duration is not None:
             if int(duration) <= 0:
                 raise ValueError("预计时长必须大于 0")
@@ -2392,6 +2625,22 @@ class DebateService:
                 str(invitation.student_id): invitation
                 for invitation in existing_active
             }
+            plan = DebateService._build_role_assignment_plan(
+                db=db,
+                student_ids=selected_student_ids,
+                role_assignments=role_assignments,
+                assignment_mode=assignment_mode,
+            )
+            DebateService._persist_role_assignment_snapshot(
+                debate,
+                plan["results"],
+                assignment_mode=assignment_mode,
+                assignment_source=plan["assignment_source"],
+            )
+            planned_role_by_student_id = {
+                item["user_id"]: item["assigned_role"]
+                for item in plan["results"]
+            }
             for invitation in existing_active:
                 if str(invitation.student_id) not in selected_set:
                     invitation.revoked_at = now
@@ -2399,8 +2648,8 @@ class DebateService:
                     invitation.revoke_reason = "teacher_update_removed"
                     invitation.updated_at = now
 
-            for index, student_id in enumerate(selected_student_ids):
-                role = DebateService.ROLE_ORDER[index] if index < len(DebateService.ROLE_ORDER) else None
+            for student_id in selected_student_ids:
+                role = planned_role_by_student_id.get(student_id)
                 invitation = existing_by_student_id.get(str(student_id))
                 if invitation:
                     invitation.assigned_role = role
@@ -2420,6 +2669,29 @@ class DebateService:
                         attendance_status="not_checked_in",
                     )
                 )
+        elif role_assignments is not None:
+            active_student_ids = list(DebateService._invitation_student_ids(db, debate.id))
+            plan = DebateService._build_role_assignment_plan(
+                db=db,
+                student_ids=active_student_ids,
+                role_assignments=role_assignments,
+                assignment_mode=assignment_mode,
+            )
+            DebateService._persist_role_assignment_snapshot(
+                debate,
+                plan["results"],
+                assignment_mode=assignment_mode,
+                assignment_source=plan["assignment_source"],
+            )
+            planned_role_by_student_id = {
+                item["user_id"]: item["assigned_role"]
+                for item in plan["results"]
+            }
+            for invitation in DebateService._active_invitation_query(db, debate.id).all():
+                role = planned_role_by_student_id.get(str(invitation.student_id))
+                invitation.assigned_role = role
+                invitation.assigned_stance = "positive" if role else None
+                invitation.updated_at = datetime.utcnow()
         if host_user_id is not None:
             if host_user_id:
                 valid_ids = set(selected_student_ids or DebateService._invitation_student_ids(db, debate.id))

@@ -190,10 +190,19 @@ def check_class_access(
         是否有权访问
     """
     from models.class_model import Class
+
+    try:
+        teacher_key = uuid.UUID(str(teacher_id))
+    except Exception:
+        teacher_key = teacher_id
+    try:
+        class_key = uuid.UUID(str(class_id))
+    except Exception:
+        class_key = class_id
     
     class_obj = db.query(Class).filter(
-        Class.id == class_id,
-        Class.teacher_id == teacher_id
+        Class.id == class_key,
+        Class.teacher_id == teacher_key
     ).first()
     
     return class_obj is not None
@@ -234,39 +243,48 @@ def check_debate_access(
     """
     from models.debate import Debate, DebateParticipation, DebateReservationInvitation
     from models.class_model import Class
+
+    try:
+        user_key = uuid.UUID(str(user_id))
+    except Exception:
+        user_key = user_id
+    try:
+        debate_key = uuid.UUID(str(debate_id))
+    except Exception:
+        debate_key = debate_id
     
     # 查询用户
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_key).first()
     if not user:
         return False
     
     # 如果是教师，检查辩论是否属于其班级
     if user.user_type == "teacher":
         debate = db.query(Debate).filter(
-            Debate.id == debate_id,
-            Debate.teacher_id == user_id,
+            Debate.id == debate_key,
+            Debate.teacher_id == user_key,
         ).first()
         if not debate:
             debate = db.query(Debate).join(
                 Class, Debate.class_id == Class.id
             ).filter(
-                Debate.id == debate_id,
-                Class.teacher_id == user_id
+                Debate.id == debate_key,
+                Class.teacher_id == user_key
             ).first()
         return debate is not None
     
     # 如果是学生，检查是否参与了该辩论
     elif user.user_type == "student":
         participation = db.query(DebateParticipation).filter(
-            DebateParticipation.debate_id == debate_id,
-            DebateParticipation.user_id == user_id,
+            DebateParticipation.debate_id == debate_key,
+            DebateParticipation.user_id == user_key,
             DebateParticipation.left_at.is_(None),
         ).first()
         if participation is not None:
             return True
         invitation = db.query(DebateReservationInvitation).filter(
-            DebateReservationInvitation.debate_id == debate_id,
-            DebateReservationInvitation.student_id == user_id,
+            DebateReservationInvitation.debate_id == debate_key,
+            DebateReservationInvitation.student_id == user_key,
             DebateReservationInvitation.revoked_at.is_(None),
         ).first()
         return invitation is not None
@@ -293,9 +311,14 @@ def check_document_access(
     from models.document import Document
     from models.debate import Debate
     from models.class_model import Class
+
+    try:
+        document_key = uuid.UUID(str(document_id))
+    except Exception:
+        document_key = document_id
     
     # 查询文档
-    document = db.query(Document).filter(Document.id == document_id).first()
+    document = db.query(Document).filter(Document.id == document_key).first()
     if not document:
         return False
     

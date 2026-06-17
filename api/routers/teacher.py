@@ -57,6 +57,11 @@ class DebateConfigMetaRequest(BaseModel):
     activity_focus: Optional[DebateActivityFocusRequest] = None
 
 
+class RoleAssignmentRequest(BaseModel):
+    user_id: str
+    role: Literal["debater_1", "debater_2", "debater_3", "debater_4"]
+
+
 class CreateDebateRequest(BaseModel):
     class_id: str
     topic: str
@@ -64,6 +69,7 @@ class CreateDebateRequest(BaseModel):
     description: Optional[str] = None
     config_meta: Optional[DebateConfigMetaRequest] = None
     student_ids: Optional[List[str]] = None
+    role_assignments: Optional[List[RoleAssignmentRequest]] = None
     status: Optional[str] = None
 
 
@@ -74,6 +80,7 @@ class UpdateDebateRequest(BaseModel):
     description: Optional[str] = None
     config_meta: Optional[DebateConfigMetaRequest] = None
     student_ids: Optional[List[str]] = None
+    role_assignments: Optional[List[RoleAssignmentRequest]] = None
     status: Optional[str] = None
 
 
@@ -87,6 +94,7 @@ class CreateReservationRequest(BaseModel):
     checkin_open_time: Optional[str] = None
     checkin_close_time: Optional[str] = None
     student_ids: List[str]
+    role_assignments: Optional[List[RoleAssignmentRequest]] = None
     visibility: str = "private"
     password: Optional[str] = None
     host_user_id: Optional[str] = None
@@ -101,6 +109,7 @@ class UpdateReservationRequest(BaseModel):
     checkin_open_time: Optional[str] = None
     checkin_close_time: Optional[str] = None
     student_ids: Optional[List[str]] = None
+    role_assignments: Optional[List[RoleAssignmentRequest]] = None
     visibility: Optional[str] = None
     password: Optional[str] = None
     host_user_id: Optional[str] = None
@@ -110,8 +119,21 @@ class CancelReservationRequest(BaseModel):
     cancel_reason: Optional[str] = None
 
 
+class PreviewRoleAssignmentRequest(BaseModel):
+    class_id: str
+    student_ids: List[str]
+    config_meta: Optional[DebateConfigMetaRequest] = None
+    role_assignments: Optional[List[RoleAssignmentRequest]] = None
+
+
 def _config_meta_payload(config_meta: Optional[DebateConfigMetaRequest]) -> Optional[dict]:
     return config_meta.model_dump(exclude_none=True) if config_meta is not None else None
+
+
+def _role_assignments_payload(role_assignments: Optional[List[RoleAssignmentRequest]]) -> Optional[List[dict]]:
+    if role_assignments is None:
+        return None
+    return [item.model_dump(exclude_none=True) for item in role_assignments]
 
 
 def _serialize_support_document(document: Document) -> dict:
@@ -322,6 +344,7 @@ async def create_debate(
             description=request.description,
             config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
+            role_assignments=_role_assignments_payload(request.role_assignments),
             status=request.status,
         )
         return {
@@ -367,6 +390,7 @@ async def update_debate(
             description=request.description,
             config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
+            role_assignments=_role_assignments_payload(request.role_assignments),
             status=request.status,
         )
         return {
@@ -456,6 +480,40 @@ async def get_debates(
         )
 
 
+@router.post("/debates/role-assignment-preview", summary="预览 AI 辩位分配")
+async def preview_role_assignment(
+    request: PreviewRoleAssignmentRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, request.class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级"
+        )
+
+    try:
+        result = DebateService.preview_role_assignment(
+            db=db,
+            teacher_id=str(current_user.id),
+            class_id=request.class_id,
+            student_ids=request.student_ids,
+            config_meta=_config_meta_payload(request.config_meta),
+            role_assignments=_role_assignments_payload(request.role_assignments),
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
 # ==================== 预约制辩论管理 ====================
 
 @router.post("/reservations", summary="创建预约辩论赛")
@@ -483,6 +541,7 @@ async def create_reservation(
             checkin_open_time=request.checkin_open_time,
             checkin_close_time=request.checkin_close_time,
             student_ids=request.student_ids,
+            role_assignments=_role_assignments_payload(request.role_assignments),
             visibility=request.visibility,
             password=request.password,
             host_user_id=request.host_user_id,
@@ -558,6 +617,7 @@ async def update_reservation(
             checkin_open_time=request.checkin_open_time,
             checkin_close_time=request.checkin_close_time,
             student_ids=request.student_ids,
+            role_assignments=_role_assignments_payload(request.role_assignments),
             visibility=request.visibility,
             password=request.password,
             host_user_id=request.host_user_id,

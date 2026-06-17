@@ -2,12 +2,35 @@ import pytest
 import uuid
 from httpx import ASGITransport, AsyncClient
 from main import app
-from database import SessionLocal, init_db, init_engine
+from database import get_db
 from models.debate import Debate
 from services.debate_service import DebateService
+from sqlalchemy.orm import sessionmaker
+from testing_db import create_test_engine, create_test_schema, drop_test_schema
 
 
 BASE_URL = "http://test"
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test_debate_grouping.db"
+engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
+
+
+@pytest.fixture(autouse=True)
+def setup_database():
+    create_test_schema(engine)
+    yield
+    drop_test_schema(engine)
 
 
 @pytest.mark.asyncio
@@ -95,6 +118,100 @@ async def test_teacher_create_debate_grouping_fallback(monkeypatch):
         assert response.status_code == 200
         detail = response.json()["data"]
         assert len(detail.get("grouping", [])) == 4
+        assert "recommended_role" in detail["grouping"][0]
+        assert "dimension_contribution" in detail["grouping"][0]
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_preview_and_override_role_assignment():
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_preview_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "预览教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000011",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"预览班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        student_ids = []
+        for i in range(2):
+            student_account = f"preview_student_{suffix}_{i}"
+            response = await client.post(
+                "/api/teacher/students",
+                json={
+                    "account": student_account,
+                    "password": "Test123456",
+                    "name": f"预览学生{i}",
+                    "class_id": class_id,
+                    "email": f"{student_account}@test.com",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+            student_ids.append(response.json()["data"]["id"])
+
+        response = await client.post(
+            "/api/teacher/debates/role-assignment-preview",
+            json={
+                "class_id": class_id,
+                "student_ids": student_ids,
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        preview = response.json()["data"]
+        assert preview["assignment_source"] == "rule_model"
+        assert len(preview["results"]) == 2
+        assert preview["results"][0]["assigned_role"] in {"debater_1", "debater_2"}
+
+        swapped = [
+            {"user_id": preview["results"][0]["user_id"], "role": "debater_2"},
+            {"user_id": preview["results"][1]["user_id"], "role": "debater_1"},
+        ]
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "带人工调整的辩位创建",
+                "duration": 30,
+                "description": "测试教师覆盖 AI 推荐",
+                "student_ids": student_ids,
+                "role_assignments": swapped,
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        created = response.json()["data"]
+        assert len(created["grouping"]) == 2
+        assert {item["role"] for item in created["grouping"]} == {"debater_1", "debater_2"}
+        assert any(item["teacher_override"] for item in created["grouping"])
 
 
 @pytest.mark.asyncio
@@ -401,9 +518,7 @@ async def test_teacher_dashboard_counts_actual_participants_and_statuses(monkeyp
         assert response.status_code == 200
         debate_b_id = response.json()["data"]["id"]
 
-        init_engine()
-        init_db()
-        db = SessionLocal()
+        db = TestingSessionLocal()
         try:
             debate_a = db.query(Debate).filter(Debate.id == uuid.UUID(debate_a_id)).one()
             debate_b = db.query(Debate).filter(Debate.id == uuid.UUID(debate_b_id)).one()

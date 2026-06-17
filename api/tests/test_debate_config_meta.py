@@ -203,3 +203,32 @@ def test_update_debate_request_accepts_config_meta_only():
         "rounds": 6,
         "evaluation_focus": ["回应质量"],
     }
+
+
+@pytest.mark.asyncio
+async def test_create_debate_persists_role_assignment_snapshot(db_session):
+    teacher, cls = _teacher_class(db_session)
+    student_a = _user(f"student_a_{uuid.uuid4().hex[:8]}", "Student A", "student", cls.id)
+    student_b = _user(f"student_b_{uuid.uuid4().hex[:8]}", "Student B", "student", cls.id)
+    db_session.add_all([student_a, student_b])
+    db_session.commit()
+
+    result = await DebateService.create_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic="人工覆盖辩位",
+        duration=20,
+        student_ids=[str(student_a.id), str(student_b.id)],
+        role_assignments=[
+            {"user_id": str(student_a.id), "role": "debater_2"},
+            {"user_id": str(student_b.id), "role": "debater_1"},
+        ],
+    )
+
+    debate = db_session.query(Debate).filter(Debate.id == uuid.UUID(result["id"])).one()
+    meta = DebateService._get_room_meta(debate)
+    snapshot = meta.get("role_assignment_snapshot") or []
+    assert len(snapshot) == 2
+    assert any(item["assigned_role"] == "debater_2" for item in snapshot)
+    assert result["grouping"][0]["assigned_role"] in {"debater_1", "debater_2"}
