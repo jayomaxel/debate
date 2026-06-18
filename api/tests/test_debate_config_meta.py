@@ -51,6 +51,9 @@ async def test_create_debate_persists_structured_config_meta(db_session):
         config_meta={
             "mode": "teaching",
             "role_assignment_mode": "growth_first",
+            "role_rotation_policy": "growth_priority",
+            "fairness_window_size": 7,
+            "same_role_max_streak": 3,
             "assignment_policy": "ai_auto_assign",
             "rounds": 4,
             "knowledge_points": ["概念辨析", "论据组织"],
@@ -71,10 +74,14 @@ async def test_create_debate_persists_structured_config_meta(db_session):
     assert result["config_meta"]["mode"] == "teaching"
     assert result["config_meta"]["rounds"] == 4
     assert result["config_meta"]["activity_focus"]["training_focus"] == "立论"
+    assert result["config_meta"]["role_rotation_policy"] == "growth_priority"
+    assert result["config_meta"]["fairness_window_size"] == 7
+    assert result["config_meta"]["same_role_max_streak"] == 3
 
     debate = db_session.query(Debate).filter(Debate.id == uuid.UUID(result["id"])).one()
     stored_meta = DebateService._get_debate_config_meta(debate)
     assert stored_meta["role_assignment_mode"] == "growth_first"
+    assert stored_meta["role_rotation_policy"] == "growth_priority"
     assert stored_meta["support_document_ids"] == ["doc-1", "doc-2"]
 
 

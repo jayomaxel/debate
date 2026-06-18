@@ -46,6 +46,9 @@ class DebateConfigMetaRequest(BaseModel):
     mode: Optional[Literal["competition", "teaching"]] = None
     role_assignment_mode: Optional[Literal["strength_first", "growth_first"]] = None
     assignment_policy: Optional[Literal["ai_auto_assign", "ai_recommend_then_confirm"]] = None
+    role_rotation_policy: Optional[Literal["balanced_rotation", "strength_priority", "growth_priority"]] = None
+    fairness_window_size: Optional[int] = None
+    same_role_max_streak: Optional[int] = None
     rounds: Optional[int] = None
     knowledge_points: Optional[List[str]] = None
     objective: Optional[List[str]] = None

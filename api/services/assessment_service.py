@@ -123,10 +123,14 @@ class AssessmentService:
         return {
             "role": role,
             "fit_score": fit_score,
+            "role_fit_score": fit_score,
             "strength_score": strength_score,
             "dimension_contribution": dimension_contribution,
             "assignment_reason": AssessmentService.ROLE_ASSIGNMENT_REASONS.get(role, ""),
             "data_basis": profile_payload["analysis_basis"],
+            "analysis_basis": profile_payload["analysis_basis"],
+            "data_sources": profile_payload["data_sources"],
+            "profile_confidence": profile_payload["profile_confidence"],
             "standard_profile": standard_profile,
         }
 

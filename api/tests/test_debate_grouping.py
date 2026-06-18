@@ -3,7 +3,9 @@ import uuid
 from httpx import ASGITransport, AsyncClient
 from main import app
 from database import get_db
-from models.debate import Debate
+from datetime import datetime
+from models.class_model import Class
+from models.debate import Debate, DebateParticipation
 from services.debate_service import DebateService
 from sqlalchemy.orm import sessionmaker
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
@@ -212,6 +214,122 @@ async def test_teacher_can_preview_and_override_role_assignment():
         assert len(created["grouping"]) == 2
         assert {item["role"] for item in created["grouping"]} == {"debater_1", "debater_2"}
         assert any(item["teacher_override"] for item in created["grouping"])
+
+
+@pytest.mark.asyncio
+async def test_role_assignment_preview_returns_rotation_explanation():
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_rotation_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "轮换教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000012",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"轮换班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        student_ids = []
+        for i in range(2):
+            student_account = f"rotation_student_{suffix}_{i}"
+            response = await client.post(
+                "/api/teacher/students",
+                json={
+                    "account": student_account,
+                    "password": "Test123456",
+                    "name": f"轮换学生{i}",
+                    "class_id": class_id,
+                    "email": f"{student_account}@test.com",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+            student_ids.append(response.json()["data"]["id"])
+
+        db = TestingSessionLocal()
+        try:
+            class_record = db.query(Class).filter(Class.id == uuid.UUID(class_id)).one()
+            teacher_uuid = class_record.teacher_id
+            completed_debate = Debate(
+                id=uuid.uuid4(),
+                topic="历史完成辩论",
+                description="",
+                duration=20,
+                invitation_code=f"H{uuid.uuid4().hex[:5].upper()}",
+                class_id=uuid.UUID(class_id),
+                teacher_id=teacher_uuid,
+                status="completed",
+                mode="teacher_assigned",
+                visibility="private",
+                capacity=2,
+                creator_user_id=teacher_uuid,
+                owner_user_id=teacher_uuid,
+                host_user_id=teacher_uuid,
+                created_at=datetime.utcnow(),
+            )
+            db.add(completed_debate)
+            db.flush()
+            db.add(
+                DebateParticipation(
+                    id=uuid.uuid4(),
+                    debate_id=completed_debate.id,
+                    user_id=uuid.UUID(student_ids[0]),
+                    role="debater_1",
+                    stance="positive",
+                    role_reason=DebateService.ROLE_REASON["debater_1"],
+                    seat_order=1,
+                    joined_at=datetime.utcnow(),
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = await client.post(
+            "/api/teacher/debates/role-assignment-preview",
+            json={
+                "class_id": class_id,
+                "student_ids": student_ids,
+                "config_meta": {
+                    "role_rotation_policy": "balanced_rotation",
+                    "fairness_window_size": 5,
+                    "same_role_max_streak": 1,
+                },
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        preview = response.json()["data"]
+        assert preview["role_rotation_policy"] == "balanced_rotation"
+        first_student = next(item for item in preview["results"] if item["user_id"] == student_ids[0])
+        assert "historical_role_distribution" in first_student
+        assert "rotation_reason" in first_student
+        assert any(item["role"] == "debater_1" and item["count"] == 1 for item in first_student["historical_role_distribution"])
 
 
 @pytest.mark.asyncio

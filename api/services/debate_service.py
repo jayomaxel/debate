@@ -41,6 +41,7 @@ class DebateService:
     }
     CONFIG_MODE_VALUES = {"competition", "teaching"}
     CONFIG_ROLE_ASSIGNMENT_MODE_VALUES = {"strength_first", "growth_first"}
+    CONFIG_ROLE_ROTATION_POLICY_VALUES = {"balanced_rotation", "strength_priority", "growth_priority"}
     CONFIG_ASSIGNMENT_POLICY_VALUES = {"ai_auto_assign", "ai_recommend_then_confirm"}
     CONFIG_DIFFICULTY_ROUNDS_MIN = 1
     CONFIG_DIFFICULTY_ROUNDS_MAX = 20
@@ -63,7 +64,10 @@ class DebateService:
     DEFAULT_DEBATE_CONFIG_META = {
         "mode": "competition",
         "role_assignment_mode": "strength_first",
+        "role_rotation_policy": "balanced_rotation",
         "assignment_policy": "ai_recommend_then_confirm",
+        "fairness_window_size": 5,
+        "same_role_max_streak": 2,
         "rounds": 1,
         "knowledge_points": [],
         "objective": [],
@@ -198,6 +202,12 @@ class DebateService:
                 raise ValueError("config_meta.role_assignment_mode 仅支持 strength_first 或 growth_first")
             target["role_assignment_mode"] = value
 
+        if "role_rotation_policy" in patch:
+            value = DebateService._clean_optional_string(patch.get("role_rotation_policy")) or "balanced_rotation"
+            if value not in DebateService.CONFIG_ROLE_ROTATION_POLICY_VALUES:
+                raise ValueError("config_meta.role_rotation_policy 仅支持 balanced_rotation、strength_priority 或 growth_priority")
+            target["role_rotation_policy"] = value
+
         if "assignment_policy" in patch:
             value = DebateService._clean_optional_string(patch.get("assignment_policy")) or "ai_recommend_then_confirm"
             if value not in DebateService.CONFIG_ASSIGNMENT_POLICY_VALUES:
@@ -212,6 +222,16 @@ class DebateService:
             if rounds < DebateService.CONFIG_DIFFICULTY_ROUNDS_MIN or rounds > DebateService.CONFIG_DIFFICULTY_ROUNDS_MAX:
                 raise ValueError("config_meta.rounds 必须在 1 到 20 之间")
             target["rounds"] = rounds
+
+        for field_name in ("fairness_window_size", "same_role_max_streak"):
+            if field_name in patch:
+                try:
+                    value = int(patch.get(field_name))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"config_meta.{field_name} 必须是整数") from exc
+                if value < 0:
+                    raise ValueError(f"config_meta.{field_name} 不能小于 0")
+                target[field_name] = value
 
         for field_name in DebateService.CONFIG_LIST_FIELDS:
             if field_name in patch:
@@ -570,12 +590,120 @@ class DebateService:
         return DebateService.ROLE_ORDER[: max(0, min(student_count, len(DebateService.ROLE_ORDER)))]
 
     @staticmethod
+    def _role_rotation_defaults(config_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        config_meta = config_meta or {}
+        return {
+            "role_rotation_policy": config_meta.get("role_rotation_policy") or "balanced_rotation",
+            "fairness_window_size": max(1, int(config_meta.get("fairness_window_size") or 5)),
+            "same_role_max_streak": max(1, int(config_meta.get("same_role_max_streak") or 2)),
+        }
+
+    @staticmethod
+    def _role_history_summary(
+        db: Session,
+        student_id: str,
+        role_pool: List[str],
+        *,
+        window_size: int,
+    ) -> Dict[str, Any]:
+        if window_size <= 0:
+            window_size = 5
+        participations = db.query(DebateParticipation).join(
+            Debate,
+            DebateParticipation.debate_id == Debate.id,
+        ).filter(
+            DebateParticipation.user_id == uuid.UUID(student_id),
+            DebateParticipation.left_at.is_(None),
+            Debate.status == "completed",
+            DebateParticipation.role.in_(role_pool),
+        ).order_by(DebateParticipation.joined_at.desc()).limit(window_size).all()
+
+        counts = {role: 0 for role in role_pool}
+        streak_role = None
+        streak_count = 0
+        last_role = None
+        last_assigned_roles: List[str] = []
+        for participation in participations:
+            role = str(participation.role)
+            counts[role] = counts.get(role, 0) + 1
+            last_assigned_roles.append(role)
+        if last_assigned_roles:
+            last_role = last_assigned_roles[0]
+            streak_role = last_role
+            for role in last_assigned_roles:
+                if role == streak_role:
+                    streak_count += 1
+                else:
+                    break
+        distribution = [
+            {
+                "role": role,
+                "count": counts.get(role, 0),
+            }
+            for role in role_pool
+        ]
+        return {
+            "window_size": window_size,
+            "total": len(participations),
+            "distribution": distribution,
+            "last_role": last_role,
+            "streak_role": streak_role,
+            "streak_count": streak_count,
+        }
+
+    @staticmethod
+    def _calculate_fairness_adjustment(
+        role: str,
+        *,
+        history_summary: Dict[str, Any],
+        role_rotation_policy: str,
+        same_role_max_streak: int,
+    ) -> Dict[str, Any]:
+        distribution = history_summary.get("distribution") or []
+        total = int(history_summary.get("total") or 0)
+        role_count = 0
+        for item in distribution:
+            if item.get("role") == role:
+                role_count = int(item.get("count") or 0)
+                break
+        repeat_penalty = 0.0
+        training_bonus = 0.0
+        imbalance_penalty = 0.0
+
+        if total > 0:
+            role_ratio = role_count / total
+            expected_ratio = 1 / max(1, len(distribution) or 1)
+            imbalance_penalty = round(max(0.0, role_ratio - expected_ratio) * 20, 2)
+
+        if history_summary.get("streak_role") == role:
+            streak_count = int(history_summary.get("streak_count") or 0)
+            if streak_count >= same_role_max_streak:
+                repeat_penalty = round((streak_count - same_role_max_streak + 1) * 8, 2)
+
+        if role_rotation_policy == "growth_priority":
+            training_bonus = round(max(0.0, 10 - role_count) * 0.8, 2)
+        elif role_rotation_policy == "balanced_rotation":
+            training_bonus = round(max(0.0, 5 - role_count) * 0.5, 2)
+        else:
+            training_bonus = 0.0
+
+        final_adjustment = round(training_bonus - repeat_penalty - imbalance_penalty, 2)
+        return {
+            "repeat_penalty": repeat_penalty,
+            "training_bonus": training_bonus,
+            "imbalance_penalty": imbalance_penalty,
+            "final_adjustment": final_adjustment,
+            "rotation_reason": "",
+        }
+
+    @staticmethod
     def _build_role_assignment_plan(
         db: Session,
         student_ids: List[str],
         *,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
         assignment_mode: str = "strength_first",
+        config_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not student_ids:
             return {
@@ -584,15 +712,27 @@ class DebateService:
                 "role_pool": [],
                 "results": [],
                 "assignment_map": {},
+                "role_rotation_policy": "balanced_rotation",
             }
 
         users = db.query(User).filter(User.id.in_([uuid.UUID(student_id) for student_id in student_ids])).all()
         user_by_id = {str(user.id): user for user in users}
         role_pool = DebateService._assignment_role_pool(len(student_ids))
+        rotation_defaults = DebateService._role_rotation_defaults(config_meta)
+        role_rotation_policy = rotation_defaults["role_rotation_policy"]
+        fairness_window_size = rotation_defaults["fairness_window_size"]
+        same_role_max_streak = rotation_defaults["same_role_max_streak"]
 
         fit_matrices: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        history_summaries: Dict[str, Dict[str, Any]] = {}
         for student_id in student_ids:
             assessment = AssessmentService.get_assessment(db=db, user_id=student_id) or {}
+            history_summaries[student_id] = DebateService._role_history_summary(
+                db,
+                student_id,
+                role_pool,
+                window_size=fairness_window_size,
+            )
             fit_matrices[student_id] = AssessmentService.build_role_fit_matrix(
                 assessment,
                 roles=role_pool,
@@ -604,7 +744,15 @@ class DebateService:
         for perm in itertools.permutations(role_pool, len(student_ids)):
             current_score = 0.0
             for index, student_id in enumerate(student_ids):
-                current_score += float(fit_matrices[student_id][perm[index]]["fit_score"])
+                role = perm[index]
+                fit_payload = fit_matrices[student_id][role]
+                fairness_payload = DebateService._calculate_fairness_adjustment(
+                    role,
+                    history_summary=history_summaries.get(student_id, {}),
+                    role_rotation_policy=role_rotation_policy,
+                    same_role_max_streak=same_role_max_streak,
+                )
+                current_score += float(fit_payload["fit_score"]) + float(fairness_payload["final_adjustment"])
             if current_score > best_score:
                 best_score = current_score
                 best_assignment = {
@@ -644,7 +792,25 @@ class DebateService:
             recommended_role = best_assignment.get(student_id)
             assigned_role = assignment_map.get(student_id, recommended_role)
             fit_payload = fit_matrices[student_id].get(recommended_role, {})
+            history_summary = history_summaries.get(student_id, {})
+            fairness_payload = DebateService._calculate_fairness_adjustment(
+                recommended_role,
+                history_summary=history_summary,
+                role_rotation_policy=role_rotation_policy,
+                same_role_max_streak=same_role_max_streak,
+            )
             teacher_changed = assigned_role != recommended_role
+            repeat_penalty = fairness_payload["repeat_penalty"] if recommended_role == assigned_role else 0.0
+            training_bonus = fairness_payload["training_bonus"] if recommended_role == assigned_role else 0.0
+            imbalance_penalty = fairness_payload["imbalance_penalty"] if recommended_role == assigned_role else 0.0
+            final_adjustment = fairness_payload["final_adjustment"] if recommended_role == assigned_role else 0.0
+            rotation_reason = ""
+            if history_summary.get("streak_role") == recommended_role and int(history_summary.get("streak_count") or 0) >= same_role_max_streak:
+                rotation_reason = "近期同一辩位连续出现次数较多，系统优先进行轮换"
+            elif history_summary.get("total"):
+                rotation_reason = "综合历史辩位分布后进行均衡分配"
+            else:
+                rotation_reason = "当前无足够历史记录，按能力适配优先"
             results.append(
                 {
                     "user_id": student_id,
@@ -657,7 +823,14 @@ class DebateService:
                     ),
                     "teacher_override": teacher_changed,
                     "fit_score": fit_payload.get("fit_score"),
+                    "role_fit_score": fit_payload.get("role_fit_score", fit_payload.get("fit_score")),
                     "strength_score": fit_payload.get("strength_score"),
+                    "final_score": round(float(fit_payload.get("fit_score") or 0) + final_adjustment, 2),
+                    "repeat_penalty": repeat_penalty,
+                    "training_bonus": training_bonus,
+                    "imbalance_penalty": imbalance_penalty,
+                    "rotation_reason": rotation_reason,
+                    "historical_role_distribution": history_summary.get("distribution", []),
                     "dimension_contribution": fit_payload.get("dimension_contribution"),
                     "assignment_reason": fit_payload.get("assignment_reason"),
                     "data_basis": fit_payload.get("data_basis"),
@@ -672,6 +845,7 @@ class DebateService:
             "assignment_mode": assignment_mode,
             "assignment_source": "teacher_override" if teacher_override else "rule_model",
             "role_pool": role_pool,
+            "role_rotation_policy": role_rotation_policy,
             "results": results,
             "assignment_map": {item["user_id"]: item["assigned_role"] for item in results},
         }
@@ -683,11 +857,13 @@ class DebateService:
         *,
         assignment_mode: str,
         assignment_source: str,
+        role_rotation_policy: str = "balanced_rotation",
     ) -> None:
         meta = DebateService._get_room_meta(debate)
         meta["role_assignment_snapshot"] = snapshot
         meta["role_assignment_mode"] = assignment_mode
         meta["role_assignment_source"] = assignment_source
+        meta["role_rotation_policy"] = role_rotation_policy
         meta["role_assignment_updated_at"] = datetime.utcnow().isoformat()
         DebateService._set_room_meta(debate, meta)
 
@@ -1353,7 +1529,14 @@ class DebateService:
             "teacher_override": bool(item.get("teacher_override")),
             "assignment_source": item.get("assignment_source"),
             "fit_score": item.get("fit_score"),
+            "role_fit_score": item.get("role_fit_score"),
             "strength_score": item.get("strength_score"),
+            "final_score": item.get("final_score"),
+            "repeat_penalty": item.get("repeat_penalty"),
+            "training_bonus": item.get("training_bonus"),
+            "imbalance_penalty": item.get("imbalance_penalty"),
+            "rotation_reason": item.get("rotation_reason"),
+            "historical_role_distribution": item.get("historical_role_distribution"),
             "dimension_contribution": item.get("dimension_contribution"),
             "assignment_reason": item.get("assignment_reason"),
             "data_basis": item.get("data_basis"),
@@ -1398,7 +1581,14 @@ class DebateService:
                     "teacher_override": bool(snapshot.get("teacher_override")),
                     "assignment_source": snapshot.get("assignment_source", "rule_model"),
                     "fit_score": snapshot.get("fit_score"),
+                    "role_fit_score": snapshot.get("role_fit_score"),
                     "strength_score": snapshot.get("strength_score"),
+                    "final_score": snapshot.get("final_score"),
+                    "repeat_penalty": snapshot.get("repeat_penalty"),
+                    "training_bonus": snapshot.get("training_bonus"),
+                    "imbalance_penalty": snapshot.get("imbalance_penalty"),
+                    "rotation_reason": snapshot.get("rotation_reason"),
+                    "historical_role_distribution": snapshot.get("historical_role_distribution"),
                     "dimension_contribution": snapshot.get("dimension_contribution"),
                     "assignment_reason": snapshot.get("assignment_reason"),
                     "data_basis": snapshot.get("data_basis"),
@@ -1433,12 +1623,14 @@ class DebateService:
             student_ids=normalized_student_ids,
             role_assignments=role_assignments,
             assignment_mode=assignment_mode,
+            config_meta=normalized_config_meta,
         )
         return {
             "class_id": class_id,
             "student_ids": normalized_student_ids,
             "assignment_mode": assignment_mode,
             "assignment_source": plan["assignment_source"],
+            "role_rotation_policy": plan["role_rotation_policy"],
             "role_pool": plan["role_pool"],
             "results": [
                 DebateService._serialize_assignment_preview_result(item)
@@ -1455,6 +1647,7 @@ class DebateService:
         replace_existing: bool,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
         assignment_mode: str = "strength_first",
+        config_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         if replace_existing:
             db.query(DebateParticipation).filter(
@@ -1468,6 +1661,7 @@ class DebateService:
                 [],
                 assignment_mode=assignment_mode,
                 assignment_source="rule_model",
+                role_rotation_policy=DebateService._role_rotation_defaults(config_meta)["role_rotation_policy"],
             )
             return
 
@@ -1476,6 +1670,7 @@ class DebateService:
             student_ids=selected_student_ids,
             role_assignments=role_assignments,
             assignment_mode=assignment_mode,
+            config_meta=config_meta,
         )
         role_by_user_id = plan["assignment_map"]
         DebateService._persist_role_assignment_snapshot(
@@ -1483,6 +1678,7 @@ class DebateService:
             plan["results"],
             assignment_mode=assignment_mode,
             assignment_source=plan["assignment_source"],
+            role_rotation_policy=plan["role_rotation_policy"],
         )
 
         for student_id in selected_student_ids:
@@ -1592,6 +1788,7 @@ class DebateService:
                     replace_existing=False,
                     role_assignments=role_assignments,
                     assignment_mode=assignment_mode,
+                    config_meta=normalized_config_meta,
                 )
                 db.commit()
             
@@ -1725,6 +1922,7 @@ class DebateService:
                 replace_existing=True,
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
+                config_meta=effective_config_meta,
             )
         elif role_assignments is not None:
             if debate.status in ["in_progress", "completed"]:
@@ -1744,6 +1942,7 @@ class DebateService:
                 replace_existing=True,
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
+                config_meta=effective_config_meta,
             )
         
         try:
@@ -2379,12 +2578,14 @@ class DebateService:
                 student_ids=selected_student_ids,
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
+                config_meta=normalized_config_meta,
             )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
+                role_rotation_policy=plan["role_rotation_policy"],
             )
             for item in plan["results"]:
                 student_id = item["user_id"]
@@ -2630,12 +2831,14 @@ class DebateService:
                 student_ids=selected_student_ids,
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
+                config_meta=effective_config_meta,
             )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
+                role_rotation_policy=plan["role_rotation_policy"],
             )
             planned_role_by_student_id = {
                 item["user_id"]: item["assigned_role"]
@@ -2676,12 +2879,14 @@ class DebateService:
                 student_ids=active_student_ids,
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
+                config_meta=effective_config_meta,
             )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
+                role_rotation_policy=plan["role_rotation_policy"],
             )
             planned_role_by_student_id = {
                 item["user_id"]: item["assigned_role"]
