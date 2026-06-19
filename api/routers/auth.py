@@ -235,6 +235,34 @@ async def refresh_token(
         )
 
 
+@router.post("/logout", summary="当前设备登出")
+async def logout(
+    current_user: User = Depends(verify_token_middleware),
+):
+    session_id = getattr(current_user, "_auth_session_id", None)
+    result = AuthService.logout_session(
+        session_id,
+        user_id=str(current_user.id),
+    )
+    return {
+        "code": 200,
+        "message": "Logout successful",
+        "data": result,
+    }
+
+
+@router.post("/logout-all", summary="全设备登出")
+async def logout_all(
+    current_user: User = Depends(verify_token_middleware),
+):
+    result = AuthService.logout_all_sessions(str(current_user.id))
+    return {
+        "code": 200,
+        "message": "All sessions logged out",
+        "data": result,
+    }
+
+
 @router.get(
     "/contracts/session/mock",
     summary="获取 AuthSessionContract mock",

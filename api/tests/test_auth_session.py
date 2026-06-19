@@ -13,6 +13,7 @@ if ROOT_STR not in sys.path:
 from database import get_db
 from routers import auth
 from services.auth_service import AuthService
+from utils.security import create_refresh_token
 
 
 @pytest.fixture
@@ -90,7 +91,7 @@ def test_login_openapi_schema_exposes_frozen_and_compat_fields(auth_client):
                 email="teacher_contract@test.com",
                 phone="13800138011",
                 password="Teacher123!",
-                name="Teacher Contract",
+                name="合同教师",
             ),
         ),
         (
@@ -101,7 +102,7 @@ def test_login_openapi_schema_exposes_frozen_and_compat_fields(auth_client):
                 db=db,
                 account="student_contract",
                 password="Student123!",
-                name="Student Contract",
+                name="合同学生",
                 email="student_contract@test.com",
             ),
         ),
@@ -155,7 +156,7 @@ def test_real_refresh_keeps_session_contract_fields(auth_client, db_session):
         email="teacher_refresh_contract@test.com",
         phone="13800138012",
         password="Teacher123!",
-        name="Refresh Contract Teacher",
+        name="刷新合同教师",
     )
 
     login_response = auth_client.post(
@@ -178,10 +179,116 @@ def test_real_refresh_keeps_session_contract_fields(auth_client, db_session):
     refresh_payload = refresh_response.json()["data"]
     assert refresh_payload["access_token"] != login_payload["access_token"]
     assert refresh_payload["session_id"] == login_payload["session_id"]
-    assert (
-        refresh_payload["access_token_expires_in"]
-        == login_payload["access_token_expires_in"]
-    )
+    assert refresh_payload["access_token_expires_in"] == login_payload["access_token_expires_in"]
     assert refresh_payload["refresh_strategy"] == "server_session"
     assert refresh_payload["user"]["username"] == "teacher_refresh_contract"
     assert refresh_payload["user"]["role"] == "teacher"
+
+
+def test_logout_current_session_revokes_refresh_and_protected_access(auth_client, db_session):
+    AuthService.register_teacher(
+        db=db_session,
+        account="teacher_logout_current",
+        email="teacher_logout_current@test.com",
+        phone="13800138013",
+        password="Teacher123!",
+        name="当前设备登出教师",
+    )
+
+    login_response = auth_client.post(
+        "/api/auth/login",
+        json={
+            "account": "teacher_logout_current",
+            "password": "Teacher123!",
+            "user_type": "teacher",
+        },
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    headers = {"Authorization": f"Bearer {login_payload['access_token']}"}
+
+    profile_response = auth_client.get("/api/auth/profile", headers=headers)
+    assert profile_response.status_code == 200
+
+    logout_response = auth_client.post("/api/auth/logout", headers=headers)
+    assert logout_response.status_code == 200
+    assert logout_response.json()["data"]["revoked_session_count"] == 1
+
+    profile_after_logout = auth_client.get("/api/auth/profile", headers=headers)
+    assert profile_after_logout.status_code == 401
+
+    refresh_after_logout = auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": login_payload["refresh_token"]},
+    )
+    assert refresh_after_logout.status_code == 401
+
+
+def test_logout_all_revokes_multiple_sessions(auth_client, db_session):
+    AuthService.register_teacher(
+        db=db_session,
+        account="teacher_logout_all",
+        email="teacher_logout_all@test.com",
+        phone="13800138014",
+        password="Teacher123!",
+        name="全设备登出教师",
+    )
+
+    login_one = auth_client.post(
+        "/api/auth/login",
+        json={
+            "account": "teacher_logout_all",
+            "password": "Teacher123!",
+            "user_type": "teacher",
+        },
+    )
+    login_two = auth_client.post(
+        "/api/auth/login",
+        json={
+            "account": "teacher_logout_all",
+            "password": "Teacher123!",
+            "user_type": "teacher",
+        },
+    )
+    assert login_one.status_code == 200
+    assert login_two.status_code == 200
+
+    first_payload = login_one.json()["data"]
+    second_payload = login_two.json()["data"]
+    first_headers = {"Authorization": f"Bearer {first_payload['access_token']}"}
+    second_headers = {"Authorization": f"Bearer {second_payload['access_token']}"}
+
+    logout_all_response = auth_client.post("/api/auth/logout-all", headers=first_headers)
+    assert logout_all_response.status_code == 200
+    assert logout_all_response.json()["data"]["revoked_session_count"] >= 2
+
+    assert auth_client.get("/api/auth/profile", headers=first_headers).status_code == 401
+    assert auth_client.get("/api/auth/profile", headers=second_headers).status_code == 401
+    assert auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": first_payload["refresh_token"]},
+    ).status_code == 401
+    assert auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": second_payload["refresh_token"]},
+    ).status_code == 401
+
+
+def test_refresh_token_without_session_id_is_rejected(auth_client, db_session):
+    result = AuthService.register_teacher(
+        db=db_session,
+        account="teacher_legacy_refresh",
+        email="teacher_legacy_refresh@test.com",
+        phone="13800138015",
+        password="Teacher123!",
+        name="旧刷新令牌教师",
+    )
+    legacy_refresh_token = create_refresh_token({"user_id": result["id"]})
+
+    refresh_response = auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": legacy_refresh_token},
+    )
+
+    assert refresh_response.status_code == 401
+

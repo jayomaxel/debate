@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from logging_config import get_logger
 from database import get_db
 from models.user import User
-from utils.security import verify_token
+from utils.security import is_token_session_valid, verify_token
 
 logger = get_logger(__name__)
 
@@ -49,6 +49,12 @@ async def verify_token_middleware(
                 detail="无效的认证令牌",
                 headers={"WWW-Authenticate": "Bearer"}
             )
+        if not is_token_session_valid(payload):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="会话已失效，请重新登录",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
         # 获取用户ID - 支持多种字段名
         user_id = payload.get("sub") or payload.get("user_id")
@@ -79,6 +85,7 @@ async def verify_token_middleware(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="账户已被删除"
             )
+        setattr(user, "_auth_session_id", payload.get("session_id"))
         
         return user
         

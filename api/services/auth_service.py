@@ -18,7 +18,11 @@ from utils.security import (
     create_access_token,
     create_refresh_token,
     hash_password,
+    is_server_session_active,
     normalize_contract_role,
+    persist_server_session,
+    revoke_all_server_sessions,
+    revoke_server_session,
     verify_password,
 )
 from utils.user_email import build_placeholder_email, to_public_email
@@ -117,6 +121,15 @@ class AuthService:
             "expires_in": session_payload["access_token_expires_in"],
             "user": merged_user,
         }
+
+    @staticmethod
+    def _persist_login_session(user: User, session_id: str) -> Dict[str, Any]:
+        return persist_server_session(
+            session_id=session_id,
+            user_id=str(user.id),
+            user_type=str(user.user_type),
+            requires_reauth=False,
+        )
 
     @staticmethod
     def build_auth_session_contract_preview(user_type: str = "teacher") -> Dict[str, Any]:
@@ -349,6 +362,8 @@ class AuthService:
         refresh_token = create_refresh_token(
             AuthService._build_refresh_token_payload(user, session_id)
         )
+        AuthService._persist_login_session(user, session_id)
+
         return AuthService._build_real_auth_session_payload(
             user=user,
             access_token=access_token,
@@ -384,10 +399,10 @@ class AuthService:
         user_id = payload.get("user_id")
         if not user_id:
             raise ValueError("刷新令牌格式错误")
-        session_id = str(payload.get("session_id") or "").strip() or str(uuid.uuid4())
-        if False and not session_id:
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
             raise ValueError("刷新令牌格式错误")
-        if False and not is_server_session_active(session_id, user_id=str(user_id)):
+        if not is_server_session_active(session_id, user_id=str(user_id)):
             raise ValueError("会话已失效，请重新登录")
         
         # 查找用户
@@ -401,6 +416,7 @@ class AuthService:
         new_refresh_token = create_refresh_token(
             AuthService._build_refresh_token_payload(user, session_id)
         )
+        AuthService._persist_login_session(user, session_id)
         return AuthService._build_real_auth_session_payload(
             user=user,
             access_token=new_access_token,
@@ -529,6 +545,8 @@ class AuthService:
         refresh_token = create_refresh_token(
             AuthService._build_refresh_token_payload(admin_user, session_id)
         )
+        AuthService._persist_login_session(admin_user, session_id)
+
         return AuthService._build_real_auth_session_payload(
             user=admin_user,
             access_token=access_token,
@@ -536,6 +554,27 @@ class AuthService:
             session_id=session_id,
         )
 
+    @staticmethod
+    def logout_session(
+        session_id: Optional[str],
+        *,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_session_id = str(session_id or "").strip()
+        revoked = revoke_server_session(normalized_session_id) if normalized_session_id else False
+        return {
+            "revoked": revoked,
+            "revoked_session_count": 1 if revoked else 0,
+        }
+
+    @staticmethod
+    def logout_all_sessions(user_id: str) -> Dict[str, Any]:
+        revoked_count = revoke_all_server_sessions(str(user_id))
+        return {
+            "revoked": revoked_count > 0,
+            "revoked_session_count": revoked_count,
+        }
+    
     @staticmethod
     def _create_admin_user(db: Session) -> User:
         """

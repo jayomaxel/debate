@@ -2,7 +2,11 @@
 安全工具函数：密码加密、JWT令牌管理
 """
 
+import json
+import logging
+import socket
 from datetime import datetime, timedelta, timezone
+from threading import RLock
 from typing import Any, Dict, Optional
 import uuid
 
@@ -15,6 +19,15 @@ from config import settings
 pwd_context = CryptContext(
     schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12  # 明确指定bcrypt轮数
 )
+logger = logging.getLogger(__name__)
+
+_memory_session_store: Dict[str, Dict[str, Any]] = {}
+_memory_user_session_index: Dict[str, set[str]] = {}
+_memory_session_lock = RLock()
+_session_redis_disabled = False
+_session_redis_lock = RLock()
+
+
 def hash_password(password: str) -> str:
     """
     加密密码
@@ -166,6 +179,290 @@ def get_user_from_token(token: str) -> Optional[Dict[str, Any]]:
     return {"user_id": user_id, "user_type": user_type}
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _session_ttl_seconds() -> int:
+    return int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60)
+
+
+def _session_key(session_id: str) -> str:
+    return f"auth:session:{session_id}"
+
+
+def _user_sessions_key(user_id: str) -> str:
+    return f"auth:user_sessions:{user_id}"
+
+
+def _serialize_session_payload(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+
+
+def _deserialize_session_payload(raw: str) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _build_session_payload(
+    *,
+    session_id: str,
+    user_id: str,
+    user_type: str,
+    requires_reauth: bool = False,
+    created_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    now = _utcnow()
+    expires_at = now + timedelta(seconds=_session_ttl_seconds())
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "user_type": user_type,
+        "requires_reauth": bool(requires_reauth),
+        "created_at": created_at or now.isoformat(),
+        "updated_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+def _is_session_expired(payload: Dict[str, Any]) -> bool:
+    raw_expires_at = payload.get("expires_at")
+    if not isinstance(raw_expires_at, str) or not raw_expires_at.strip():
+        return True
+    expires_at = _coerce_datetime(raw_expires_at)
+    if expires_at is None:
+        return True
+    return expires_at <= _utcnow()
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+    if isinstance(value, str) and value.strip():
+        normalized = value.strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
+def _persist_memory_session(payload: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(payload["session_id"])
+    user_id = str(payload["user_id"])
+    with _memory_session_lock:
+        _memory_session_store[session_id] = dict(payload)
+        _memory_user_session_index.setdefault(user_id, set()).add(session_id)
+    return dict(payload)
+
+
+def _load_memory_session(session_id: str) -> Optional[Dict[str, Any]]:
+    normalized_session_id = str(session_id)
+    with _memory_session_lock:
+        payload = _memory_session_store.get(normalized_session_id)
+        if payload is None:
+            return None
+        payload_copy = dict(payload)
+    if _is_session_expired(payload_copy):
+        revoke_server_session(normalized_session_id)
+        return None
+    return payload_copy
+
+
+def _delete_memory_session(session_id: str) -> bool:
+    normalized_session_id = str(session_id)
+    removed = False
+    with _memory_session_lock:
+        payload = _memory_session_store.pop(normalized_session_id, None)
+        if payload is not None:
+            removed = True
+            user_id = str(payload.get("user_id") or "")
+            session_ids = _memory_user_session_index.get(user_id)
+            if session_ids is not None:
+                session_ids.discard(normalized_session_id)
+                if not session_ids:
+                    _memory_user_session_index.pop(user_id, None)
+    return removed
+
+
+def _list_memory_user_sessions(user_id: str) -> set[str]:
+    normalized_user_id = str(user_id)
+    with _memory_session_lock:
+        return set(_memory_user_session_index.get(normalized_user_id, set()))
+
+
+def _get_redis_session_client():
+    global _session_redis_disabled
+    with _session_redis_lock:
+        if _session_redis_disabled:
+            return None
+    try:
+        with socket.create_connection(
+            (settings.REDIS_HOST, int(settings.REDIS_PORT)),
+            timeout=0.5,
+        ):
+            pass
+    except OSError:
+        _disable_redis_session_backend("socket preflight failed")
+        return None
+    try:
+        from database import get_redis
+
+        return get_redis()
+    except Exception as exc:  # pragma: no cover - defensive runtime fallback
+        logger.warning("Failed to resolve Redis session client: %s", exc)
+        return None
+
+
+def _disable_redis_session_backend(reason: str) -> None:
+    global _session_redis_disabled
+    with _session_redis_lock:
+        if _session_redis_disabled:
+            return
+        _session_redis_disabled = True
+    logger.warning("Redis session backend disabled for current process: %s", reason)
+
+
+def persist_server_session(
+    *,
+    session_id: str,
+    user_id: str,
+    user_type: str,
+    requires_reauth: bool = False,
+) -> Dict[str, Any]:
+    existing_session = get_server_session(session_id)
+    payload = _build_session_payload(
+        session_id=str(session_id),
+        user_id=str(user_id),
+        user_type=str(user_type),
+        requires_reauth=requires_reauth,
+        created_at=(existing_session or {}).get("created_at"),
+    )
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            ttl = _session_ttl_seconds()
+            pipeline = redis_client.pipeline()
+            pipeline.setex(_session_key(str(session_id)), ttl, _serialize_session_payload(payload))
+            pipeline.sadd(_user_sessions_key(str(user_id)), str(session_id))
+            pipeline.expire(_user_sessions_key(str(user_id)), ttl)
+            pipeline.execute()
+            _persist_memory_session(payload)
+            return dict(payload)
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"persist failed: {exc}")
+    return _persist_memory_session(payload)
+
+
+def get_server_session(session_id: str) -> Optional[Dict[str, Any]]:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return None
+
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            raw_payload = redis_client.get(_session_key(normalized_session_id))
+            if raw_payload:
+                payload = _deserialize_session_payload(raw_payload)
+                if payload is None:
+                    return None
+                if _is_session_expired(payload):
+                    revoke_server_session(normalized_session_id)
+                    return None
+                _persist_memory_session(payload)
+                return payload
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"read failed: {exc}")
+
+    return _load_memory_session(normalized_session_id)
+
+
+def is_server_session_active(session_id: str, user_id: Optional[str] = None) -> bool:
+    payload = get_server_session(session_id)
+    if payload is None:
+        return False
+    if user_id is not None and str(payload.get("user_id")) != str(user_id):
+        return False
+    return not bool(payload.get("requires_reauth"))
+
+
+def revoke_server_session(session_id: str) -> bool:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return False
+
+    removed = _delete_memory_session(normalized_session_id)
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            raw_payload = redis_client.get(_session_key(normalized_session_id))
+            payload = _deserialize_session_payload(raw_payload) if raw_payload else None
+            user_id = str((payload or {}).get("user_id") or "")
+            pipeline = redis_client.pipeline()
+            pipeline.delete(_session_key(normalized_session_id))
+            if user_id:
+                pipeline.srem(_user_sessions_key(user_id), normalized_session_id)
+            pipeline.execute()
+            return removed or raw_payload is not None
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"revoke failed: {exc}")
+    return removed
+
+
+def revoke_all_server_sessions(user_id: str) -> int:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return 0
+
+    session_ids = _list_memory_user_sessions(normalized_user_id)
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            session_ids.update(redis_client.smembers(_user_sessions_key(normalized_user_id)) or set())
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"user session index read failed: {exc}")
+
+    revoked_count = 0
+    for session_id in session_ids:
+        if revoke_server_session(session_id):
+            revoked_count += 1
+
+    if redis_client is not None:
+        try:
+            redis_client.delete(_user_sessions_key(normalized_user_id))
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"user session cleanup failed: {exc}")
+
+    with _memory_session_lock:
+        _memory_user_session_index.pop(normalized_user_id, None)
+
+    return revoked_count
+
+
+def is_token_session_valid(payload: Dict[str, Any]) -> bool:
+    session_id = str(payload.get("session_id") or "").strip()
+    user_id = str(payload.get("sub") or payload.get("user_id") or "").strip()
+    if not user_id:
+        return False
+    if not session_id:
+        return True
+    return is_server_session_active(session_id, user_id=user_id)
+
+
 def normalize_contract_role(user_type: str) -> str:
     """Normalize internal user types to the frozen auth contract roles."""
     normalized = str(user_type or "").strip().lower()
@@ -200,3 +497,4 @@ def build_auth_session_contract(
         "refresh_strategy": refresh_strategy,
         "requires_reauth": bool(requires_reauth),
     }
+
