@@ -3,17 +3,18 @@
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+import uuid
+
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+
 from config import settings
 
 # 密码加密上下文 - 配置为与bcrypt 4.x兼容
 pwd_context = CryptContext(
     schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12  # 明确指定bcrypt轮数
 )
-
-
 def hash_password(password: str) -> str:
     """
     加密密码
@@ -67,7 +68,9 @@ def create_access_token(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
 
-    to_encode.update({"exp": expire, "type": "access"})
+    issued_at = datetime.now(timezone.utc)
+    to_encode.setdefault("jti", str(uuid.uuid4()))
+    to_encode.update({"exp": expire, "iat": issued_at, "type": "access"})
     encoded_jwt = jwt.encode(
         to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM
     )
@@ -99,7 +102,9 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         days=settings.REFRESH_TOKEN_EXPIRE_DAYS
     )
-    to_encode.update({"exp": expire, "type": "refresh"})
+    issued_at = datetime.now(timezone.utc)
+    to_encode.setdefault("jti", str(uuid.uuid4()))
+    to_encode.update({"exp": expire, "iat": issued_at, "type": "refresh"})
     encoded_jwt = jwt.encode(
         to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM
     )
@@ -159,3 +164,39 @@ def get_user_from_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
     return {"user_id": user_id, "user_type": user_type}
+
+
+def normalize_contract_role(user_type: str) -> str:
+    """Normalize internal user types to the frozen auth contract roles."""
+    normalized = str(user_type or "").strip().lower()
+    if normalized == "administrator":
+        return "admin"
+    if normalized in {"teacher", "student", "admin"}:
+        return normalized
+    return "student"
+
+
+def build_auth_session_contract(
+    *,
+    access_token: str,
+    access_token_expires_in: int,
+    session_id: str,
+    user_id: str,
+    username: str,
+    role: str,
+    refresh_strategy: str = "server_session",
+    requires_reauth: bool = False,
+) -> Dict[str, Any]:
+    """Build the frozen auth session payload used by package C."""
+    return {
+        "access_token": access_token,
+        "access_token_expires_in": int(access_token_expires_in),
+        "session_id": session_id,
+        "user": {
+            "id": user_id,
+            "username": username,
+            "role": normalize_contract_role(role),
+        },
+        "refresh_strategy": refresh_strategy,
+        "requires_reauth": bool(requires_reauth),
+    }

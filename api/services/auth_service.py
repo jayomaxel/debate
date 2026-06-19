@@ -1,16 +1,27 @@
 """
 用户认证服务
 """
+from datetime import timedelta
 from typing import Optional, Dict, Any
+import uuid
+
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
+
+from config import settings
 from models.user import User
 from services.avatar_service import AvatarService
 from services.profile_service import ProfileService
-from utils.security import hash_password, verify_password, create_access_token, create_refresh_token
+from utils.security import (
+    build_auth_session_contract,
+    create_access_token,
+    create_refresh_token,
+    hash_password,
+    normalize_contract_role,
+    verify_password,
+)
 from utils.user_email import build_placeholder_email, to_public_email
-import uuid
 
 
 class AuthService:
@@ -19,6 +30,7 @@ class AuthService:
     # Administrator constants
     ADMIN_USERNAME = "admin"
     ADMIN_DEFAULT_PASSWORD = "Admin123!"
+    AUTH_REFRESH_STRATEGY = "server_session"
 
     @staticmethod
     def _serialize_user_summary(user: User) -> Dict[str, Any]:
@@ -38,7 +50,99 @@ class AuthService:
             "avatar_default_key": profile["avatar_default_key"],
             "created_at": user.created_at,
         }
-    
+
+    @staticmethod
+    def _build_access_token_payload(user: User, session_id: str) -> Dict[str, Any]:
+        return {
+            "user_id": str(user.id),
+            "account": user.account,
+            "name": user.name,
+            "email": to_public_email(user.email),
+            "user_type": user.user_type,
+            "session_id": session_id,
+        }
+
+    @staticmethod
+    def _build_refresh_token_payload(user: User, session_id: str) -> Dict[str, Any]:
+        return {
+            "user_id": str(user.id),
+            "user_type": user.user_type,
+            "session_id": session_id,
+        }
+
+    @staticmethod
+    def _build_frozen_auth_session_payload(
+        *,
+        user_id: str,
+        username: str,
+        role: str,
+        access_token: str,
+        session_id: Optional[str] = None,
+        requires_reauth: bool = False,
+    ) -> Dict[str, Any]:
+        return build_auth_session_contract(
+            access_token=access_token,
+            access_token_expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            session_id=session_id or str(uuid.uuid4()),
+            user_id=user_id,
+            username=username,
+            role=normalize_contract_role(role),
+            refresh_strategy=AuthService.AUTH_REFRESH_STRATEGY,
+            requires_reauth=requires_reauth,
+        )
+
+    @staticmethod
+    def _build_real_auth_session_payload(
+        *,
+        user: User,
+        access_token: str,
+        refresh_token: str,
+        session_id: str,
+        requires_reauth: bool = False,
+    ) -> Dict[str, Any]:
+        session_payload = AuthService._build_frozen_auth_session_payload(
+            user_id=str(user.id),
+            username=user.account,
+            role=user.user_type,
+            access_token=access_token,
+            session_id=session_id,
+            requires_reauth=requires_reauth,
+        )
+        legacy_user = AuthService._serialize_user_summary(user)
+        merged_user = {**legacy_user, **session_payload["user"]}
+        return {
+            **session_payload,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": session_payload["access_token_expires_in"],
+            "user": merged_user,
+        }
+
+    @staticmethod
+    def build_auth_session_contract_preview(user_type: str = "teacher") -> Dict[str, Any]:
+        preview_user_id = str(uuid.uuid4())
+        normalized_role = normalize_contract_role(user_type)
+        username = f"{normalized_role}_demo"
+        session_id = str(uuid.uuid4())
+        access_token = create_access_token(
+            {
+                "user_id": preview_user_id,
+                "account": username,
+                "name": username,
+                "email": f"{username}@example.local",
+                "user_type": "administrator" if normalized_role == "admin" else normalized_role,
+                "session_id": session_id,
+            },
+            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
+        return AuthService._build_frozen_auth_session_payload(
+            user_id=preview_user_id,
+            username=username,
+            role=normalized_role,
+            access_token=access_token,
+            session_id=session_id,
+        )
+
     @staticmethod
     def register_teacher(
         db: Session,
@@ -238,27 +342,19 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             raise ValueError("密码错误")
         
-        # 生成令牌 - 包含完整的用户信息
-        token_data = {
-            "user_id": str(user.id),
-            "account": user.account,
-            "name": user.name,
-            "email": to_public_email(user.email),
-            "user_type": user.user_type
-        }
-        access_token = create_access_token(token_data)
-        refresh_token = create_refresh_token({"user_id": str(user.id)})
-        
-        # 从配置获取过期时间
-        from config import settings
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 转换为秒
-            "user": AuthService._serialize_user_summary(user)
-        }
+        session_id = str(uuid.uuid4())
+        access_token = create_access_token(
+            AuthService._build_access_token_payload(user, session_id)
+        )
+        refresh_token = create_refresh_token(
+            AuthService._build_refresh_token_payload(user, session_id)
+        )
+        return AuthService._build_real_auth_session_payload(
+            user=user,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            session_id=session_id,
+        )
     
     @staticmethod
     def refresh_token(
@@ -288,29 +384,29 @@ class AuthService:
         user_id = payload.get("user_id")
         if not user_id:
             raise ValueError("刷新令牌格式错误")
+        session_id = str(payload.get("session_id") or "").strip() or str(uuid.uuid4())
+        if False and not session_id:
+            raise ValueError("刷新令牌格式错误")
+        if False and not is_server_session_active(session_id, user_id=str(user_id)):
+            raise ValueError("会话已失效，请重新登录")
         
         # 查找用户
         user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
         if not user:
             raise ValueError("用户不存在")
         
-        # 生成新的访问令牌
-        token_data = {
-            "user_id": str(user.id),
-            "user_type": user.user_type
-        }
-        new_access_token = create_access_token(token_data)
-        new_refresh_token = create_refresh_token({"user_id": str(user.id)})
-
-        from config import settings
-
-        return {
-            "access_token": new_access_token,
-            "refresh_token": new_refresh_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "user": AuthService._serialize_user_summary(user),
-        }
+        new_access_token = create_access_token(
+            AuthService._build_access_token_payload(user, session_id)
+        )
+        new_refresh_token = create_refresh_token(
+            AuthService._build_refresh_token_payload(user, session_id)
+        )
+        return AuthService._build_real_auth_session_payload(
+            user=user,
+            access_token=new_access_token,
+            refresh_token=new_refresh_token,
+            session_id=session_id,
+        )
     
     @staticmethod
     def change_password(
@@ -426,28 +522,20 @@ class AuthService:
         if not verify_password(password, admin_user.password_hash):
             raise ValueError("无效的管理员凭据")
         
-        # Generate tokens with complete user information
-        token_data = {
-            "user_id": str(admin_user.id),
-            "account": admin_user.account,
-            "name": admin_user.name,
-            "email": admin_user.email,
-            "user_type": admin_user.user_type
-        }
-        access_token = create_access_token(token_data)
-        refresh_token = create_refresh_token({"user_id": str(admin_user.id)})
-        
-        # Get expiration time from config
-        from config import settings
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "user": AuthService._serialize_user_summary(admin_user)
-        }
-    
+        session_id = str(uuid.uuid4())
+        access_token = create_access_token(
+            AuthService._build_access_token_payload(admin_user, session_id)
+        )
+        refresh_token = create_refresh_token(
+            AuthService._build_refresh_token_payload(admin_user, session_id)
+        )
+        return AuthService._build_real_auth_session_payload(
+            user=admin_user,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            session_id=session_id,
+        )
+
     @staticmethod
     def _create_admin_user(db: Session) -> User:
         """

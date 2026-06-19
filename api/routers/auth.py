@@ -1,5 +1,5 @@
-"""
-认证API路由
+﻿"""
+璁よ瘉API璺敱
 """
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func
@@ -11,15 +11,15 @@ from models.user import User
 from services.auth_service import AuthService
 from services.avatar_service import AvatarService
 from middleware.auth_middleware import verify_token_middleware
+from schemas.config import AuthSessionApiResponse, AuthSessionContract
 from schemas.auth import SelectDefaultAvatarRequest
 
-router = APIRouter(prefix="/api/auth", tags=["认证"])
+router = APIRouter(prefix="/api/auth", tags=["璁よ瘉"])
 
 
-# Pydantic模型
+# Pydantic妯″瀷
 class TeacherRegisterRequest(BaseModel):
-    account: str  # 教工号
-    email: EmailStr
+    account: str  # 鏁欏伐鍙?    email: EmailStr
     phone: str
     password: str
     name: str
@@ -29,7 +29,7 @@ class StudentRegisterRequest(BaseModel):
     account: str
     password: str
     name: str
-    class_id: Optional[str] = None  # 班级ID（可选）
+    class_id: Optional[str] = None  # 鐝骇ID锛堝彲閫夛級
     email: Optional[EmailStr] = None
     student_id: Optional[str] = None
 
@@ -37,7 +37,7 @@ class StudentRegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     account: str
     password: str
-    user_type: str  # teacher、student或administrator
+    user_type: str  # teacher銆乻tudent鎴朼dministrator
 
 
 class RefreshTokenRequest(BaseModel):
@@ -54,15 +54,14 @@ class UpdateProfileRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     student_id: Optional[str] = None
-    class_id: Optional[str] = None  # 新增：班级ID
+    class_id: Optional[str] = None  # 鏂板锛氱彮绾D
 
 
-# API端点
-@router.get("/classes/public", summary="获取公开班级列表")
+# API绔偣
+@router.get("/classes/public", summary="鑾峰彇鍏紑鐝骇鍒楄〃")
 async def get_public_classes(db: Session = Depends(get_db)):
     """
-    获取所有班级列表（用于注册时选择）
-    返回班级ID、名称、教师姓名等信息
+    鑾峰彇鎵€鏈夌彮绾у垪琛紙鐢ㄤ簬娉ㄥ唽鏃堕€夋嫨锛?    杩斿洖鐝骇ID銆佸悕绉般€佹暀甯堝鍚嶇瓑淇℃伅
     """
     from models.class_model import Class
     from models.user import User
@@ -96,33 +95,31 @@ async def get_public_classes(db: Session = Depends(get_db)):
                 "id": str(cls.id),
                 "name": cls.name,
                 "code": cls.code,
-                "teacher_name": teacher_name or "未知",
+                "teacher_name": teacher_name or "鏈煡",
                 "student_count": int(student_count or 0)
             })
         
         return {
             "code": 200,
-            "message": "获取成功",
+            "message": "鑾峰彇鎴愬姛",
             "data": result
         }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"获取班级列表失败: {str(e)}"
+            detail=f"鑾峰彇鐝骇鍒楄〃澶辫触: {str(e)}"
         )
-@router.post("/register/teacher", summary="教师注册")
+@router.post("/register/teacher", summary="鏁欏笀娉ㄥ唽")
 async def register_teacher(
     request: TeacherRegisterRequest,
     db: Session = Depends(get_db)
 ):
     """
-    教师注册
+    鏁欏笀娉ㄥ唽
     
-    - **account**: 教工号
-    - **email**: 邮箱
-    - **phone**: 手机号
-    - **password**: 密码
-    - **name**: 姓名
+    - **account**: 鏁欏伐鍙?    - **email**: 閭
+    - **phone**: 鎵嬫満鍙?    - **password**: 瀵嗙爜
+    - **name**: 濮撳悕
     """
     try:
         user = AuthService.register_teacher(
@@ -135,7 +132,7 @@ async def register_teacher(
         )
         return {
             "code": 200,
-            "message": "注册成功",
+            "message": "娉ㄥ唽鎴愬姛",
             "data": user
         }
     except ValueError as e:
@@ -145,20 +142,20 @@ async def register_teacher(
         )
 
 
-@router.post("/register/student", summary="学生注册")
+@router.post("/register/student", summary="瀛︾敓娉ㄥ唽")
 async def register_student(
     request: StudentRegisterRequest,
     db: Session = Depends(get_db)
 ):
     """
-    学生注册
+    瀛︾敓娉ㄥ唽
     
-    - **account**: 账号
-    - **password**: 密码
-    - **name**: 姓名
-    - **class_id**: 班级ID（可选）
-    - **email**: 邮箱（可选）
-    - **student_id**: 学号（可选）
+    - **account**: 璐﹀彿
+    - **password**: 瀵嗙爜
+    - **name**: 濮撳悕
+    - **class_id**: 鐝骇ID锛堝彲閫夛級
+    - **email**: 閭锛堝彲閫夛級
+    - **student_id**: 瀛﹀彿锛堝彲閫夛級
     """
     try:
         user = AuthService.register_student(
@@ -172,7 +169,7 @@ async def register_student(
         )
         return {
             "code": 200,
-            "message": "注册成功",
+            "message": "娉ㄥ唽鎴愬姛",
             "data": user
         }
     except ValueError as e:
@@ -182,18 +179,16 @@ async def register_student(
         )
 
 
-@router.post("/login", summary="用户登录")
+@router.post("/login", summary="用户登录", response_model=AuthSessionApiResponse)
 async def login(
     request: LoginRequest,
     db: Session = Depends(get_db)
 ):
     """
-    用户登录
+    鐢ㄦ埛鐧诲綍
     
-    - **account**: 璐﹀彿
-    - **password**: 密码
-    - **user_type**: 用户类型（teacher、student或administrator）
-    """
+    - **account**: 鐠愶箑褰?    - **password**: 瀵嗙爜
+    - **user_type**: 鐢ㄦ埛绫诲瀷锛坱eacher銆乻tudent鎴朼dministrator锛?    """
     try:
         result = AuthService.login(
             db=db,
@@ -203,7 +198,7 @@ async def login(
         )
         return {
             "code": 200,
-            "message": "登录成功",
+            "message": "鐧诲綍鎴愬姛",
             "data": result
         }
     except ValueError as e:
@@ -213,15 +208,15 @@ async def login(
         )
 
 
-@router.post("/refresh", summary="刷新令牌")
+@router.post("/refresh", summary="刷新令牌", response_model=AuthSessionApiResponse)
 async def refresh_token(
     request: RefreshTokenRequest,
     db: Session = Depends(get_db)
 ):
     """
-    刷新访问令牌
+    鍒锋柊璁块棶浠ょ墝
     
-    - **refresh_token**: 刷新令牌
+    - **refresh_token**: 鍒锋柊浠ょ墝
     """
     try:
         result = AuthService.refresh_token(
@@ -230,7 +225,7 @@ async def refresh_token(
         )
         return {
             "code": 200,
-            "message": "刷新成功",
+            "message": "鍒锋柊鎴愬姛",
             "data": result
         }
     except ValueError as e:
@@ -240,6 +235,14 @@ async def refresh_token(
         )
 
 
+@router.get(
+    "/contracts/session/mock",
+    summary="获取 AuthSessionContract mock",
+    response_model=AuthSessionContract,
+)
+async def get_auth_session_contract_mock(user_type: str = "teacher"):
+    return AuthService.build_auth_session_contract_preview(user_type=user_type)
+
 @router.post("/change-password", summary="修改密码")
 async def change_password(
     request: ChangePasswordRequest,
@@ -247,11 +250,9 @@ async def change_password(
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    修改密码（需要登录）
+    淇敼瀵嗙爜锛堥渶瑕佺櫥褰曪級
     
-    - **old_password**: 旧密码
-    - **new_password**: 新密码
-    """
+    - **old_password**: 鏃у瘑鐮?    - **new_password**: 鏂板瘑鐮?    """
     try:
         AuthService.change_password(
             db=db,
@@ -261,7 +262,7 @@ async def change_password(
         )
         return {
             "code": 200,
-            "message": "密码修改成功"
+            "message": "瀵嗙爜淇敼鎴愬姛"
         }
     except ValueError as e:
         raise HTTPException(
@@ -270,13 +271,13 @@ async def change_password(
         )
 
 
-@router.get("/profile", summary="获取个人信息")
+@router.get("/profile", summary="鑾峰彇涓汉淇℃伅")
 async def get_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    获取当前用户的个人信息（需要登录）
+    鑾峰彇褰撳墠鐢ㄦ埛鐨勪釜浜轰俊鎭紙闇€瑕佺櫥褰曪級
     """
     from services.profile_service import ProfileService
     
@@ -284,7 +285,7 @@ async def get_profile(
         profile = ProfileService.get_profile(db=db, user_id=str(current_user.id))
         return {
             "code": 200,
-            "message": "获取成功",
+            "message": "鑾峰彇鎴愬姛",
             "data": profile
         }
     except ValueError as e:
@@ -294,20 +295,20 @@ async def get_profile(
         )
 
 
-@router.put("/profile", summary="更新个人信息")
+@router.put("/profile", summary="鏇存柊涓汉淇℃伅")
 async def update_profile(
     request: UpdateProfileRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    更新个人信息（需要登录）
+    鏇存柊涓汉淇℃伅锛堥渶瑕佺櫥褰曪級
     
-    - **name**: 姓名（可选）
-    - **email**: 邮箱（可选）
-    - **phone**: 手机号（可选）
-    - **student_id**: 学号（可选，仅学生）
-    - **class_id**: 班级ID（可选，仅学生）
+    - **name**: 濮撳悕锛堝彲閫夛級
+    - **email**: 閭锛堝彲閫夛級
+    - **phone**: 鎵嬫満鍙凤紙鍙€夛級
+    - **student_id**: 瀛﹀彿锛堝彲閫夛紝浠呭鐢燂級
+    - **class_id**: 鐝骇ID锛堝彲閫夛紝浠呭鐢燂級
     """
     from services.profile_service import ProfileService
     
@@ -323,7 +324,7 @@ async def update_profile(
         )
         return {
             "code": 200,
-            "message": "更新成功",
+            "message": "鏇存柊鎴愬姛",
             "data": result
         }
     except ValueError as e:
@@ -333,11 +334,11 @@ async def update_profile(
         )
 
 
-@router.get("/avatars/defaults", summary="获取默认头像列表")
+@router.get("/avatars/defaults", summary="鑾峰彇榛樿澶村儚鍒楄〃")
 async def get_default_avatars():
     return {
         "code": 200,
-        "message": "获取成功",
+        "message": "鑾峰彇鎴愬姛",
         "data": AvatarService.list_default_avatars(),
     }
 
@@ -358,7 +359,7 @@ async def upload_profile_avatar(
         )
         return {
             "code": 200,
-            "message": "头像上传成功",
+            "message": "澶村儚涓婁紶鎴愬姛",
             "data": avatar_payload,
         }
     except ValueError as e:
@@ -368,7 +369,7 @@ async def upload_profile_avatar(
         )
 
 
-@router.put("/profile/avatar/default", summary="切换默认头像")
+@router.put("/profile/avatar/default", summary="鍒囨崲榛樿澶村儚")
 async def select_default_avatar(
     request: SelectDefaultAvatarRequest,
     db: Session = Depends(get_db),
@@ -392,7 +393,7 @@ async def select_default_avatar(
         )
 
 
-@router.delete("/profile/avatar", summary="清除头像")
+@router.delete("/profile/avatar", summary="娓呴櫎澶村儚")
 async def clear_profile_avatar(
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware),
@@ -410,21 +411,18 @@ class DeleteAccountRequest(BaseModel):
     password: str
 
 
-@router.post("/delete-account", summary="注销账户")
+@router.post("/delete-account", summary="娉ㄩ攢璐︽埛")
 async def delete_account(
     request: DeleteAccountRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware),
 ):
     """
-    注销账户
+    娉ㄩ攢璐︽埛
     
-    - **password**: 密码（用于确认）
+    - **password**: 瀵嗙爜锛堢敤浜庣‘璁わ級
     
-    注意：
-    - 学生账户：软删除，保留匿名化的历史数据
-    - 教师账户：需要先删除或转移所有班级
-    """
+    娉ㄦ剰锛?    - 瀛︾敓璐︽埛锛氳蒋鍒犻櫎锛屼繚鐣欏尶鍚嶅寲鐨勫巻鍙叉暟鎹?    - 鏁欏笀璐︽埛锛氶渶瑕佸厛鍒犻櫎鎴栬浆绉绘墍鏈夌彮绾?    """
     
     try:
         result = AuthService.delete_account(
@@ -445,3 +443,4 @@ async def delete_account(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+

@@ -1,9 +1,107 @@
 """
 Configuration schemas for API request/response validation
 """
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+class AuthSessionUserContract(BaseModel):
+    """Minimal user payload frozen for auth session responses."""
+
+    id: str
+    username: str
+    role: Literal["student", "teacher", "admin"]
+
+
+class AuthSessionContract(BaseModel):
+    """Frozen auth-session contract for frontend integration."""
+
+    access_token: str
+    access_token_expires_in: int = Field(
+        ge=0, description="Access token lifetime in seconds"
+    )
+    session_id: str
+    user: AuthSessionUserContract
+    refresh_strategy: Literal["http_only_cookie", "server_session"]
+    requires_reauth: bool = False
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock",
+                "access_token_expires_in": 3600,
+                "session_id": "0f97bc37-5396-438c-98ae-64b4b1b5f5c8",
+                "user": {
+                    "id": "8e137f6f-15f6-4554-91fa-ef46563d9807",
+                    "username": "teacher_demo",
+                    "role": "teacher",
+                },
+                "refresh_strategy": "server_session",
+                "requires_reauth": False,
+            }
+        }
+
+
+class AuthSessionCompatibleUserResponse(AuthSessionUserContract):
+    """Runtime auth user payload during the compatibility window."""
+
+    account: str
+    name: str
+    user_type: Literal["teacher", "student", "administrator"]
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    student_id: Optional[str] = None
+    class_id: Optional[str] = None
+    avatar: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatar_mode: Optional[str] = None
+    avatar_default_key: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class AuthSessionRuntimeResponse(AuthSessionContract):
+    """Actual login/refresh response while legacy frontend fields are preserved."""
+
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(
+        ge=0,
+        description="Legacy alias for access_token_expires_in kept for compatibility",
+    )
+    user: AuthSessionCompatibleUserResponse
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock",
+                "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "access_token_expires_in": 3600,
+                "session_id": "0f97bc37-5396-438c-98ae-64b4b1b5f5c8",
+                "user": {
+                    "id": "8e137f6f-15f6-4554-91fa-ef46563d9807",
+                    "username": "teacher_demo",
+                    "role": "teacher",
+                    "account": "teacher_demo",
+                    "name": "Teacher Demo",
+                    "user_type": "teacher",
+                    "email": "teacher_demo@example.local",
+                },
+                "refresh_strategy": "server_session",
+                "requires_reauth": False,
+            }
+        }
+
+
+class AuthSessionApiResponse(BaseModel):
+    """Standard success envelope for login/refresh auth responses."""
+
+    code: int = 200
+    message: str
+    data: AuthSessionRuntimeResponse
 
 
 class ModelConfigResponse(BaseModel):
