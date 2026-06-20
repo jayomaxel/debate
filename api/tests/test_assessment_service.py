@@ -1,6 +1,10 @@
 import uuid
+from datetime import datetime
 
 from models.assessment import AbilityAssessment
+from models.debate import Debate, DebateParticipation
+from models.score import Score
+from models.speech import Speech
 from models.user import User
 from services.assessment_service import AssessmentService
 from services.debate_service import DebateService
@@ -158,6 +162,108 @@ def test_role_fit_model_returns_contribution_and_reason():
     assert fit["dimension_contribution"]["critical"] == 38.0
     assert fit["data_basis"] == "self_assessment_only"
     assert "反驳" in fit["assignment_reason"]
+
+
+def test_get_assessment_includes_history_scores_and_speech_stats(db_session):
+    teacher = User(
+        id=uuid.uuid4(),
+        account="assessment_teacher",
+        password_hash="hashed_password",
+        user_type="teacher",
+        name="Assessment Teacher",
+        email="assessment_teacher@test.com",
+    )
+    student = create_student(db_session, "assessment_history")
+    db_session.add(teacher)
+    db_session.commit()
+
+    assessment = AbilityAssessment(
+        id=uuid.uuid4(),
+        user_id=student.id,
+        personality_type="balanced",
+        expression_willingness=8,
+        logical_thinking=8,
+        expression_willingness_score=82,
+        logical_thinking_score=84,
+        stablecoin_knowledge_score=70,
+        financial_knowledge_score=76,
+        critical_thinking_score=88,
+        is_default=False,
+        recommended_role="debater_3",
+    )
+    db_session.add(assessment)
+    db_session.flush()
+
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="assessment 历史依据测试",
+        description="",
+        duration=20,
+        invitation_code=f"A{uuid.uuid4().hex[:5].upper()}",
+        teacher_id=teacher.id,
+        status="completed",
+        mode="teacher_assigned",
+        visibility="private",
+        capacity=1,
+        creator_user_id=teacher.id,
+        owner_user_id=teacher.id,
+        host_user_id=teacher.id,
+        created_at=datetime.utcnow(),
+    )
+    db_session.add(debate)
+    db_session.flush()
+
+    participation = DebateParticipation(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        user_id=student.id,
+        role="debater_3",
+        stance="positive",
+        role_reason=DebateService.ROLE_REASON["debater_3"],
+        seat_order=3,
+        joined_at=datetime.utcnow(),
+    )
+    db_session.add(participation)
+    db_session.flush()
+
+    speech = Speech(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        speaker_id=student.id,
+        speaker_type="human",
+        speaker_role="debater_3",
+        phase="free_debate",
+        content="我回应对方论证中的逻辑漏洞，因此该结论并不成立。",
+        duration=85,
+        is_valid_for_scoring=True,
+        timestamp=datetime.utcnow(),
+    )
+    db_session.add(speech)
+    db_session.flush()
+
+    score = Score(
+        participation_id=participation.id,
+        speech_id=speech.id,
+        logic_score=86.0,
+        argument_score=83.0,
+        response_score=88.0,
+        persuasion_score=80.0,
+        teamwork_score=75.0,
+        overall_score=82.5,
+        feedback="整体回应有效，无明显违规。",
+    )
+    db_session.add(score)
+    db_session.commit()
+
+    result = AssessmentService.get_assessment(db=db_session, user_id=str(student.id))
+
+    assert result is not None
+    assert result["analysis_basis"] == "self_assessment_history_speech"
+    assert "history_scores" in result["data_sources"]
+    assert "speech_stats" in result["data_sources"]
+    assert result["profile_confidence"] == "high"
+    assert result["role_assignment_basis"]["history_scores"][0]["count"] == 1
+    assert result["role_assignment_basis"]["speech_stats"][0]["speech_count"] == 1
 
 
 def test_fallback_role_assignment_uses_standard_role_model():

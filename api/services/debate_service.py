@@ -12,6 +12,8 @@ from models.class_model import Class
 from services.assessment_service import AssessmentService
 from services.avatar_service import AvatarService
 from services.config_service import ConfigService
+from services.role_assignment_learning_service import RoleAssignmentLearningService
+from services.role_assignment_tracking_service import RoleAssignmentTrackingService
 from services.room_manager import room_manager
 from config import settings
 from logging_config import get_logger
@@ -68,6 +70,11 @@ class DebateService:
         "assignment_policy": "ai_recommend_then_confirm",
         "fairness_window_size": 5,
         "same_role_max_streak": 2,
+        "model_calibration_enabled": True,
+        "model_rule_weight": 0.55,
+        "model_performance_weight": 0.30,
+        "model_growth_weight": 0.15,
+        "model_min_sample_size": 8,
         "rounds": 1,
         "knowledge_points": [],
         "objective": [],
@@ -214,6 +221,9 @@ class DebateService:
                 raise ValueError("config_meta.assignment_policy 仅支持 ai_auto_assign 或 ai_recommend_then_confirm")
             target["assignment_policy"] = value
 
+        if "model_calibration_enabled" in patch:
+            target["model_calibration_enabled"] = bool(patch.get("model_calibration_enabled"))
+
         if "rounds" in patch:
             try:
                 rounds = int(patch.get("rounds"))
@@ -223,7 +233,7 @@ class DebateService:
                 raise ValueError("config_meta.rounds 必须在 1 到 20 之间")
             target["rounds"] = rounds
 
-        for field_name in ("fairness_window_size", "same_role_max_streak"):
+        for field_name in ("fairness_window_size", "same_role_max_streak", "model_min_sample_size"):
             if field_name in patch:
                 try:
                     value = int(patch.get(field_name))
@@ -232,6 +242,16 @@ class DebateService:
                 if value < 0:
                     raise ValueError(f"config_meta.{field_name} 不能小于 0")
                 target[field_name] = value
+
+        for field_name in ("model_rule_weight", "model_performance_weight", "model_growth_weight"):
+            if field_name in patch:
+                try:
+                    value = float(patch.get(field_name))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"config_meta.{field_name} 必须是数字") from exc
+                if value < 0:
+                    raise ValueError(f"config_meta.{field_name} 不能小于 0")
+                target[field_name] = round(value, 4)
 
         for field_name in DebateService.CONFIG_LIST_FIELDS:
             if field_name in patch:
@@ -599,6 +619,152 @@ class DebateService:
         }
 
     @staticmethod
+    def _model_calibration_defaults(config_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        config_meta = config_meta or {}
+        return {
+            "model_calibration_enabled": bool(config_meta.get("model_calibration_enabled", True)),
+            "model_rule_weight": max(0.0, float(config_meta.get("model_rule_weight") or 0.55)),
+            "model_performance_weight": max(0.0, float(config_meta.get("model_performance_weight") or 0.30)),
+            "model_growth_weight": max(0.0, float(config_meta.get("model_growth_weight") or 0.15)),
+            "model_min_sample_size": max(0, int(config_meta.get("model_min_sample_size") or 8)),
+        }
+
+    @staticmethod
+    def _assignment_policy(config_meta: Optional[Dict[str, Any]] = None) -> str:
+        config_meta = config_meta or {}
+        value = DebateService._clean_optional_string(
+            config_meta.get("assignment_policy"),
+        )
+        if value in DebateService.CONFIG_ASSIGNMENT_POLICY_VALUES:
+            return value
+        return "ai_recommend_then_confirm"
+
+    @staticmethod
+    def _enforce_assignment_policy(
+        config_meta: Optional[Dict[str, Any]],
+        role_assignments: Optional[List[Dict[str, Any]]],
+        *,
+        operation: str,
+    ) -> None:
+        if not role_assignments:
+            return
+        assignment_policy = DebateService._assignment_policy(config_meta)
+        if assignment_policy == "ai_auto_assign":
+            raise ValueError(
+                f"当前配置为 ai_auto_assign，{operation}时不允许提交手动辩位结果",
+            )
+
+    @staticmethod
+    def _cleanup_temporary_assignment_runs(
+        db: Session,
+        *,
+        teacher_id: Optional[str],
+        class_id: Optional[str],
+    ) -> None:
+        deleted = RoleAssignmentTrackingService.cleanup_temporary_runs(
+            db,
+            created_by=teacher_id,
+            class_id=class_id,
+        )
+        if deleted > 0:
+            db.flush()
+
+    @staticmethod
+    def _resolve_parent_assignment_run_id(
+        db: Session,
+        assignment_run_id: Optional[str],
+        *,
+        teacher_id: Optional[str],
+        class_id: Optional[str],
+        debate_id: Optional[str] = None,
+        reservation_id: Optional[str] = None,
+    ) -> Optional[str]:
+        if not assignment_run_id:
+            return None
+        run = RoleAssignmentTrackingService.get_run_by_id(
+            db,
+            assignment_run_id,
+            include_temporary=True,
+        )
+        if run is None:
+            raise ValueError("assignment_run_id 不存在")
+
+        if teacher_id and run.created_by and str(run.created_by) != str(teacher_id):
+            raise ValueError("assignment_run_id 不属于当前教师")
+        if class_id and run.class_id and str(run.class_id) != str(class_id):
+            raise ValueError("assignment_run_id 与当前班级不匹配")
+
+        run_debate_id = str(run.debate_id) if run.debate_id else None
+        run_reservation_id = str(run.reservation_id) if run.reservation_id else None
+        if debate_id and run_debate_id and run_debate_id != str(debate_id):
+            raise ValueError("assignment_run_id 与当前辩论不匹配")
+        if reservation_id and run_reservation_id and run_reservation_id != str(reservation_id):
+            raise ValueError("assignment_run_id 与当前预约不匹配")
+
+        if run.is_temporary:
+            if str(run.target_mode or "") != "preview":
+                raise ValueError("assignment_run_id 不是可用的预览分配记录")
+        elif not any(
+            [
+                debate_id and run_debate_id == str(debate_id),
+                reservation_id and run_reservation_id == str(reservation_id),
+            ]
+        ):
+            raise ValueError("assignment_run_id 不能挂接到当前对象")
+
+        return str(run.id)
+
+    @staticmethod
+    def _compose_assignment_score(
+        rule_fit_score: float,
+        learning_payload: Dict[str, Any],
+        *,
+        fairness_adjustment: float,
+        config_meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        calibration = DebateService._model_calibration_defaults(config_meta)
+        if not calibration["model_calibration_enabled"]:
+            final_score = round(float(rule_fit_score or 0.0) + float(fairness_adjustment or 0.0), 2)
+            return {
+                "final_score": final_score,
+                "effective_rule_weight": 1.0,
+                "effective_performance_weight": 0.0,
+                "effective_growth_weight": 0.0,
+            }
+
+        confidence = max(0.0, min(100.0, float(learning_payload.get("confidence") or 0.0)))
+        confidence_scale = confidence / 100.0
+        min_sample_size = int(calibration["model_min_sample_size"] or 0)
+        current_samples = int((learning_payload.get("model_basis") or {}).get("sample_count") or 0) + int(
+            (learning_payload.get("model_basis") or {}).get("own_role_sample_count") or 0
+        )
+        if current_samples < min_sample_size:
+            confidence_scale *= 0.5
+
+        rule_weight = float(calibration["model_rule_weight"])
+        performance_weight = float(calibration["model_performance_weight"]) * confidence_scale
+        growth_weight = float(calibration["model_growth_weight"]) * max(0.35, confidence_scale)
+        weight_total = rule_weight + performance_weight + growth_weight
+        if weight_total <= 0:
+            rule_weight, performance_weight, growth_weight = 1.0, 0.0, 0.0
+            weight_total = 1.0
+        effective_rule_weight = rule_weight / weight_total
+        effective_performance_weight = performance_weight / weight_total
+        effective_growth_weight = growth_weight / weight_total
+        blended_score = (
+            float(rule_fit_score or 0.0) * effective_rule_weight
+            + float(learning_payload.get("predicted_performance_score") or 0.0) * effective_performance_weight
+            + float(learning_payload.get("predicted_growth_gain") or 0.0) * effective_growth_weight
+        )
+        final_score = round(blended_score + float(fairness_adjustment or 0.0), 2)
+        return {
+            "final_score": final_score,
+            "effective_rule_weight": round(effective_rule_weight, 4),
+            "effective_performance_weight": round(effective_performance_weight, 4),
+            "effective_growth_weight": round(effective_growth_weight, 4),
+        }
+
+    @staticmethod
     def _role_history_summary(
         db: Session,
         student_id: str,
@@ -705,6 +871,11 @@ class DebateService:
         assignment_mode: str = "strength_first",
         config_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        DebateService._enforce_assignment_policy(
+            config_meta,
+            role_assignments,
+            operation="进行辩位分配",
+        )
         if not student_ids:
             return {
                 "assignment_mode": assignment_mode,
@@ -713,6 +884,7 @@ class DebateService:
                 "results": [],
                 "assignment_map": {},
                 "role_rotation_policy": "balanced_rotation",
+                "model_version": RoleAssignmentLearningService.MODEL_VERSION,
             }
 
         users = db.query(User).filter(User.id.in_([uuid.UUID(student_id) for student_id in student_ids])).all()
@@ -725,6 +897,7 @@ class DebateService:
 
         fit_matrices: Dict[str, Dict[str, Dict[str, Any]]] = {}
         history_summaries: Dict[str, Dict[str, Any]] = {}
+        learning_matrices: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for student_id in student_ids:
             assessment = AssessmentService.get_assessment(db=db, user_id=student_id) or {}
             history_summaries[student_id] = DebateService._role_history_summary(
@@ -738,6 +911,18 @@ class DebateService:
                 roles=role_pool,
                 assignment_mode=assignment_mode,
             )
+            learning_matrices[student_id] = {
+                role: RoleAssignmentLearningService.predict_role_scores(
+                    db=db,
+                    user_id=student_id,
+                    role=role,
+                    assignment_mode=assignment_mode,
+                    role_rotation_policy=role_rotation_policy,
+                    role_pool=role_pool,
+                    rule_fit_score=float(fit_matrices[student_id][role]["fit_score"]),
+                )
+                for role in role_pool
+            }
 
         best_assignment: Dict[str, str] = {}
         best_score = float("-inf")
@@ -752,7 +937,14 @@ class DebateService:
                     role_rotation_policy=role_rotation_policy,
                     same_role_max_streak=same_role_max_streak,
                 )
-                current_score += float(fit_payload["fit_score"]) + float(fairness_payload["final_adjustment"])
+                learning_payload = learning_matrices[student_id][role]
+                composed_score = DebateService._compose_assignment_score(
+                    float(fit_payload["fit_score"] or 0.0),
+                    learning_payload,
+                    fairness_adjustment=float(fairness_payload["final_adjustment"] or 0.0),
+                    config_meta=config_meta,
+                )
+                current_score += float(composed_score["final_score"])
             if current_score > best_score:
                 best_score = current_score
                 best_assignment = {
@@ -761,6 +953,7 @@ class DebateService:
                 }
 
         teacher_assignment_map: Dict[str, str] = {}
+        teacher_override_reasons: Dict[str, Optional[str]] = {}
         teacher_override = False
         if role_assignments is not None:
             if len(role_assignments) != len(student_ids):
@@ -783,27 +976,40 @@ class DebateService:
                 seen_student_ids.add(student_id)
                 seen_roles.add(role)
                 teacher_assignment_map[student_id] = role
+                teacher_override_reasons[student_id] = DebateService._clean_optional_string(item.get("override_reason"))
             teacher_override = True
 
         assignment_map = teacher_assignment_map or best_assignment
         results: List[Dict[str, Any]] = []
+        teacher_changed_any = False
         for student_id in student_ids:
             user = user_by_id.get(student_id)
             recommended_role = best_assignment.get(student_id)
             assigned_role = assignment_map.get(student_id, recommended_role)
-            fit_payload = fit_matrices[student_id].get(recommended_role, {})
+            recommended_fit_payload = fit_matrices[student_id].get(recommended_role, {})
+            recommended_learning_payload = learning_matrices[student_id].get(recommended_role, {})
+            scoring_role = assigned_role or recommended_role
+            fit_payload = fit_matrices[student_id].get(scoring_role, recommended_fit_payload)
+            learning_payload = learning_matrices[student_id].get(scoring_role, recommended_learning_payload)
             history_summary = history_summaries.get(student_id, {})
             fairness_payload = DebateService._calculate_fairness_adjustment(
-                recommended_role,
+                scoring_role,
                 history_summary=history_summary,
                 role_rotation_policy=role_rotation_policy,
                 same_role_max_streak=same_role_max_streak,
             )
             teacher_changed = assigned_role != recommended_role
-            repeat_penalty = fairness_payload["repeat_penalty"] if recommended_role == assigned_role else 0.0
-            training_bonus = fairness_payload["training_bonus"] if recommended_role == assigned_role else 0.0
-            imbalance_penalty = fairness_payload["imbalance_penalty"] if recommended_role == assigned_role else 0.0
-            final_adjustment = fairness_payload["final_adjustment"] if recommended_role == assigned_role else 0.0
+            teacher_changed_any = teacher_changed_any or teacher_changed
+            repeat_penalty = fairness_payload["repeat_penalty"]
+            training_bonus = fairness_payload["training_bonus"]
+            imbalance_penalty = fairness_payload["imbalance_penalty"]
+            final_adjustment = fairness_payload["final_adjustment"]
+            composed_score = DebateService._compose_assignment_score(
+                float(fit_payload.get("fit_score") or 0.0),
+                learning_payload,
+                fairness_adjustment=float(final_adjustment or 0.0),
+                config_meta=config_meta,
+            )
             rotation_reason = ""
             if history_summary.get("streak_role") == recommended_role and int(history_summary.get("streak_count") or 0) >= same_role_max_streak:
                 rotation_reason = "近期同一辩位连续出现次数较多，系统优先进行轮换"
@@ -818,6 +1024,10 @@ class DebateService:
                     "avatar": AvatarService.build_avatar_payload(user)["avatar"] if user else None,
                     "recommended_role": recommended_role,
                     "assigned_role": assigned_role,
+                    "recommended_fit_score": recommended_fit_payload.get("fit_score"),
+                    "recommended_model_score": recommended_learning_payload.get("predicted_performance_score"),
+                    "recommended_growth_score": recommended_learning_payload.get("predicted_growth_gain"),
+                    "override_reason": teacher_override_reasons.get(student_id),
                     "assignment_source": "teacher_override" if teacher_override and teacher_changed else (
                         "teacher_confirmed" if teacher_override else "rule_model"
                     ),
@@ -825,12 +1035,20 @@ class DebateService:
                     "fit_score": fit_payload.get("fit_score"),
                     "role_fit_score": fit_payload.get("role_fit_score", fit_payload.get("fit_score")),
                     "strength_score": fit_payload.get("strength_score"),
-                    "final_score": round(float(fit_payload.get("fit_score") or 0) + final_adjustment, 2),
+                    "final_score": composed_score["final_score"],
+                    "effective_rule_weight": composed_score["effective_rule_weight"],
+                    "effective_performance_weight": composed_score["effective_performance_weight"],
+                    "effective_growth_weight": composed_score["effective_growth_weight"],
                     "repeat_penalty": repeat_penalty,
                     "training_bonus": training_bonus,
                     "imbalance_penalty": imbalance_penalty,
                     "rotation_reason": rotation_reason,
                     "historical_role_distribution": history_summary.get("distribution", []),
+                    "model_score": learning_payload.get("predicted_performance_score"),
+                    "growth_score": learning_payload.get("predicted_growth_gain"),
+                    "confidence": learning_payload.get("confidence"),
+                    "feature_importance": learning_payload.get("feature_importance"),
+                    "model_basis": learning_payload.get("model_basis"),
                     "dimension_contribution": fit_payload.get("dimension_contribution"),
                     "assignment_reason": fit_payload.get("assignment_reason"),
                     "data_basis": fit_payload.get("data_basis"),
@@ -843,9 +1061,16 @@ class DebateService:
 
         return {
             "assignment_mode": assignment_mode,
-            "assignment_source": "teacher_override" if teacher_override else "rule_model",
+            "assignment_source": (
+                "teacher_override"
+                if teacher_changed_any
+                else "teacher_confirmed"
+                if teacher_override
+                else "rule_model"
+            ),
             "role_pool": role_pool,
             "role_rotation_policy": role_rotation_policy,
+            "model_version": RoleAssignmentLearningService.MODEL_VERSION,
             "results": results,
             "assignment_map": {item["user_id"]: item["assigned_role"] for item in results},
         }
@@ -858,14 +1083,85 @@ class DebateService:
         assignment_mode: str,
         assignment_source: str,
         role_rotation_policy: str = "balanced_rotation",
+        latest_run_id: Optional[str] = None,
     ) -> None:
         meta = DebateService._get_room_meta(debate)
         meta["role_assignment_snapshot"] = snapshot
         meta["role_assignment_mode"] = assignment_mode
         meta["role_assignment_source"] = assignment_source
         meta["role_rotation_policy"] = role_rotation_policy
+        meta["latest_role_assignment_run_id"] = latest_run_id
         meta["role_assignment_updated_at"] = datetime.utcnow().isoformat()
         DebateService._set_room_meta(debate, meta)
+
+    @staticmethod
+    def _create_role_assignment_run(
+        db: Session,
+        *,
+        results: List[Dict[str, Any]],
+        class_id: Optional[str],
+        source: str,
+        target_mode: Optional[str],
+        assignment_mode: str,
+        role_rotation_policy: str,
+        created_by: Optional[str],
+        debate_id: Optional[str] = None,
+        reservation_id: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+        is_temporary: bool = False,
+        summary: Optional[Dict[str, Any]] = None,
+        previous_snapshot_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        run = RoleAssignmentTrackingService.create_assignment_run(
+            db=db,
+            debate_id=debate_id,
+            reservation_id=reservation_id,
+            class_id=class_id,
+            source=source,
+            target_mode=target_mode,
+            assignment_mode=assignment_mode,
+            rotation_policy=role_rotation_policy,
+            model_version=RoleAssignmentLearningService.MODEL_VERSION,
+            created_by=created_by,
+            results=results,
+            summary=summary,
+            parent_run_id=parent_run_id,
+            is_temporary=is_temporary,
+            previous_snapshot_map=previous_snapshot_map,
+        )
+        db.flush()
+        return {
+            "role_assignment_run": RoleAssignmentTrackingService.serialize_run(run),
+            "role_assignment_audit_logs": [
+                RoleAssignmentTrackingService.serialize_audit_log(log)
+                for log in run.audit_logs
+            ],
+        }
+
+    @staticmethod
+    def _assignment_tracking_payload(
+        db: Session,
+        *,
+        debate_id: Optional[str] = None,
+        reservation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        latest_run = RoleAssignmentTrackingService.get_latest_run(
+            db,
+            debate_id=debate_id,
+            reservation_id=reservation_id,
+        )
+        audit_logs = RoleAssignmentTrackingService.list_audit_logs(
+            db,
+            debate_id=debate_id,
+            reservation_id=reservation_id,
+        )
+        return {
+            "role_assignment_run": RoleAssignmentTrackingService.serialize_run(latest_run),
+            "role_assignment_audit_logs": [
+                RoleAssignmentTrackingService.serialize_audit_log(item)
+                for item in audit_logs
+            ],
+        }
 
     @staticmethod
     def _ensure_active_participation_available(
@@ -1527,16 +1823,28 @@ class DebateService:
             "role_reason": DebateService.ROLE_REASON.get(assigned_role),
             "original_recommended_role": recommended_role,
             "teacher_override": bool(item.get("teacher_override")),
+            "override_reason": item.get("override_reason"),
+            "recommended_fit_score": item.get("recommended_fit_score"),
+            "recommended_model_score": item.get("recommended_model_score"),
+            "recommended_growth_score": item.get("recommended_growth_score"),
             "assignment_source": item.get("assignment_source"),
             "fit_score": item.get("fit_score"),
             "role_fit_score": item.get("role_fit_score"),
             "strength_score": item.get("strength_score"),
             "final_score": item.get("final_score"),
+            "effective_rule_weight": item.get("effective_rule_weight"),
+            "effective_performance_weight": item.get("effective_performance_weight"),
+            "effective_growth_weight": item.get("effective_growth_weight"),
             "repeat_penalty": item.get("repeat_penalty"),
             "training_bonus": item.get("training_bonus"),
             "imbalance_penalty": item.get("imbalance_penalty"),
             "rotation_reason": item.get("rotation_reason"),
             "historical_role_distribution": item.get("historical_role_distribution"),
+            "model_score": item.get("model_score"),
+            "growth_score": item.get("growth_score"),
+            "confidence": item.get("confidence"),
+            "feature_importance": item.get("feature_importance"),
+            "model_basis": item.get("model_basis"),
             "dimension_contribution": item.get("dimension_contribution"),
             "assignment_reason": item.get("assignment_reason"),
             "data_basis": item.get("data_basis"),
@@ -1579,16 +1887,28 @@ class DebateService:
                     "assigned_role": participation.role,
                     "original_recommended_role": snapshot.get("recommended_role", participation.role),
                     "teacher_override": bool(snapshot.get("teacher_override")),
+                    "override_reason": snapshot.get("override_reason"),
+                    "recommended_fit_score": snapshot.get("recommended_fit_score"),
+                    "recommended_model_score": snapshot.get("recommended_model_score"),
+                    "recommended_growth_score": snapshot.get("recommended_growth_score"),
                     "assignment_source": snapshot.get("assignment_source", "rule_model"),
                     "fit_score": snapshot.get("fit_score"),
                     "role_fit_score": snapshot.get("role_fit_score"),
                     "strength_score": snapshot.get("strength_score"),
                     "final_score": snapshot.get("final_score"),
+                    "effective_rule_weight": snapshot.get("effective_rule_weight"),
+                    "effective_performance_weight": snapshot.get("effective_performance_weight"),
+                    "effective_growth_weight": snapshot.get("effective_growth_weight"),
                     "repeat_penalty": snapshot.get("repeat_penalty"),
                     "training_bonus": snapshot.get("training_bonus"),
                     "imbalance_penalty": snapshot.get("imbalance_penalty"),
                     "rotation_reason": snapshot.get("rotation_reason"),
                     "historical_role_distribution": snapshot.get("historical_role_distribution"),
+                    "model_score": snapshot.get("model_score"),
+                    "growth_score": snapshot.get("growth_score"),
+                    "confidence": snapshot.get("confidence"),
+                    "feature_importance": snapshot.get("feature_importance"),
+                    "model_basis": snapshot.get("model_basis"),
                     "dimension_contribution": snapshot.get("dimension_contribution"),
                     "assignment_reason": snapshot.get("assignment_reason"),
                     "data_basis": snapshot.get("data_basis"),
@@ -1618,6 +1938,11 @@ class DebateService:
         )
         normalized_config_meta = DebateService.normalize_debate_config_meta(config_meta)
         assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
+        DebateService._cleanup_temporary_assignment_runs(
+            db,
+            teacher_id=teacher_id,
+            class_id=class_id,
+        )
         plan = DebateService._build_role_assignment_plan(
             db=db,
             student_ids=normalized_student_ids,
@@ -1625,17 +1950,38 @@ class DebateService:
             assignment_mode=assignment_mode,
             config_meta=normalized_config_meta,
         )
+        tracking = DebateService._create_role_assignment_run(
+            db=db,
+            results=plan["results"],
+            class_id=class_id,
+            source="system_preview",
+            target_mode="preview",
+            assignment_mode=assignment_mode,
+            role_rotation_policy=plan["role_rotation_policy"],
+            created_by=teacher_id,
+            is_temporary=True,
+            summary={
+                "student_ids": normalized_student_ids,
+                "config_meta": normalized_config_meta,
+                "model_version": plan.get("model_version"),
+            },
+        )
+        db.commit()
         return {
             "class_id": class_id,
             "student_ids": normalized_student_ids,
             "assignment_mode": assignment_mode,
             "assignment_source": plan["assignment_source"],
             "role_rotation_policy": plan["role_rotation_policy"],
+            "assignment_run_id": tracking["role_assignment_run"]["run_id"] if tracking.get("role_assignment_run") else None,
+            "model_version": plan.get("model_version"),
             "role_pool": plan["role_pool"],
             "results": [
                 DebateService._serialize_assignment_preview_result(item)
                 for item in plan["results"]
             ],
+            "role_assignment_run": tracking.get("role_assignment_run"),
+            "role_assignment_audit_logs": tracking.get("role_assignment_audit_logs", []),
         }
 
     @staticmethod
@@ -1648,7 +1994,10 @@ class DebateService:
         role_assignments: Optional[List[Dict[str, Any]]] = None,
         assignment_mode: str = "strength_first",
         config_meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
+        created_by_user_id: Optional[str] = None,
+        source: str = "teacher_save",
+        parent_run_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         if replace_existing:
             db.query(DebateParticipation).filter(
                 DebateParticipation.debate_id == debate.id,
@@ -1663,8 +2012,18 @@ class DebateService:
                 assignment_source="rule_model",
                 role_rotation_policy=DebateService._role_rotation_defaults(config_meta)["role_rotation_policy"],
             )
-            return
+            return None
 
+        previous_snapshot_map = DebateService._role_assignment_snapshot_map(DebateService._get_room_meta(debate))
+        room_mode = DebateService._room_mode(debate)
+        parent_run_id = DebateService._resolve_parent_assignment_run_id(
+            db,
+            parent_run_id,
+            teacher_id=created_by_user_id,
+            class_id=str(debate.class_id) if debate.class_id else None,
+            debate_id=str(debate.id),
+            reservation_id=str(debate.id) if room_mode == "teacher_reserved" else None,
+        )
         plan = DebateService._build_role_assignment_plan(
             db=db,
             student_ids=selected_student_ids,
@@ -1673,12 +2032,32 @@ class DebateService:
             config_meta=config_meta,
         )
         role_by_user_id = plan["assignment_map"]
+        tracking = DebateService._create_role_assignment_run(
+            db=db,
+            results=plan["results"],
+            class_id=str(debate.class_id) if debate.class_id else None,
+            source=source,
+            target_mode=room_mode,
+            assignment_mode=assignment_mode,
+            role_rotation_policy=plan["role_rotation_policy"],
+            created_by=created_by_user_id,
+            debate_id=str(debate.id),
+            reservation_id=str(debate.id) if room_mode == "teacher_reserved" else None,
+            parent_run_id=parent_run_id,
+            summary={
+                "student_ids": selected_student_ids,
+                "config_meta": config_meta or {},
+                "model_version": plan.get("model_version"),
+            },
+            previous_snapshot_map=previous_snapshot_map,
+        )
         DebateService._persist_role_assignment_snapshot(
             debate,
             plan["results"],
             assignment_mode=assignment_mode,
             assignment_source=plan["assignment_source"],
             role_rotation_policy=plan["role_rotation_policy"],
+            latest_run_id=tracking["role_assignment_run"]["run_id"] if tracking.get("role_assignment_run") else None,
         )
 
         for student_id in selected_student_ids:
@@ -1696,6 +2075,7 @@ class DebateService:
                     seat_order=DebateService._seat_order_for_role(role),
                 )
             )
+        return tracking
     
     @staticmethod
     async def create_debate(
@@ -1708,6 +2088,7 @@ class DebateService:
         config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_run_id: Optional[str] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -1777,11 +2158,10 @@ class DebateService:
         
         try:
             db.add(debate)
-            db.commit()
-            db.refresh(debate)
-            
+            db.flush()
+            assignment_tracking = None
             if selected_student_ids:
-                await DebateService._assign_students_to_debate(
+                assignment_tracking = await DebateService._assign_students_to_debate(
                     db=db,
                     debate=debate,
                     selected_student_ids=selected_student_ids,
@@ -1789,9 +2169,21 @@ class DebateService:
                     role_assignments=role_assignments,
                     assignment_mode=assignment_mode,
                     config_meta=normalized_config_meta,
+                    created_by_user_id=teacher_id,
+                    source="teacher_save",
+                    parent_run_id=assignment_run_id,
                 )
-                db.commit()
-            
+            else:
+                assignment_tracking = DebateService._assignment_tracking_payload(
+                    db,
+                    debate_id=str(debate.id),
+                )
+            db.commit()
+            db.refresh(debate)
+             
+        except ValueError:
+            db.rollback()
+            raise
         except IntegrityError:
             db.rollback()
             raise ValueError("创建辩论失败")
@@ -1813,7 +2205,8 @@ class DebateService:
             "status": debate.status,
             "student_ids": user_ids,
             "grouping": grouping,
-            "created_at": debate.created_at.isoformat()
+            "created_at": debate.created_at.isoformat(),
+            **(assignment_tracking or DebateService._assignment_tracking_payload(db, debate_id=str(debate.id))),
         }
     
     @staticmethod
@@ -1828,6 +2221,7 @@ class DebateService:
         config_meta: Optional[Dict[str, Any]] = None,
         student_ids: Optional[List[str]] = None,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_run_id: Optional[str] = None,
         status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -1903,8 +2297,16 @@ class DebateService:
         )
         effective_config_meta = DebateService._deserialize_debate_config_meta(debate)
         assignment_mode = effective_config_meta.get("role_assignment_mode") or "strength_first"
+        resolved_assignment_run_id = DebateService._resolve_parent_assignment_run_id(
+            db,
+            assignment_run_id,
+            teacher_id=teacher_id,
+            class_id=normalized_class_id,
+            debate_id=str(debate.id),
+        )
             
         # 更新参与学生
+        assignment_tracking = None
         if status is not None:
             debate.status = next_status
         if student_ids is not None:
@@ -1915,7 +2317,7 @@ class DebateService:
                 class_id=normalized_class_id,
                 student_ids=student_ids,
             )
-            await DebateService._assign_students_to_debate(
+            assignment_tracking = await DebateService._assign_students_to_debate(
                 db=db,
                 debate=debate,
                 selected_student_ids=selected_student_ids,
@@ -1923,6 +2325,9 @@ class DebateService:
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
                 config_meta=effective_config_meta,
+                created_by_user_id=teacher_id,
+                source="teacher_update",
+                parent_run_id=resolved_assignment_run_id,
             )
         elif role_assignments is not None:
             if debate.status in ["in_progress", "completed"]:
@@ -1935,7 +2340,7 @@ class DebateService:
                 ).all()
                 if p.user_id
             ]
-            await DebateService._assign_students_to_debate(
+            assignment_tracking = await DebateService._assign_students_to_debate(
                 db=db,
                 debate=debate,
                 selected_student_ids=active_student_ids,
@@ -1943,11 +2348,17 @@ class DebateService:
                 role_assignments=role_assignments,
                 assignment_mode=assignment_mode,
                 config_meta=effective_config_meta,
+                created_by_user_id=teacher_id,
+                source="teacher_update",
+                parent_run_id=resolved_assignment_run_id,
             )
         
         try:
             db.commit()
             db.refresh(debate)
+        except ValueError:
+            db.rollback()
+            raise
         except IntegrityError:
             db.rollback()
             raise ValueError("更新辩论失败")
@@ -1969,7 +2380,8 @@ class DebateService:
             "status": debate.status,
             "student_ids": user_ids,
             "grouping": grouping,
-            "created_at": debate.created_at.isoformat()
+            "created_at": debate.created_at.isoformat(),
+            **(assignment_tracking or DebateService._assignment_tracking_payload(db, debate_id=str(debate.id))),
         }
     
     @staticmethod
@@ -2104,7 +2516,8 @@ class DebateService:
             "participant_count": len(participations),
             "student_ids": student_ids,
             "grouping": grouping,
-            "created_at": debate.created_at.isoformat()
+            "created_at": debate.created_at.isoformat(),
+            **DebateService._assignment_tracking_payload(db, debate_id=str(debate.id)),
         }
     
     @staticmethod
@@ -2493,6 +2906,7 @@ class DebateService:
         checkin_close_time: Any = None,
         student_ids: Optional[List[str]] = None,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_run_id: Optional[str] = None,
         visibility: str = "private",
         password: Optional[str] = None,
         host_user_id: Optional[str] = None,
@@ -2527,6 +2941,12 @@ class DebateService:
         )
         if not selected_student_ids:
             raise ValueError("预约至少需要邀请一名学生")
+        assignment_run_id = DebateService._resolve_parent_assignment_run_id(
+            db,
+            assignment_run_id,
+            teacher_id=teacher_id,
+            class_id=class_id,
+        )
         host_uuid = uuid.UUID(str(teacher_id))
         if host_user_id:
             try:
@@ -2580,12 +3000,31 @@ class DebateService:
                 assignment_mode=assignment_mode,
                 config_meta=normalized_config_meta,
             )
+            tracking = DebateService._create_role_assignment_run(
+                db=db,
+                results=plan["results"],
+                class_id=str(debate.class_id) if debate.class_id else None,
+                source="teacher_save",
+                target_mode="teacher_reserved",
+                assignment_mode=assignment_mode,
+                role_rotation_policy=plan["role_rotation_policy"],
+                created_by=teacher_id,
+                debate_id=str(debate.id),
+                reservation_id=str(debate.id),
+                parent_run_id=assignment_run_id,
+                summary={
+                    "student_ids": selected_student_ids,
+                    "config_meta": normalized_config_meta,
+                    "model_version": plan.get("model_version"),
+                },
+            )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
                 role_rotation_policy=plan["role_rotation_policy"],
+                latest_run_id=tracking["role_assignment_run"]["run_id"] if tracking.get("role_assignment_run") else None,
             )
             for item in plan["results"]:
                 student_id = item["user_id"]
@@ -2606,6 +3045,9 @@ class DebateService:
                 )
             db.commit()
             db.refresh(debate)
+        except ValueError:
+            db.rollback()
+            raise
         except IntegrityError:
             db.rollback()
             raise ValueError("创建预约失败")
@@ -2660,6 +3102,7 @@ class DebateService:
             "cancelled_at": debate.cancelled_at.isoformat() if debate.cancelled_at else meta.get("cancelled_at"),
             "cancel_reason": debate.cancel_reason or meta.get("cancel_reason"),
             **counts,
+            **DebateService._assignment_tracking_payload(db, reservation_id=str(debate.id)),
         }
 
     @staticmethod
@@ -2747,6 +3190,7 @@ class DebateService:
         checkin_close_time: Any = None,
         student_ids: Optional[List[str]] = None,
         role_assignments: Optional[List[Dict[str, Any]]] = None,
+        assignment_run_id: Optional[str] = None,
         visibility: Optional[str] = None,
         password: Optional[str] = None,
         host_user_id: Optional[str] = None,
@@ -2810,6 +3254,15 @@ class DebateService:
             debate.checkin_close_time = DebateService._normalize_datetime(checkin_close_time)
 
         selected_student_ids = None
+        previous_snapshot_map = DebateService._role_assignment_snapshot_map(meta)
+        resolved_assignment_run_id = DebateService._resolve_parent_assignment_run_id(
+            db,
+            assignment_run_id,
+            teacher_id=teacher_id,
+            class_id=str(debate.class_id),
+            debate_id=str(debate.id),
+            reservation_id=str(debate.id),
+        )
         if student_ids is not None:
             selected_student_ids = DebateService._validate_selected_student_ids(
                 db=db,
@@ -2833,12 +3286,32 @@ class DebateService:
                 assignment_mode=assignment_mode,
                 config_meta=effective_config_meta,
             )
+            tracking = DebateService._create_role_assignment_run(
+                db=db,
+                results=plan["results"],
+                class_id=str(debate.class_id) if debate.class_id else None,
+                source="teacher_update",
+                target_mode="teacher_reserved",
+                assignment_mode=assignment_mode,
+                role_rotation_policy=plan["role_rotation_policy"],
+                created_by=teacher_id,
+                debate_id=str(debate.id),
+                reservation_id=str(debate.id),
+                parent_run_id=resolved_assignment_run_id,
+                summary={
+                    "student_ids": selected_student_ids,
+                    "config_meta": effective_config_meta,
+                    "model_version": plan.get("model_version"),
+                },
+                previous_snapshot_map=previous_snapshot_map,
+            )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
                 role_rotation_policy=plan["role_rotation_policy"],
+                latest_run_id=tracking["role_assignment_run"]["run_id"] if tracking.get("role_assignment_run") else None,
             )
             planned_role_by_student_id = {
                 item["user_id"]: item["assigned_role"]
@@ -2881,12 +3354,32 @@ class DebateService:
                 assignment_mode=assignment_mode,
                 config_meta=effective_config_meta,
             )
+            tracking = DebateService._create_role_assignment_run(
+                db=db,
+                results=plan["results"],
+                class_id=str(debate.class_id) if debate.class_id else None,
+                source="teacher_update",
+                target_mode="teacher_reserved",
+                assignment_mode=assignment_mode,
+                role_rotation_policy=plan["role_rotation_policy"],
+                created_by=teacher_id,
+                debate_id=str(debate.id),
+                reservation_id=str(debate.id),
+                parent_run_id=resolved_assignment_run_id,
+                summary={
+                    "student_ids": active_student_ids,
+                    "config_meta": effective_config_meta,
+                    "model_version": plan.get("model_version"),
+                },
+                previous_snapshot_map=previous_snapshot_map,
+            )
             DebateService._persist_role_assignment_snapshot(
                 debate,
                 plan["results"],
                 assignment_mode=assignment_mode,
                 assignment_source=plan["assignment_source"],
                 role_rotation_policy=plan["role_rotation_policy"],
+                latest_run_id=tracking["role_assignment_run"]["run_id"] if tracking.get("role_assignment_run") else None,
             )
             planned_role_by_student_id = {
                 item["user_id"]: item["assigned_role"]
@@ -2916,6 +3409,9 @@ class DebateService:
         try:
             db.commit()
             db.refresh(debate)
+        except ValueError:
+            db.rollback()
+            raise
         except IntegrityError:
             db.rollback()
             raise ValueError("更新预约失败")

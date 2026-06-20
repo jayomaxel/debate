@@ -187,7 +187,60 @@ class AssessmentService:
         return "debater_4"
 
     @staticmethod
-    def _serialize_assessment(assessment: AbilityAssessment) -> Dict[str, Any]:
+    def _merge_analysis_context(
+        profile_payload: Dict[str, Any],
+        evidence_basis: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        data_sources = set(profile_payload.get("data_sources") or [])
+        history_scores = evidence_basis.get("history_scores") or []
+        speech_stats = evidence_basis.get("speech_stats") or []
+
+        overall_history = next(
+            (item for item in history_scores if item.get("scope") == "overall"),
+            {},
+        )
+        overall_speech = next(
+            (item for item in speech_stats if item.get("scope") == "overall"),
+            {},
+        )
+        has_history = int(overall_history.get("count") or 0) > 0
+        has_speech = int(overall_speech.get("speech_count") or 0) > 0
+
+        if has_history:
+            data_sources.add("history_scores")
+        if has_speech:
+            data_sources.add("speech_stats")
+
+        has_self = "self_assessment" in data_sources
+        if has_self and has_history and has_speech:
+            analysis_basis = "self_assessment_history_speech"
+            profile_confidence = "high"
+        elif has_self and has_history:
+            analysis_basis = "self_assessment_plus_history"
+            profile_confidence = "high"
+        elif has_self and has_speech:
+            analysis_basis = "self_assessment_plus_speech"
+            profile_confidence = "high"
+        elif has_self:
+            analysis_basis = "self_assessment_only"
+            profile_confidence = profile_payload.get("profile_confidence", "medium")
+        elif has_history or has_speech:
+            analysis_basis = "fallback_rule_plus_behavior"
+            profile_confidence = "medium"
+        else:
+            analysis_basis = profile_payload.get("analysis_basis", "fallback_rule_only")
+            profile_confidence = profile_payload.get("profile_confidence", "low")
+
+        return {
+            "analysis_basis": analysis_basis,
+            "data_sources": sorted(data_sources),
+            "profile_confidence": profile_confidence,
+            "history_scores": history_scores,
+            "speech_stats": speech_stats,
+        }
+
+    @staticmethod
+    def _serialize_assessment(db: Session, assessment: AbilityAssessment) -> Dict[str, Any]:
         result = {
             "id": str(assessment.id),
             "personality_type": assessment.personality_type,
@@ -226,13 +279,29 @@ class AssessmentService:
             else None,
         }
         profile_payload = AssessmentService.build_standard_profile(result)
+        from services.role_assignment_learning_service import (
+            RoleAssignmentLearningService,
+        )
+
+        evidence_basis = RoleAssignmentLearningService.build_student_evidence_basis(
+            db=db,
+            user_id=str(assessment.user_id),
+            recommended_role=assessment.recommended_role,
+        )
+        merged_context = AssessmentService._merge_analysis_context(
+            profile_payload,
+            evidence_basis,
+        )
         result.update(profile_payload)
+        result["analysis_basis"] = merged_context["analysis_basis"]
+        result["data_sources"] = merged_context["data_sources"]
+        result["profile_confidence"] = merged_context["profile_confidence"]
         result["role_fit"] = AssessmentService.build_role_fit_matrix(result)
         result["role_assignment_basis"] = {
             "self_reported": list(profile_payload["standard_profile"].keys()),
-            "history_scores": [],
-            "speech_stats": [],
-            "analysis_basis": profile_payload["analysis_basis"],
+            "history_scores": merged_context["history_scores"],
+            "speech_stats": merged_context["speech_stats"],
+            "analysis_basis": merged_context["analysis_basis"],
         }
         return result
 
@@ -315,7 +384,7 @@ class AssessmentService:
         db.commit()
         db.refresh(assessment)
 
-        result = AssessmentService._serialize_assessment(assessment)
+        result = AssessmentService._serialize_assessment(db, assessment)
         result["message"] = "评估完成"
         return result
 
@@ -344,4 +413,4 @@ class AssessmentService:
         if bool(getattr(assessment, "is_default", False)):
             return None
 
-        return AssessmentService._serialize_assessment(assessment)
+        return AssessmentService._serialize_assessment(db, assessment)

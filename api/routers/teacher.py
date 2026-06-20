@@ -49,6 +49,11 @@ class DebateConfigMetaRequest(BaseModel):
     role_rotation_policy: Optional[Literal["balanced_rotation", "strength_priority", "growth_priority"]] = None
     fairness_window_size: Optional[int] = None
     same_role_max_streak: Optional[int] = None
+    model_calibration_enabled: Optional[bool] = None
+    model_rule_weight: Optional[float] = None
+    model_performance_weight: Optional[float] = None
+    model_growth_weight: Optional[float] = None
+    model_min_sample_size: Optional[int] = None
     rounds: Optional[int] = None
     knowledge_points: Optional[List[str]] = None
     objective: Optional[List[str]] = None
@@ -63,6 +68,7 @@ class DebateConfigMetaRequest(BaseModel):
 class RoleAssignmentRequest(BaseModel):
     user_id: str
     role: Literal["debater_1", "debater_2", "debater_3", "debater_4"]
+    override_reason: Optional[str] = None
 
 
 class CreateDebateRequest(BaseModel):
@@ -73,6 +79,7 @@ class CreateDebateRequest(BaseModel):
     config_meta: Optional[DebateConfigMetaRequest] = None
     student_ids: Optional[List[str]] = None
     role_assignments: Optional[List[RoleAssignmentRequest]] = None
+    assignment_run_id: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -84,6 +91,7 @@ class UpdateDebateRequest(BaseModel):
     config_meta: Optional[DebateConfigMetaRequest] = None
     student_ids: Optional[List[str]] = None
     role_assignments: Optional[List[RoleAssignmentRequest]] = None
+    assignment_run_id: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -98,6 +106,7 @@ class CreateReservationRequest(BaseModel):
     checkin_close_time: Optional[str] = None
     student_ids: List[str]
     role_assignments: Optional[List[RoleAssignmentRequest]] = None
+    assignment_run_id: Optional[str] = None
     visibility: str = "private"
     password: Optional[str] = None
     host_user_id: Optional[str] = None
@@ -113,6 +122,7 @@ class UpdateReservationRequest(BaseModel):
     checkin_close_time: Optional[str] = None
     student_ids: Optional[List[str]] = None
     role_assignments: Optional[List[RoleAssignmentRequest]] = None
+    assignment_run_id: Optional[str] = None
     visibility: Optional[str] = None
     password: Optional[str] = None
     host_user_id: Optional[str] = None
@@ -348,6 +358,7 @@ async def create_debate(
             config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
             role_assignments=_role_assignments_payload(request.role_assignments),
+            assignment_run_id=request.assignment_run_id,
             status=request.status,
         )
         return {
@@ -394,6 +405,7 @@ async def update_debate(
             config_meta=_config_meta_payload(request.config_meta),
             student_ids=request.student_ids,
             role_assignments=_role_assignments_payload(request.role_assignments),
+            assignment_run_id=request.assignment_run_id,
             status=request.status,
         )
         return {
@@ -545,6 +557,7 @@ async def create_reservation(
             checkin_close_time=request.checkin_close_time,
             student_ids=request.student_ids,
             role_assignments=_role_assignments_payload(request.role_assignments),
+            assignment_run_id=request.assignment_run_id,
             visibility=request.visibility,
             password=request.password,
             host_user_id=request.host_user_id,
@@ -621,6 +634,7 @@ async def update_reservation(
             checkin_close_time=request.checkin_close_time,
             student_ids=request.student_ids,
             role_assignments=_role_assignments_payload(request.role_assignments),
+            assignment_run_id=request.assignment_run_id,
             visibility=request.visibility,
             password=request.password,
             host_user_id=request.host_user_id,

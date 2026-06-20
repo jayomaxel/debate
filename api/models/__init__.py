@@ -3,7 +3,16 @@
 """
 from .user import User
 from .class_model import Class
-from .debate import Debate, DebateParticipation, DebateReservationInvitation, DebateEventLog
+from .debate import (
+    Debate,
+    DebateParticipation,
+    DebateReservationInvitation,
+    DebateEventLog,
+    DebateRoleAssignmentRun,
+    DebateRoleAssignmentItem,
+    DebateRoleAssignmentAuditLog,
+    DebateRolePerformanceSample,
+)
 from .speech import Speech
 from .score import Score
 from .document import Document
@@ -20,6 +29,10 @@ __all__ = [
     "DebateParticipation",
     "DebateReservationInvitation",
     "DebateEventLog",
+    "DebateRoleAssignmentRun",
+    "DebateRoleAssignmentItem",
+    "DebateRoleAssignmentAuditLog",
+    "DebateRolePerformanceSample",
     "Speech",
     "Score",
     "Document",

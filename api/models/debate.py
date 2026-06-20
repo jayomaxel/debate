@@ -3,7 +3,7 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, func, text
+from sqlalchemy import Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped
 from typing import List, TYPE_CHECKING
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .speech import Speech
     from .document import Document
     from .score import Score
+    from .class_model import Class
 
 class Debate(Base):
     __tablename__ = "debates"
@@ -102,6 +103,20 @@ class Debate(Base):
     speeches: Mapped[List["Speech"]] = relationship("Speech", back_populates="debate")
     event_logs: Mapped[List["DebateEventLog"]] = relationship(
         "DebateEventLog",
+        back_populates="debate",
+    )
+    role_assignment_runs: Mapped[List["DebateRoleAssignmentRun"]] = relationship(
+        "DebateRoleAssignmentRun",
+        back_populates="debate",
+        foreign_keys="DebateRoleAssignmentRun.debate_id",
+    )
+    reservation_assignment_runs: Mapped[List["DebateRoleAssignmentRun"]] = relationship(
+        "DebateRoleAssignmentRun",
+        back_populates="reservation_debate",
+        foreign_keys="DebateRoleAssignmentRun.reservation_id",
+    )
+    role_performance_samples: Mapped[List["DebateRolePerformanceSample"]] = relationship(
+        "DebateRolePerformanceSample",
         back_populates="debate",
     )
     
@@ -290,3 +305,200 @@ class DebateReservationInvitation(Base):
             f"debate_id={self.debate_id}, student_id={self.student_id}, "
             f"response_status={self.response_status})>"
         )
+
+
+class DebateRoleAssignmentRun(Base):
+    __tablename__ = "debate_role_assignment_runs"
+    __table_args__ = (
+        Index("idx_role_assignment_runs_debate_created", "debate_id", "created_at"),
+        Index("idx_role_assignment_runs_reservation_created", "reservation_id", "created_at"),
+        Index("idx_role_assignment_runs_class_source_created", "class_id", "source", "created_at"),
+        Index("idx_role_assignment_runs_created_by", "created_by", "created_at"),
+        Index("idx_role_assignment_runs_preview", "preview_token"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_run_id = Column(UUID(as_uuid=True), ForeignKey("debate_role_assignment_runs.id"), nullable=True)
+    debate_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=True)
+    reservation_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=True)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=True)
+    source = Column(String(32), nullable=False)
+    target_mode = Column(String(32), nullable=True)
+    assignment_mode = Column(String(32), nullable=False)
+    rotation_policy = Column(String(32), nullable=True)
+    model_version = Column(String(64), nullable=True)
+    prompt_pack_version = Column(String(64), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    preview_token = Column(String(64), nullable=True)
+    is_temporary = Column(Boolean, nullable=False, default=False, server_default="false")
+    summary = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
+
+    parent_run: Mapped["DebateRoleAssignmentRun"] = relationship(
+        "DebateRoleAssignmentRun",
+        remote_side=[id],
+    )
+    debate: Mapped["Debate"] = relationship(
+        "Debate",
+        back_populates="role_assignment_runs",
+        foreign_keys=[debate_id],
+    )
+    reservation_debate: Mapped["Debate"] = relationship(
+        "Debate",
+        back_populates="reservation_assignment_runs",
+        foreign_keys=[reservation_id],
+    )
+    class_: Mapped["Class"] = relationship("Class", foreign_keys=[class_id])
+    creator: Mapped["User"] = relationship("User", foreign_keys=[created_by])
+    items: Mapped[List["DebateRoleAssignmentItem"]] = relationship(
+        "DebateRoleAssignmentItem",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+    audit_logs: Mapped[List["DebateRoleAssignmentAuditLog"]] = relationship(
+        "DebateRoleAssignmentAuditLog",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+    performance_samples: Mapped[List["DebateRolePerformanceSample"]] = relationship(
+        "DebateRolePerformanceSample",
+        back_populates="assignment_run",
+    )
+
+
+class DebateRoleAssignmentItem(Base):
+    __tablename__ = "debate_role_assignment_items"
+    __table_args__ = (
+        Index("idx_role_assignment_items_run_user", "run_id", "user_id"),
+        Index("idx_role_assignment_items_run_final_role", "run_id", "final_role"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("debate_role_assignment_runs.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    assignment_source = Column(String(32), nullable=True)
+    recommended_role = Column(String(32), nullable=True)
+    assigned_role = Column(String(32), nullable=True)
+    final_role = Column(String(32), nullable=True)
+    teacher_override = Column(Boolean, nullable=False, default=False, server_default="false")
+    override_reason = Column(Text, nullable=True)
+    fit_score = Column(Float, nullable=True)
+    rule_fit_score = Column(Float, nullable=True)
+    final_score = Column(Float, nullable=True)
+    fairness_penalty = Column(Float, nullable=True)
+    repeat_penalty = Column(Float, nullable=True)
+    imbalance_penalty = Column(Float, nullable=True)
+    growth_bonus = Column(Float, nullable=True)
+    model_score = Column(Float, nullable=True)
+    growth_score = Column(Float, nullable=True)
+    confidence = Column(Float, nullable=True)
+    dimension_contribution = Column(JSON, nullable=True)
+    feature_importance = Column(JSON, nullable=True)
+    model_basis = Column(JSON, nullable=True)
+    analysis_basis = Column(String(64), nullable=True)
+    data_sources = Column(JSON, nullable=True)
+    standard_profile = Column(JSON, nullable=True)
+    historical_role_distribution = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
+
+    run: Mapped["DebateRoleAssignmentRun"] = relationship(
+        "DebateRoleAssignmentRun",
+        back_populates="items",
+    )
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    performance_samples: Mapped[List["DebateRolePerformanceSample"]] = relationship(
+        "DebateRolePerformanceSample",
+        back_populates="assignment_item",
+    )
+
+
+class DebateRoleAssignmentAuditLog(Base):
+    __tablename__ = "debate_role_assignment_audit_logs"
+    __table_args__ = (
+        Index("idx_role_assignment_audit_run_created", "run_id", "created_at"),
+        Index("idx_role_assignment_audit_debate_created", "debate_id", "created_at"),
+        Index("idx_role_assignment_audit_reservation_created", "reservation_id", "created_at"),
+        Index("idx_role_assignment_audit_user_created", "user_id", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("debate_role_assignment_runs.id"), nullable=True)
+    debate_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=True)
+    reservation_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=True)
+    operator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    from_role = Column(String(32), nullable=True)
+    to_role = Column(String(32), nullable=True)
+    reason = Column(Text, nullable=True)
+    action_type = Column(String(32), nullable=False)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
+
+    run: Mapped["DebateRoleAssignmentRun"] = relationship(
+        "DebateRoleAssignmentRun",
+        back_populates="audit_logs",
+    )
+    debate: Mapped["Debate"] = relationship("Debate", foreign_keys=[debate_id])
+    reservation_debate: Mapped["Debate"] = relationship("Debate", foreign_keys=[reservation_id])
+    operator: Mapped["User"] = relationship("User", foreign_keys=[operator_id])
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+
+
+class DebateRolePerformanceSample(Base):
+    __tablename__ = "debate_role_performance_samples"
+    __table_args__ = (
+        Index("idx_role_performance_samples_debate_user", "debate_id", "user_id"),
+        Index("idx_role_performance_samples_role_created", "role", "created_at"),
+        Index("idx_role_performance_samples_user_role", "user_id", "role"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    debate_id = Column(UUID(as_uuid=True), ForeignKey("debates.id"), nullable=False)
+    participation_id = Column(UUID(as_uuid=True), ForeignKey("debate_participations.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=True)
+    assignment_run_id = Column(UUID(as_uuid=True), ForeignKey("debate_role_assignment_runs.id"), nullable=True)
+    assignment_item_id = Column(UUID(as_uuid=True), ForeignKey("debate_role_assignment_items.id"), nullable=True)
+    sample_source = Column(String(32), nullable=False, default="completed_debate", server_default="completed_debate")
+    role = Column(String(32), nullable=False)
+    stance = Column(String(16), nullable=True)
+    assignment_mode = Column(String(32), nullable=True)
+    rotation_policy = Column(String(32), nullable=True)
+    rule_fit_score = Column(Float, nullable=True)
+    model_score = Column(Float, nullable=True)
+    growth_score = Column(Float, nullable=True)
+    final_assignment_score = Column(Float, nullable=True)
+    overall_score = Column(Float, nullable=True)
+    logic_score = Column(Float, nullable=True)
+    argument_score = Column(Float, nullable=True)
+    response_score = Column(Float, nullable=True)
+    persuasion_score = Column(Float, nullable=True)
+    teamwork_score = Column(Float, nullable=True)
+    speech_count = Column(Integer, nullable=True)
+    total_duration_sec = Column(Integer, nullable=True)
+    average_speech_length = Column(Float, nullable=True)
+    response_success_rate = Column(Float, nullable=True)
+    active_rounds = Column(Integer, nullable=True)
+    obvious_mistake_count = Column(Integer, nullable=True)
+    teacher_feedback = Column(Text, nullable=True)
+    student_reflection = Column(Text, nullable=True)
+    mentor_feedback = Column(Text, nullable=True)
+    report_summary = Column(Text, nullable=True)
+    standard_profile = Column(JSON, nullable=True)
+    historical_role_distribution = Column(JSON, nullable=True)
+    feature_vector = Column(JSON, nullable=True)
+    label_vector = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
+
+    debate: Mapped["Debate"] = relationship("Debate", back_populates="role_performance_samples")
+    participation: Mapped["DebateParticipation"] = relationship("DebateParticipation", foreign_keys=[participation_id])
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    class_: Mapped["Class"] = relationship("Class", foreign_keys=[class_id])
+    assignment_run: Mapped["DebateRoleAssignmentRun"] = relationship(
+        "DebateRoleAssignmentRun",
+        back_populates="performance_samples",
+    )
+    assignment_item: Mapped["DebateRoleAssignmentItem"] = relationship(
+        "DebateRoleAssignmentItem",
+        back_populates="performance_samples",
+    )

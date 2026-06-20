@@ -17,6 +17,7 @@ from database import Base
 # 导入所有模型以确保它们被注册到Base.metadata
 from models import (
     User, Class, Debate, DebateParticipation, DebateReservationInvitation,
+    DebateRoleAssignmentRun, DebateRoleAssignmentItem, DebateRoleAssignmentAuditLog, DebateRolePerformanceSample,
     Speech, Score, Document, Achievement,
     AbilityAssessment, ModelConfig, CozeConfig
 )

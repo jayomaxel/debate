@@ -1471,6 +1471,7 @@ class DebateRoomManager:
         """
         from models.speech import Speech
         from services.scoring_service import ScoringService
+        from services.role_assignment_learning_service import RoleAssignmentLearningService
         # from services.config_service import ConfigService
         # from utils.email_service import EmailService
         from models.debate import Debate, DebateParticipation
@@ -1527,6 +1528,7 @@ class DebateRoomManager:
             else:
                 debate.report = report_data
             db.commit()
+            RoleAssignmentLearningService.materialize_debate_samples(db, str(debate_id))
             
             logger.info(f"批量评分和报告生成完成: {debate_id}")
 

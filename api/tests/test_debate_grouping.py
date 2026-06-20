@@ -190,8 +190,11 @@ async def test_teacher_can_preview_and_override_role_assignment():
         assert response.status_code == 200
         preview = response.json()["data"]
         assert preview["assignment_source"] == "rule_model"
+        assert preview["assignment_run_id"]
         assert len(preview["results"]) == 2
         assert preview["results"][0]["assigned_role"] in {"debater_1", "debater_2"}
+        assert "model_score" in preview["results"][0]
+        assert "confidence" in preview["results"][0]
 
         swapped = [
             {"user_id": preview["results"][0]["user_id"], "role": "debater_2"},
@@ -206,6 +209,7 @@ async def test_teacher_can_preview_and_override_role_assignment():
                 "description": "测试教师覆盖 AI 推荐",
                 "student_ids": student_ids,
                 "role_assignments": swapped,
+                "assignment_run_id": preview["assignment_run_id"],
             },
             headers=headers,
         )
@@ -214,6 +218,7 @@ async def test_teacher_can_preview_and_override_role_assignment():
         assert len(created["grouping"]) == 2
         assert {item["role"] for item in created["grouping"]} == {"debater_1", "debater_2"}
         assert any(item["teacher_override"] for item in created["grouping"])
+        assert created["role_assignment_run"]["parent_run_id"] == preview["assignment_run_id"]
 
 
 @pytest.mark.asyncio
@@ -326,10 +331,157 @@ async def test_role_assignment_preview_returns_rotation_explanation():
         assert response.status_code == 200
         preview = response.json()["data"]
         assert preview["role_rotation_policy"] == "balanced_rotation"
+        assert preview["role_assignment_run"] is not None
         first_student = next(item for item in preview["results"] if item["user_id"] == student_ids[0])
         assert "historical_role_distribution" in first_student
         assert "rotation_reason" in first_student
         assert any(item["role"] == "debater_1" and item["count"] == 1 for item in first_student["historical_role_distribution"])
+
+
+@pytest.mark.asyncio
+async def test_teacher_create_debate_rejects_invalid_assignment_run_id():
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_invalid_run_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "非法运行ID教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000013",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"非法运行班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        student_ids = []
+        for i in range(2):
+            student_account = f"invalid_run_student_{suffix}_{i}"
+            response = await client.post(
+                "/api/teacher/students",
+                json={
+                    "account": student_account,
+                    "password": "Test123456",
+                    "name": f"非法运行学生{i}",
+                    "class_id": class_id,
+                    "email": f"{student_account}@test.com",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+            student_ids.append(response.json()["data"]["id"])
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "非法 assignment run 校验",
+                "duration": 30,
+                "student_ids": student_ids,
+                "assignment_run_id": str(uuid.uuid4()),
+            },
+            headers=headers,
+        )
+        assert response.status_code == 400
+        assert "assignment_run_id" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_ai_auto_assign_policy_rejects_manual_role_assignments():
+    suffix = uuid.uuid4().hex[:8]
+    teacher_account = f"teacher_auto_assign_{suffix}"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.post(
+            "/api/auth/register/teacher",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "name": "自动分配教师",
+                "email": f"{teacher_account}@test.com",
+                "phone": "13800000014",
+            },
+        )
+        assert response.status_code == 200
+
+        response = await client.post(
+            "/api/auth/login",
+            json={
+                "account": teacher_account,
+                "password": "Test123456",
+                "user_type": "teacher",
+            },
+        )
+        assert response.status_code == 200
+        teacher_token = response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {teacher_token}"}
+
+        response = await client.post(
+            "/api/teacher/classes",
+            json={"name": f"自动分配班级{suffix}"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        class_id = response.json()["data"]["id"]
+
+        student_ids = []
+        for i in range(2):
+            student_account = f"auto_assign_student_{suffix}_{i}"
+            response = await client.post(
+                "/api/teacher/students",
+                json={
+                    "account": student_account,
+                    "password": "Test123456",
+                    "name": f"自动分配学生{i}",
+                    "class_id": class_id,
+                    "email": f"{student_account}@test.com",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+            student_ids.append(response.json()["data"]["id"])
+
+        response = await client.post(
+            "/api/teacher/debates",
+            json={
+                "class_id": class_id,
+                "topic": "AI 自动分配策略校验",
+                "duration": 30,
+                "student_ids": student_ids,
+                "config_meta": {
+                    "assignment_policy": "ai_auto_assign",
+                },
+                "role_assignments": [
+                    {"user_id": student_ids[0], "role": "debater_1"},
+                    {"user_id": student_ids[1], "role": "debater_2"},
+                ],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 400
+        assert "ai_auto_assign" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
