@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 _memory_session_store: Dict[str, Dict[str, Any]] = {}
 _memory_user_session_index: Dict[str, set[str]] = {}
 _memory_session_lock = RLock()
+_memory_ws_ticket_store: Dict[str, Dict[str, Any]] = {}
+_memory_ws_ticket_lock = RLock()
+_memory_legacy_token_revocations: Dict[str, str] = {}
+_memory_legacy_token_lock = RLock()
 _session_redis_disabled = False
 _session_redis_lock = RLock()
 
@@ -187,12 +191,24 @@ def _session_ttl_seconds() -> int:
     return int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60)
 
 
+def _ws_ticket_ttl_seconds() -> int:
+    return 5 * 60
+
+
 def _session_key(session_id: str) -> str:
     return f"auth:session:{session_id}"
 
 
 def _user_sessions_key(user_id: str) -> str:
     return f"auth:user_sessions:{user_id}"
+
+
+def _ws_ticket_key(ticket: str) -> str:
+    return f"auth:ws_ticket:{ticket}"
+
+
+def _legacy_access_revocation_key(user_id: str) -> str:
+    return f"auth:legacy_access_revoked_at:{user_id}"
 
 
 def _serialize_session_payload(payload: Dict[str, Any]) -> str:
@@ -302,6 +318,51 @@ def _list_memory_user_sessions(user_id: str) -> set[str]:
     normalized_user_id = str(user_id)
     with _memory_session_lock:
         return set(_memory_user_session_index.get(normalized_user_id, set()))
+
+
+def _persist_memory_ws_ticket(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ticket = str(payload["ticket"])
+    with _memory_ws_ticket_lock:
+        _memory_ws_ticket_store[ticket] = dict(payload)
+    return dict(payload)
+
+
+def _load_memory_ws_ticket(ticket: str) -> Optional[Dict[str, Any]]:
+    normalized_ticket = str(ticket or "").strip()
+    with _memory_ws_ticket_lock:
+        payload = _memory_ws_ticket_store.get(normalized_ticket)
+        if payload is None:
+            return None
+        payload_copy = dict(payload)
+    if _is_session_expired(payload_copy):
+        revoke_ws_ticket(normalized_ticket)
+        return None
+    return payload_copy
+
+
+def _delete_memory_ws_ticket(ticket: str) -> bool:
+    normalized_ticket = str(ticket or "").strip()
+    with _memory_ws_ticket_lock:
+        return _memory_ws_ticket_store.pop(normalized_ticket, None) is not None
+
+
+def _set_memory_legacy_access_revocation(user_id: str, revoked_at: datetime) -> str:
+    normalized_user_id = str(user_id or "").strip()
+    normalized_revoked_at = revoked_at.astimezone(timezone.utc).isoformat()
+    with _memory_legacy_token_lock:
+        existing = _memory_legacy_token_revocations.get(normalized_user_id)
+        existing_dt = _coerce_datetime(existing)
+        if existing_dt is not None and existing_dt >= revoked_at:
+            return existing
+        _memory_legacy_token_revocations[normalized_user_id] = normalized_revoked_at
+    return normalized_revoked_at
+
+
+def _get_memory_legacy_access_revocation(user_id: str) -> Optional[datetime]:
+    normalized_user_id = str(user_id or "").strip()
+    with _memory_legacy_token_lock:
+        raw = _memory_legacy_token_revocations.get(normalized_user_id)
+    return _coerce_datetime(raw)
 
 
 def _get_redis_session_client():
@@ -453,13 +514,175 @@ def revoke_all_server_sessions(user_id: str) -> int:
     return revoked_count
 
 
+def persist_ws_ticket(
+    *,
+    ticket: str,
+    room_id: str,
+    user_id: str,
+    user_type: str,
+    session_id: Optional[str] = None,
+    auth_iat: Optional[Any] = None,
+    expires_at: Optional[datetime] = None,
+    single_use: bool = True,
+) -> Dict[str, Any]:
+    normalized_expires_at = expires_at or (_utcnow() + timedelta(seconds=_ws_ticket_ttl_seconds()))
+    payload = {
+        "ticket": str(ticket),
+        "room_id": str(room_id),
+        "user_id": str(user_id),
+        "user_type": str(user_type),
+        "session_id": str(session_id or "").strip() or None,
+        "auth_iat": auth_iat,
+        "single_use": bool(single_use),
+        "created_at": _utcnow().isoformat(),
+        "expires_at": normalized_expires_at.astimezone(timezone.utc).isoformat(),
+    }
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            ttl = max(1, int((normalized_expires_at.astimezone(timezone.utc) - _utcnow()).total_seconds()))
+            redis_client.setex(
+                _ws_ticket_key(str(ticket)),
+                ttl,
+                _serialize_session_payload(payload),
+            )
+            _persist_memory_ws_ticket(payload)
+            return dict(payload)
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"ws ticket persist failed: {exc}")
+    return _persist_memory_ws_ticket(payload)
+
+
+def get_ws_ticket(ticket: str) -> Optional[Dict[str, Any]]:
+    normalized_ticket = str(ticket or "").strip()
+    if not normalized_ticket:
+        return None
+
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            raw_payload = redis_client.get(_ws_ticket_key(normalized_ticket))
+            if raw_payload:
+                payload = _deserialize_session_payload(raw_payload)
+                if payload is None:
+                    return None
+                if _is_session_expired(payload):
+                    revoke_ws_ticket(normalized_ticket)
+                    return None
+                _persist_memory_ws_ticket(payload)
+                return payload
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"ws ticket read failed: {exc}")
+
+    return _load_memory_ws_ticket(normalized_ticket)
+
+
+def revoke_ws_ticket(ticket: str) -> bool:
+    normalized_ticket = str(ticket or "").strip()
+    if not normalized_ticket:
+        return False
+
+    removed = _delete_memory_ws_ticket(normalized_ticket)
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            deleted = redis_client.delete(_ws_ticket_key(normalized_ticket))
+            return removed or bool(deleted)
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"ws ticket revoke failed: {exc}")
+    return removed
+
+
+def revoke_legacy_access_tokens(
+    user_id: str,
+    *,
+    revoked_at: Optional[datetime] = None,
+) -> Optional[datetime]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return None
+
+    normalized_revoked_at = (revoked_at or _utcnow()).astimezone(timezone.utc)
+    stored_iso = _set_memory_legacy_access_revocation(
+        normalized_user_id,
+        normalized_revoked_at,
+    )
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            redis_client.set(
+                _legacy_access_revocation_key(normalized_user_id),
+                stored_iso,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"legacy token revoke failed: {exc}")
+    return _coerce_datetime(stored_iso)
+
+
+def get_legacy_access_revoked_at(user_id: str) -> Optional[datetime]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return None
+
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            raw_value = redis_client.get(_legacy_access_revocation_key(normalized_user_id))
+            revoked_at = _coerce_datetime(raw_value)
+            if revoked_at is not None:
+                _set_memory_legacy_access_revocation(normalized_user_id, revoked_at)
+                return revoked_at
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"legacy token read failed: {exc}")
+
+    return _get_memory_legacy_access_revocation(normalized_user_id)
+
+
+def is_legacy_access_token_valid(user_id: str, payload: Dict[str, Any]) -> bool:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return False
+
+    revoked_at = get_legacy_access_revoked_at(normalized_user_id)
+    if revoked_at is None:
+        return True
+
+    token_iat = _coerce_datetime(payload.get("iat"))
+    if token_iat is None:
+        return False
+    return token_iat > revoked_at
+
+
+def consume_ws_ticket(ticket: str, *, room_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    payload = get_ws_ticket(ticket)
+    if payload is None:
+        return None
+
+    if room_id is not None and str(payload.get("room_id")) != str(room_id):
+        return None
+
+    user_id = str(payload.get("user_id") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+    if session_id:
+        if not is_server_session_active(session_id, user_id=user_id):
+            revoke_ws_ticket(ticket)
+            return None
+    elif not is_legacy_access_token_valid(user_id, payload):
+        revoke_ws_ticket(ticket)
+        return None
+
+    if bool(payload.get("single_use", True)):
+        revoke_ws_ticket(ticket)
+    return payload
+
+
 def is_token_session_valid(payload: Dict[str, Any]) -> bool:
     session_id = str(payload.get("session_id") or "").strip()
     user_id = str(payload.get("sub") or payload.get("user_id") or "").strip()
     if not user_id:
         return False
     if not session_id:
-        return True
+        return is_legacy_access_token_valid(user_id, payload)
     return is_server_session_active(session_id, user_id=user_id)
 
 
@@ -498,3 +721,18 @@ def build_auth_session_contract(
         "requires_reauth": bool(requires_reauth),
     }
 
+
+def build_ws_ticket_contract(
+    *,
+    room_id: str,
+    ticket: str,
+    expires_at: datetime,
+    connection_url: str,
+) -> Dict[str, Any]:
+    """Build the frozen websocket ticket payload."""
+    return {
+        "ticket": ticket,
+        "room_id": room_id,
+        "expires_at": expires_at,
+        "connection_url": connection_url,
+    }

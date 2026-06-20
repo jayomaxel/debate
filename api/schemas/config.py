@@ -104,6 +104,25 @@ class AuthSessionApiResponse(BaseModel):
     data: AuthSessionRuntimeResponse
 
 
+class WsTicketContract(BaseModel):
+    """Frozen short-lived WebSocket ticket contract."""
+
+    ticket: str
+    room_id: str
+    expires_at: datetime
+    connection_url: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "ticket": "ws_5caafe511a3340a397880394ac515cb1",
+                "room_id": "room_demo_001",
+                "expires_at": "2026-06-20T08:30:00Z",
+                "connection_url": "/ws/room_demo_001?ticket=ws_5caafe511a3340a397880394ac515cb1",
+            }
+        }
+
+
 class ModelConfigResponse(BaseModel):
     """Model configuration response schema"""
     id: str

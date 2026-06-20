@@ -1,7 +1,7 @@
 """
 用户认证服务
 """
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import uuid
 
@@ -15,12 +15,15 @@ from services.avatar_service import AvatarService
 from services.profile_service import ProfileService
 from utils.security import (
     build_auth_session_contract,
+    build_ws_ticket_contract,
     create_access_token,
     create_refresh_token,
     hash_password,
     is_server_session_active,
     normalize_contract_role,
+    persist_ws_ticket,
     persist_server_session,
+    revoke_legacy_access_tokens,
     revoke_all_server_sessions,
     revoke_server_session,
     verify_password,
@@ -156,6 +159,46 @@ class AuthService:
             session_id=session_id,
         )
 
+    @staticmethod
+    def build_ws_ticket_contract_preview(room_id: str) -> Dict[str, Any]:
+        normalized_room_id = str(room_id or "room_demo").strip() or "room_demo"
+        ticket = f"ws_{uuid.uuid4().hex}"
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        return build_ws_ticket_contract(
+            room_id=normalized_room_id,
+            ticket=ticket,
+            expires_at=expires_at,
+            connection_url=f"/ws/{normalized_room_id}?ticket={ticket}",
+        )
+
+    @staticmethod
+    def issue_ws_ticket(
+        *,
+        user: User,
+        room_id: str,
+        session_id: Optional[str] = None,
+        auth_iat: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        normalized_room_id = str(room_id or "").strip() or "room_demo"
+        ticket = f"ws_{uuid.uuid4().hex}"
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        persist_ws_ticket(
+            ticket=ticket,
+            room_id=normalized_room_id,
+            user_id=str(user.id),
+            user_type=str(user.user_type),
+            session_id=session_id,
+            auth_iat=auth_iat,
+            expires_at=expires_at,
+            single_use=True,
+        )
+        return build_ws_ticket_contract(
+            room_id=normalized_room_id,
+            ticket=ticket,
+            expires_at=expires_at,
+            connection_url=f"/ws/{normalized_room_id}?ticket={ticket}",
+        )
+    
     @staticmethod
     def register_teacher(
         db: Session,
@@ -561,18 +604,32 @@ class AuthService:
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized_session_id = str(session_id or "").strip()
-        revoked = revoke_server_session(normalized_session_id) if normalized_session_id else False
+        if normalized_session_id:
+            revoked = revoke_server_session(normalized_session_id)
+            return {
+                "revoked": revoked,
+                "revoked_session_count": 1 if revoked else 0,
+            }
+
+        legacy_revoked_at = revoke_legacy_access_tokens(str(user_id or "").strip())
         return {
-            "revoked": revoked,
-            "revoked_session_count": 1 if revoked else 0,
+            "revoked": legacy_revoked_at is not None,
+            "revoked_session_count": 1 if legacy_revoked_at is not None else 0,
+            "legacy_token_revoked_at": (
+                legacy_revoked_at.isoformat() if legacy_revoked_at is not None else None
+            ),
         }
 
     @staticmethod
     def logout_all_sessions(user_id: str) -> Dict[str, Any]:
         revoked_count = revoke_all_server_sessions(str(user_id))
+        legacy_revoked_at = revoke_legacy_access_tokens(str(user_id))
         return {
-            "revoked": revoked_count > 0,
+            "revoked": revoked_count > 0 or legacy_revoked_at is not None,
             "revoked_session_count": revoked_count,
+            "legacy_token_revoked_at": (
+                legacy_revoked_at.isoformat() if legacy_revoked_at is not None else None
+            ),
         }
     
     @staticmethod

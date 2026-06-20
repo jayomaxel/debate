@@ -85,7 +85,9 @@ async def verify_token_middleware(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="账户已被删除"
             )
+
         setattr(user, "_auth_session_id", payload.get("session_id"))
+        setattr(user, "_auth_token_payload", payload)
         
         return user
         

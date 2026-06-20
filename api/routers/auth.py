@@ -11,7 +11,7 @@ from models.user import User
 from services.auth_service import AuthService
 from services.avatar_service import AvatarService
 from middleware.auth_middleware import verify_token_middleware
-from schemas.config import AuthSessionApiResponse, AuthSessionContract
+from schemas.config import AuthSessionApiResponse, AuthSessionContract, WsTicketContract
 from schemas.auth import SelectDefaultAvatarRequest
 
 router = APIRouter(prefix="/api/auth", tags=["璁よ瘉"])
@@ -270,6 +270,33 @@ async def logout_all(
 )
 async def get_auth_session_contract_mock(user_type: str = "teacher"):
     return AuthService.build_auth_session_contract_preview(user_type=user_type)
+
+
+@router.get(
+    "/ws-ticket/mock",
+    summary="获取 WsTicketContract mock",
+    response_model=WsTicketContract,
+)
+async def get_ws_ticket_contract_mock(room_id: str = "room_demo_001"):
+    return AuthService.build_ws_ticket_contract_preview(room_id=room_id)
+
+
+@router.get(
+    "/ws-ticket",
+    summary="获取真实 WebSocket ticket",
+    response_model=WsTicketContract,
+)
+async def issue_ws_ticket(
+    room_id: str,
+    current_user: User = Depends(verify_token_middleware),
+):
+    token_payload = getattr(current_user, "_auth_token_payload", {}) or {}
+    return AuthService.issue_ws_ticket(
+        user=current_user,
+        room_id=room_id,
+        session_id=getattr(current_user, "_auth_session_id", None),
+        auth_iat=token_payload.get("iat"),
+    )
 
 @router.post("/change-password", summary="修改密码")
 async def change_password(

@@ -13,7 +13,7 @@ if ROOT_STR not in sys.path:
 from database import get_db
 from routers import auth
 from services.auth_service import AuthService
-from utils.security import create_refresh_token
+from utils.security import create_access_token, create_refresh_token
 
 
 @pytest.fixture
@@ -292,3 +292,31 @@ def test_refresh_token_without_session_id_is_rejected(auth_client, db_session):
 
     assert refresh_response.status_code == 401
 
+
+def test_logout_legacy_access_token_revokes_future_access(auth_client, db_session):
+    result = AuthService.register_teacher(
+        db=db_session,
+        account="teacher_legacy_logout",
+        email="teacher_legacy_logout@test.com",
+        phone="13800138016",
+        password="Teacher123!",
+        name="Legacy Logout Teacher",
+    )
+    legacy_access_token = create_access_token(
+        {
+            "user_id": result["id"],
+            "account": "teacher_legacy_logout",
+            "name": "Legacy Logout Teacher",
+            "email": "teacher_legacy_logout@test.com",
+            "user_type": "teacher",
+        }
+    )
+    headers = {"Authorization": f"Bearer {legacy_access_token}"}
+
+    assert auth_client.get("/api/auth/profile", headers=headers).status_code == 200
+
+    logout_response = auth_client.post("/api/auth/logout", headers=headers)
+    assert logout_response.status_code == 200
+    assert logout_response.json()["data"]["revoked"] is True
+
+    assert auth_client.get("/api/auth/profile", headers=headers).status_code == 401

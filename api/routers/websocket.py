@@ -3,7 +3,7 @@ WebSocket路由
 处理实时通信
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 import json
 from datetime import datetime
@@ -17,7 +17,7 @@ from database import get_db
 from utils.websocket_manager import websocket_manager
 from services.room_manager import room_manager
 from services.flow_controller import flow_controller
-from utils.security import get_user_from_token
+from utils.security import consume_ws_ticket
 from utils.voice_processor import voice_processor
 from utils.audio_duration import (
     estimate_duration_from_text,
@@ -238,11 +238,13 @@ async def _notify_committed_speech(
     )
 
 
+@router.websocket("/{room_id}")
 @router.websocket("/debate/{room_id}")
 async def websocket_debate_endpoint(
     websocket: WebSocket,
     room_id: str,
-    token: str = Query(...),
+    ticket: str | None = Query(None),
+    token: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -251,21 +253,28 @@ async def websocket_debate_endpoint(
     Args:
         websocket: WebSocket连接
         room_id: 房间ID
-        token: JWT令牌（通过查询参数传递）
+        ticket: WebSocket短时票据（通过查询参数传递）
         db: 数据库会话
     """
     user = None
     user_id = None
 
     try:
-        token_payload = get_user_from_token(token)
-        if not token_payload:
-            await websocket.close(code=1008, reason="Invalid token")
+        if not ticket:
+            reason = "WebSocket ticket required"
+            if token:
+                reason = "Access token query is no longer supported"
+            await websocket.close(code=1008, reason=reason)
             return
 
-        user_id = str(token_payload.get("user_id"))
+        ticket_payload = consume_ws_ticket(ticket, room_id=room_id)
+        if not ticket_payload:
+            await websocket.close(code=1008, reason="Invalid or expired ticket")
+            return
+
+        user_id = str(ticket_payload.get("user_id"))
         if not user_id:
-            await websocket.close(code=1008, reason="Invalid token payload")
+            await websocket.close(code=1008, reason="Invalid ticket payload")
             return
 
         try:
