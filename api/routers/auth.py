@@ -8,12 +8,50 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from database import get_db
 from models.user import User
+from services.audit_service import AuditService
 from services.auth_service import AuthService
 from services.avatar_service import AvatarService
 from middleware.auth_middleware import verify_token_middleware
+from schemas.config import (
+    AuditLogEventContract,
+    AuthSessionApiResponse,
+    AuthSessionContract,
+    UploadGuardErrorContract,
+    WsTicketContract,
+)
 from schemas.auth import SelectDefaultAvatarRequest
+from utils.security import (
+    build_audit_log_event_contract,
+    build_upload_guard_error_contract,
+    normalize_contract_role,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
+
+
+def _record_auth_audit(
+    *,
+    actor_id: str,
+    actor_role: str,
+    target_type: str,
+    target_id: str,
+    result: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    AuditService.record_event(
+        event_type="auth",
+        actor_id=actor_id,
+        actor_role=actor_role,
+        target_type=target_type,
+        target_id=target_id,
+        result=result,
+        metadata=metadata or {},
+    )
+
+
+def _normalize_requested_actor_role(user_type: str) -> str:
+    normalized = normalize_contract_role(user_type)
+    return normalized if normalized in {"student", "teacher", "admin"} else "system"
 
 
 # Pydantic模型
@@ -42,6 +80,10 @@ class LoginRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+
+class WsTicketRequest(BaseModel):
+    room_id: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -182,7 +224,11 @@ async def register_student(
         )
 
 
-@router.post("/login", summary="用户登录")
+@router.post(
+    "/login",
+    summary="用户登录",
+    response_model=AuthSessionApiResponse,
+)
 async def login(
     request: LoginRequest,
     db: Session = Depends(get_db)
@@ -201,19 +247,39 @@ async def login(
             password=request.password,
             user_type=request.user_type
         )
+        _record_auth_audit(
+            actor_id=str(result["user"]["id"]),
+            actor_role=str(result["user"]["user_type"]),
+            target_type="session",
+            target_id=str(result["session_id"]),
+            result="success",
+            metadata={"action": "login"},
+        )
         return {
             "code": 200,
             "message": "登录成功",
             "data": result
         }
     except ValueError as e:
+        _record_auth_audit(
+            actor_id=(request.account or "").strip() or "anonymous",
+            actor_role=_normalize_requested_actor_role(request.user_type),
+            target_type="session",
+            target_id="login",
+            result="denied",
+            metadata={"action": "login", "reason": str(e)},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
         )
 
 
-@router.post("/refresh", summary="刷新令牌")
+@router.post(
+    "/refresh",
+    summary="刷新令牌",
+    response_model=AuthSessionApiResponse,
+)
 async def refresh_token(
     request: RefreshTokenRequest,
     db: Session = Depends(get_db)
@@ -228,16 +294,177 @@ async def refresh_token(
             db=db,
             refresh_token=request.refresh_token
         )
+        _record_auth_audit(
+            actor_id=str(result["user"]["id"]),
+            actor_role=str(result["user"]["user_type"]),
+            target_type="session",
+            target_id=str(result["session_id"]),
+            result="success",
+            metadata={"action": "refresh"},
+        )
         return {
             "code": 200,
             "message": "刷新成功",
             "data": result
         }
     except ValueError as e:
+        _record_auth_audit(
+            actor_id="unknown",
+            actor_role="system",
+            target_type="session",
+            target_id="refresh",
+            result="denied",
+            metadata={"action": "refresh", "reason": str(e)},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
         )
+
+
+@router.post("/logout", summary="当前设备登出")
+async def logout(
+    current_user: User = Depends(verify_token_middleware),
+):
+    """
+    吊销当前访问令牌所属会话。
+    """
+    session_id = getattr(current_user, "_auth_session_id", None)
+    result = AuthService.logout_session(
+        session_id,
+        user_id=str(current_user.id),
+    )
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="session",
+        target_id=str(session_id or current_user.id),
+        result="success",
+        metadata={"action": "logout", "revoked_session_count": result.get("revoked_session_count", 0)},
+    )
+    return {
+        "code": 200,
+        "message": "登出成功",
+        "data": result,
+    }
+
+
+@router.post("/logout-all", summary="全设备登出")
+async def logout_all(
+    current_user: User = Depends(verify_token_middleware),
+):
+    """
+    吊销当前用户的全部服务端会话。
+    """
+    result = AuthService.logout_all_sessions(str(current_user.id))
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="user_sessions",
+        target_id=str(current_user.id),
+        result="success",
+        metadata={"action": "logout_all", "revoked_session_count": result.get("revoked_session_count", 0)},
+    )
+    return {
+        "code": 200,
+        "message": "已退出全部设备",
+        "data": result,
+    }
+
+
+@router.get(
+    "/contracts/session/mock",
+    summary="获取 AuthSessionContract mock",
+    response_model=AuthSessionContract,
+)
+async def get_auth_session_contract_mock(user_type: str = "teacher"):
+    """
+    提供给 D 的冻结登录态示例，不依赖真实会话改造。
+    """
+    return AuthService.build_auth_session_contract_preview(user_type=user_type)
+
+
+@router.get(
+    "/ws-ticket/mock",
+    summary="获取 WsTicketContract mock",
+    response_model=WsTicketContract,
+)
+async def get_ws_ticket_contract_mock(room_id: str = "room_demo_001"):
+    """
+    提供给 D 的 WebSocket ticket 示例，不暴露 access token query。
+    """
+    return AuthService.build_ws_ticket_contract_preview(room_id=room_id)
+
+
+@router.get(
+    "/ws-ticket",
+    summary="获取真实 WebSocket ticket",
+    response_model=WsTicketContract,
+)
+async def issue_ws_ticket(
+    room_id: str,
+    current_user: User = Depends(verify_token_middleware),
+):
+    """
+    使用当前登录态签发短时单次可用的 WebSocket ticket。
+    """
+    token_payload = getattr(current_user, "_auth_token_payload", {}) or {}
+    ticket_payload = AuthService.issue_ws_ticket(
+        user=current_user,
+        room_id=room_id,
+        session_id=getattr(current_user, "_auth_session_id", None),
+        auth_iat=token_payload.get("iat"),
+    )
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="room",
+        target_id=str(room_id),
+        result="success",
+        metadata={
+            "action": "issue_ws_ticket",
+            "session_id": getattr(current_user, "_auth_session_id", None),
+            "ticket": ticket_payload.get("ticket"),
+        },
+    )
+    return ticket_payload
+
+
+@router.get(
+    "/contracts/upload-error/mock",
+    summary="获取 UploadGuardErrorContract mock",
+    response_model=UploadGuardErrorContract,
+)
+async def get_upload_guard_error_contract_mock():
+    """
+    提供统一上传错误结构示例，供前端错误映射先接入。
+    """
+    return build_upload_guard_error_contract(
+        code="mime_invalid",
+        message="Only PDF and DOCX uploads are allowed for this object.",
+        request_id="req_contract_upload_demo",
+    )
+
+
+@router.get(
+    "/contracts/audit-event/mock",
+    summary="获取 AuditLogEventContract mock",
+    response_model=AuditLogEventContract,
+)
+async def get_audit_log_event_contract_mock():
+    """
+    提供统一审计事件结构示例，供后续联调对齐字段。
+    """
+    return build_audit_log_event_contract(
+        event_type="auth",
+        actor_id="teacher_demo_id",
+        actor_role="teacher",
+        target_type="session",
+        target_id="session_demo_id",
+        result="success",
+        metadata={"action": "login"},
+        event_id="audit_contract_demo",
+    )
 
 
 @router.post("/change-password", summary="修改密码")
