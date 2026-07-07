@@ -15,6 +15,7 @@ from sqlalchemy import text
 from config import settings
 from database import get_redis, init_db, init_engine, init_redis
 from logging_config import get_logger, setup_logging
+from middleware.rate_limit import RateLimitMiddleware
 from middleware.upload_guard import UploadGuardMiddleware
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
 from services.kb_seed_service import KBSeedService
@@ -39,6 +40,7 @@ if settings.IS_PRODUCTION and "*" in _cors_origins:
     )
 
 app.add_middleware(UploadGuardMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
