@@ -15,6 +15,7 @@ from sqlalchemy import text
 from config import settings
 from database import get_redis, init_db, init_engine, init_redis
 from logging_config import get_logger, setup_logging
+from middleware.upload_guard import UploadGuardMiddleware
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
 from services.kb_seed_service import KBSeedService
 from services.kb_vector_schema_service import KBVectorSchemaService
@@ -37,6 +38,7 @@ if settings.IS_PRODUCTION and "*" in _cors_origins:
         "生产环境 CORS allow_origins 包含 '*'，建议显式配置 ALLOWED_ORIGINS 环境变量"
     )
 
+app.add_middleware(UploadGuardMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
