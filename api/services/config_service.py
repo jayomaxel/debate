@@ -19,6 +19,7 @@ from models.config import EmailConfig as EmailConfigModel
 from models.config import ModelConfig as ModelConfigModel
 from models.config import TtsConfig as TtsConfigModel
 from models.config import VectorConfig as VectorConfigModel
+from utils.security import build_masked_config_response, mask_secret
 
 logger = get_logger(__name__)
 ConfigModelT = TypeVar("ConfigModelT")
@@ -42,6 +43,53 @@ class ConfigService:
             db: 数据库会话
         """
         self.db = db
+
+    @staticmethod
+    def build_masked_config_contract_preview(
+        secret: Optional[str],
+        *,
+        updated_by: str = "system",
+        updated_at=None,
+    ) -> dict:
+        """Return the frozen masked-secret contract shape used by package C."""
+        return build_masked_config_response(
+            secret=secret,
+            updated_by=updated_by,
+            updated_at=updated_at,
+        )
+
+    @classmethod
+    def build_masked_config_contract_examples(cls) -> dict[str, dict]:
+        """Provide stable examples for D before the real config endpoints are refactored."""
+        return {
+            "model": cls.build_masked_config_contract_preview("sk-demo-openai-1234"),
+            "coze": cls.build_masked_config_contract_preview("pat-demo-coze-1234"),
+            "asr": cls.build_masked_config_contract_preview("asr-demo-key-1234"),
+            "tts": cls.build_masked_config_contract_preview("tts-demo-key-1234"),
+            "vector": cls.build_masked_config_contract_preview("vec-demo-key-1234"),
+            "email": cls.build_masked_config_contract_preview("smtp-demo-password"),
+        }
+
+    @staticmethod
+    def mask_secret_value(secret: Optional[str]) -> str:
+        return mask_secret(secret)
+
+    @staticmethod
+    def resolve_secret_update(
+        existing_secret: Optional[str],
+        submitted_secret: Optional[str],
+    ) -> str:
+        if submitted_secret is None:
+            return str(existing_secret or "")
+
+        normalized_submitted = str(submitted_secret).strip()
+        if not normalized_submitted:
+            return ""
+
+        if normalized_submitted == mask_secret(existing_secret):
+            return str(existing_secret or "")
+
+        return str(submitted_secret)
 
     @staticmethod
     def _clone_cache_value(value):
@@ -305,7 +353,7 @@ class ConfigService:
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
                 if api_key is not None:
-                    config.api_key = api_key
+                    config.api_key = self.resolve_secret_update(config.api_key, api_key)
                 if temperature is not None:
                     config.temperature = temperature
                 if max_tokens is not None:
@@ -468,7 +516,7 @@ class ConfigService:
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
                 if api_key is not None:
-                    config.api_key = api_key
+                    config.api_key = self.resolve_secret_update(config.api_key, api_key)
                 if parameters is not None:
                     normalized_parameters = (
                         dict(parameters) if isinstance(parameters, dict) else {}
@@ -601,7 +649,7 @@ class ConfigService:
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
                 if api_key is not None:
-                    config.api_key = api_key
+                    config.api_key = self.resolve_secret_update(config.api_key, api_key)
                 if parameters is not None:
                     # 保存前统一规整参数，避免脏输入直接影响 AI 发言 TTS。
                     config.parameters = normalized_parameters
@@ -714,7 +762,10 @@ class ConfigService:
                 if mentor_bot_id is not None:
                     config.mentor_bot_id = mentor_bot_id
                 if api_token is not None:
-                    config.api_token = api_token
+                    config.api_token = self.resolve_secret_update(
+                        config.api_token,
+                        api_token,
+                    )
                 if parameters is not None:
                     config.parameters = self._normalize_coze_parameters(
                         parameters,
@@ -816,7 +867,7 @@ class ConfigService:
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
                 if api_key is not None:
-                    config.api_key = api_key
+                    config.api_key = self.resolve_secret_update(config.api_key, api_key)
                 if embedding_dimension is not None:
                     config.embedding_dimension = embedding_dimension
                 if parameters is not None:
@@ -916,7 +967,10 @@ class ConfigService:
                 if smtp_user is not None:
                     config.smtp_user = smtp_user
                 if smtp_password is not None:
-                    config.smtp_password = smtp_password
+                    config.smtp_password = self.resolve_secret_update(
+                        config.smtp_password,
+                        smtp_password,
+                    )
                 if from_email is not None:
                     config.from_email = from_email
                 if auto_send_enabled is not None:

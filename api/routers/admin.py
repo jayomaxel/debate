@@ -5,12 +5,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import List, Optional
 import uuid
 
 from database import get_db
 from models.class_model import Class
 from models.user import User
+from services.audit_service import AuditService
 from services.avatar_service import AvatarService
 from services.class_service import ClassService
 from services.config_service import ConfigService
@@ -18,6 +19,7 @@ from services.auth_service import AuthService
 from middleware.auth_middleware import require_role
 from logging_config import get_logger
 from schemas.config import (
+    AuditLogEventContract,
     ModelConfigResponse,
     ModelConfigUpdate,
     CozeConfigResponse,
@@ -30,6 +32,7 @@ from schemas.config import (
     VectorConfigUpdate,
     EmailConfigResponse,
     EmailConfigUpdate,
+    MaskedConfigResponse,
 )
 from schemas.auth import PasswordChangeRequest
 from utils.email_service import EmailService
@@ -233,6 +236,186 @@ async def delete_class(
 # ==================== 配置管理端点 ====================
 
 @router.get(
+    "/config/contracts/masked/mock",
+    summary="获取 MaskedConfigResponse mock",
+    response_model=dict[str, MaskedConfigResponse],
+)
+async def get_masked_config_contract_mock():
+    """
+    提供给 D 的配置脱敏合同示例，后续真实接口改造时保持同一结构。
+    """
+    return ConfigService.build_masked_config_contract_examples()
+
+
+def _build_secret_contract(
+    secret: Optional[str],
+    *,
+    updated_at,
+    updated_by: str,
+) -> dict:
+    return ConfigService.build_masked_config_contract_preview(
+        secret,
+        updated_at=updated_at,
+        updated_by=updated_by,
+    )
+
+
+def _record_config_audit(
+    *,
+    current_user: User,
+    target_type: str,
+    target_id: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    AuditService.record_event(
+        event_type="config",
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type=target_type,
+        target_id=target_id,
+        result="success",
+        metadata=metadata or {},
+    )
+
+
+def _record_admin_action_audit(
+    *,
+    current_user: User,
+    target_type: str,
+    target_id: str,
+    result: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    AuditService.record_event(
+        event_type="admin_action",
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type=target_type,
+        target_id=target_id,
+        result=result,
+        metadata=metadata or {},
+    )
+
+
+def _build_model_config_response(config, *, updated_by: str) -> ModelConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.api_key,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return ModelConfigResponse(
+        id=str(config.id),
+        model_name=config.model_name,
+        api_endpoint=config.api_endpoint,
+        api_key=secret_contract["masked"],
+        secret=secret_contract,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        parameters=config.parameters,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _build_asr_config_response(config, *, updated_by: str) -> AsrConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.api_key,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return AsrConfigResponse(
+        id=str(config.id),
+        model_name=config.model_name,
+        api_endpoint=config.api_endpoint,
+        api_key=secret_contract["masked"],
+        secret=secret_contract,
+        parameters=config.parameters,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _build_tts_config_response(config, *, updated_by: str) -> TtsConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.api_key,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return TtsConfigResponse(
+        id=str(config.id),
+        model_name=config.model_name,
+        api_endpoint=config.api_endpoint,
+        api_key=secret_contract["masked"],
+        secret=secret_contract,
+        parameters=config.parameters,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _build_coze_config_response(config, *, updated_by: str) -> CozeConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.api_token,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return CozeConfigResponse(
+        id=str(config.id),
+        debater_1_bot_id=config.debater_1_bot_id,
+        debater_2_bot_id=config.debater_2_bot_id,
+        debater_3_bot_id=config.debater_3_bot_id,
+        debater_4_bot_id=config.debater_4_bot_id,
+        judge_bot_id=config.judge_bot_id,
+        mentor_bot_id=config.mentor_bot_id,
+        api_token=secret_contract["masked"],
+        secret=secret_contract,
+        parameters=config.parameters,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _build_vector_config_response(config, *, updated_by: str) -> VectorConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.api_key,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return VectorConfigResponse(
+        id=str(config.id),
+        model_name=config.model_name,
+        api_endpoint=config.api_endpoint,
+        api_key=secret_contract["masked"],
+        secret=secret_contract,
+        embedding_dimension=config.embedding_dimension,
+        parameters=config.parameters,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _build_email_config_response(config, *, updated_by: str) -> EmailConfigResponse:
+    secret_contract = _build_secret_contract(
+        config.smtp_password,
+        updated_at=config.updated_at,
+        updated_by=updated_by,
+    )
+    return EmailConfigResponse(
+        id=str(config.id),
+        smtp_host=config.smtp_host,
+        smtp_port=config.smtp_port,
+        smtp_user=config.smtp_user,
+        smtp_password_configured=secret_contract["configured"],
+        smtp_password_masked=secret_contract["masked"] or None,
+        secret=secret_contract,
+        from_email=config.from_email,
+        auto_send_enabled=config.auto_send_enabled,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+@router.get(
     "/config/models",
     summary="获取模型配置",
     dependencies=[Depends(require_role(["administrator"]))]
@@ -255,19 +438,8 @@ async def get_model_config(
     try:
         config_service = ConfigService(db)
         config = await config_service.get_model_config()
-        
-        # Convert to response format
-        response_data = ModelConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
-        )
+
+        response_data = _build_model_config_response(config, updated_by="system")
         return {
             "code": 200,
             "message": "获取成功",
@@ -319,18 +491,16 @@ async def update_model_config(
             max_tokens=request.max_tokens,
             parameters=request.parameters
         )
-        
-        # Convert to response format
-        response_data = ModelConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
+
+        response_data = _build_model_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="model_config",
+            target_id=str(config.id),
+            metadata={"action": "update_model_config"},
         )
         return {
             "code": 200,
@@ -363,15 +533,7 @@ async def get_asr_config(
         config_service = ConfigService(db)
         config = await config_service.get_asr_config()
 
-        response_data = AsrConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
-        )
+        response_data = _build_asr_config_response(config, updated_by="system")
         return {"code": 200, "message": "获取成功", "data": response_data}
     except Exception as e:
         logger.error(f"Failed to get ASR config: {e}", exc_info=True)
@@ -405,14 +567,15 @@ async def update_asr_config(
             parameters=request.parameters,
         )
 
-        response_data = AsrConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
+        response_data = _build_asr_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="asr_config",
+            target_id=str(config.id),
+            metadata={"action": "update_asr_config"},
         )
         return {"code": 200, "message": "更新成功", "data": response_data}
     except Exception as e:
@@ -436,15 +599,7 @@ async def get_tts_config(
         config_service = ConfigService(db)
         config = await config_service.get_tts_config()
 
-        response_data = TtsConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
-        )
+        response_data = _build_tts_config_response(config, updated_by="system")
         return {"code": 200, "message": "获取成功", "data": response_data}
     except Exception as e:
         logger.error(f"Failed to get TTS config: {e}", exc_info=True)
@@ -478,14 +633,15 @@ async def update_tts_config(
             parameters=request.parameters,
         )
 
-        response_data = TtsConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
+        response_data = _build_tts_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="tts_config",
+            target_id=str(config.id),
+            metadata={"action": "update_tts_config"},
         )
         return {"code": 200, "message": "更新成功", "data": response_data}
     except Exception as e:
@@ -516,21 +672,8 @@ async def get_coze_config(
     try:
         config_service = ConfigService(db)
         config = await config_service.get_coze_config()
-        
-        # Convert to response format
-        response_data = CozeConfigResponse(
-            id=str(config.id),
-            debater_1_bot_id=config.debater_1_bot_id,
-            debater_2_bot_id=config.debater_2_bot_id,
-            debater_3_bot_id=config.debater_3_bot_id,
-            debater_4_bot_id=config.debater_4_bot_id,
-            judge_bot_id=config.judge_bot_id,
-            mentor_bot_id=config.mentor_bot_id,
-            api_token=config.api_token,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
-        )
+
+        response_data = _build_coze_config_response(config, updated_by="system")
         return {
             "code": 200,
             "message": "获取成功",
@@ -581,20 +724,16 @@ async def update_coze_config(
             api_token=request.api_token,
             parameters=request.parameters
         )
-        
-        # Convert to response format
-        response_data = CozeConfigResponse(
-            id=str(config.id),
-            debater_1_bot_id=config.debater_1_bot_id,
-            debater_2_bot_id=config.debater_2_bot_id,
-            debater_3_bot_id=config.debater_3_bot_id,
-            debater_4_bot_id=config.debater_4_bot_id,
-            judge_bot_id=config.judge_bot_id,
-            mentor_bot_id=config.mentor_bot_id,
-            api_token=config.api_token,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
+
+        response_data = _build_coze_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="coze_config",
+            target_id=str(config.id),
+            metadata={"action": "update_coze_config"},
         )
         return {
             "code": 200,
@@ -636,17 +775,8 @@ async def get_vector_config(
     try:
         config_service = ConfigService(db)
         config = await config_service.get_vector_config()
-        
-        response_data = VectorConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            embedding_dimension=config.embedding_dimension,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
-        )
+
+        response_data = _build_vector_config_response(config, updated_by="system")
         return {
             "code": 200,
             "message": "获取成功",
@@ -696,16 +826,16 @@ async def update_vector_config(
             embedding_dimension=request.embedding_dimension,
             parameters=request.parameters
         )
-        
-        response_data = VectorConfigResponse(
-            id=str(config.id),
-            model_name=config.model_name,
-            api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
-            embedding_dimension=config.embedding_dimension,
-            parameters=config.parameters,
-            created_at=config.created_at,
-            updated_at=config.updated_at
+
+        response_data = _build_vector_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="vector_config",
+            target_id=str(config.id),
+            metadata={"action": "update_vector_config"},
         )
         return {
             "code": 200,
@@ -725,15 +855,6 @@ async def update_vector_config(
         )
 
 
-def _mask_password(password: Optional[str]) -> tuple[bool, Optional[str]]:
-    """返回密码是否已配置，以及脱敏后的掩码字符串。"""
-    if not password:
-        return False, None
-    if len(password) <= 8:
-        return True, "***"
-    return True, f"{password[:4]}***{password[-4:]}"
-
-
 @router.get(
     "/config/email",
     summary="获取邮件配置",
@@ -747,19 +868,7 @@ async def get_email_config(
         config_service = ConfigService(db)
         config = await config_service.get_email_config()
 
-        configured, masked = _mask_password(config.smtp_password)
-        response_data = EmailConfigResponse(
-            id=str(config.id),
-            smtp_host=config.smtp_host,
-            smtp_port=config.smtp_port,
-            smtp_user=config.smtp_user,
-            smtp_password_configured=configured,
-            smtp_password_masked=masked,
-            from_email=config.from_email,
-            auto_send_enabled=config.auto_send_enabled,
-            created_at=config.created_at,
-            updated_at=config.updated_at
-        )
+        response_data = _build_email_config_response(config, updated_by="system")
         return {"code": 200, "message": "获取成功", "data": response_data}
     except Exception as e:
         logger.error(f"Failed to get email config: {e}", exc_info=True)
@@ -794,19 +903,16 @@ async def update_email_config(
             from_email=request.from_email,
             auto_send_enabled=request.auto_send_enabled
         )
-        
-        configured, masked = _mask_password(config.smtp_password)
-        response_data = EmailConfigResponse(
-            id=str(config.id),
-            smtp_host=config.smtp_host,
-            smtp_port=config.smtp_port,
-            smtp_user=config.smtp_user,
-            smtp_password_configured=configured,
-            smtp_password_masked=masked,
-            from_email=config.from_email,
-            auto_send_enabled=config.auto_send_enabled,
-            created_at=config.created_at,
-            updated_at=config.updated_at
+
+        response_data = _build_email_config_response(
+            config,
+            updated_by=current_user.account,
+        )
+        _record_config_audit(
+            current_user=current_user,
+            target_type="email_config",
+            target_id=str(config.id),
+            metadata={"action": "update_email_config"},
         )
         return {"code": 200, "message": "更新成功", "data": response_data}
     except Exception as e:
@@ -838,6 +944,33 @@ async def test_email_connection(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="测试邮件连接失败"
         )
+
+
+@router.get(
+    "/audit/events",
+    summary="获取审计事件",
+    dependencies=[Depends(require_role(["administrator"]))]
+)
+async def list_audit_events(
+    limit: int = 50,
+    event_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    result: Optional[str] = None,
+    target_type: Optional[str] = None,
+    current_user: User = Depends(require_role(["administrator"])),
+):
+    events = AuditService.list_events(
+        limit=limit,
+        event_type=event_type,
+        actor_id=actor_id,
+        result=result,
+        target_type=target_type,
+    )
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": [AuditLogEventContract(**event) for event in events],
+    }
 
 
 # ==================== 用户管理端点 ====================
@@ -1239,6 +1372,13 @@ async def change_admin_password(
         )
         
         if success:
+            _record_admin_action_audit(
+                current_user=current_user,
+                target_type="admin_password",
+                target_id=str(current_user.id),
+                result="success",
+                metadata={"action": "change_admin_password"},
+            )
             return {
                 "code": 200,
                 "message": "密码修改成功，请重新登录",
@@ -1252,6 +1392,13 @@ async def change_admin_password(
     except ValueError as e:
         # Handle specific errors from AuthService
         error_msg = str(e)
+        _record_admin_action_audit(
+            current_user=current_user,
+            target_type="admin_password",
+            target_id=str(current_user.id),
+            result="denied",
+            metadata={"action": "change_admin_password", "reason": error_msg},
+        )
         if "当前密码错误" in error_msg or "Current password is incorrect" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1268,6 +1415,13 @@ async def change_admin_password(
                 detail=error_msg
             )
     except Exception as e:
+        _record_admin_action_audit(
+            current_user=current_user,
+            target_type="admin_password",
+            target_id=str(current_user.id),
+            result="failed",
+            metadata={"action": "change_admin_password", "reason": str(e)},
+        )
         logger.error(f"Failed to change admin password: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
