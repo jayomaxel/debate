@@ -12,12 +12,14 @@ if ROOT_STR not in sys.path:
 
 from middleware import rate_limit
 from middleware.rate_limit import RateLimitMiddleware, reset_rate_limit_state
+from services.audit_service import AuditService
 from utils.security import create_access_token
 
 
 @pytest.fixture
 def rate_limit_client(monkeypatch):
     reset_rate_limit_state()
+    AuditService.clear_events()
     monkeypatch.setattr(rate_limit, "_get_redis_client", lambda: None)
     monkeypatch.setattr(rate_limit.time, "time", lambda: 1_700_000_000.0)
     app = FastAPI()
@@ -32,10 +34,23 @@ def rate_limit_client(monkeypatch):
         content = await file.read()
         return {"size": len(content)}
 
+    @app.get("/api/student/reports/{debate_id}/export/pdf")
+    async def export_report_pdf(debate_id: str):
+        return {"debate_id": debate_id, "ok": True}
+
+    @app.post("/api/student/reports/{debate_id}/send-email")
+    async def send_report_email(debate_id: str):
+        return {"debate_id": debate_id, "ok": True}
+
+    @app.post("/api/teacher/topics/generate")
+    async def generate_topics():
+        return {"topics": ["topic-a"]}
+
     with TestClient(app) as client:
         yield client
 
     reset_rate_limit_state()
+    AuditService.clear_events()
 
 
 def test_login_rate_limit_blocks_after_threshold(rate_limit_client):
@@ -87,3 +102,29 @@ def test_rate_limit_sets_remaining_headers(rate_limit_client):
     assert response.status_code == 200
     assert response.headers["X-RateLimit-Limit"] == "10"
     assert response.headers["X-RateLimit-Remaining"] == "9"
+
+
+def test_report_pdf_export_generation_is_rate_limited(rate_limit_client):
+    for _ in range(6):
+        response = rate_limit_client.get("/api/student/reports/debate-1/export/pdf")
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.get("/api/student/reports/debate-1/export/pdf")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "report_regeneration"
+    events = AuditService.list_events(event_type="report_regeneration", result="denied")
+    assert events[0]["metadata"]["bucket"] == "report_regeneration"
+
+
+def test_candidate_topic_generation_is_rate_limited(rate_limit_client):
+    for _ in range(8):
+        response = rate_limit_client.post("/api/teacher/topics/generate")
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.post("/api/teacher/topics/generate")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "candidate_topic_generation"
+    events = AuditService.list_events(event_type="topic_generation", result="denied")
+    assert events[0]["target_type"] == "candidate_topic"

@@ -101,13 +101,25 @@ RATE_LIMIT_POLICIES = (
     ),
     RateLimitPolicy(
         bucket="report_regeneration",
-        path_pattern=re.compile(r"^/api/.*/reports/[^/]+(?:/.*)?$"),
-        methods=frozenset({"POST", "PUT"}),
+        path_pattern=re.compile(r"^/api/.*/reports/[^/]+/(?:export/(?:pdf|excel)|send-email)$"),
+        methods=frozenset({"GET", "POST", "PUT"}),
         limit=6,
         window_seconds=60,
         identity_strategy="user_or_ip",
         audit_event_type="report_regeneration",
         audit_target_type="report",
+    ),
+    RateLimitPolicy(
+        bucket="candidate_topic_generation",
+        path_pattern=re.compile(
+            r"^/api/(?:teacher|student|admin)/(?:candidate-topics|topic-candidates|topics/(?:candidates|generate)|debate-topics/(?:candidates|generate))$"
+        ),
+        methods=frozenset({"POST"}),
+        limit=8,
+        window_seconds=60,
+        identity_strategy="user_or_ip",
+        audit_event_type="topic_generation",
+        audit_target_type="candidate_topic",
     ),
 )
 
