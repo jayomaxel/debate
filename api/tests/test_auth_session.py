@@ -274,6 +274,42 @@ def test_logout_all_revokes_multiple_sessions(auth_client, db_session):
     ).status_code == 401
 
 
+def test_change_password_marks_existing_sessions_for_reauthentication(auth_client, db_session):
+    AuthService.register_teacher(
+        db=db_session,
+        account="teacher_change_password_reauth",
+        email="teacher_change_password_reauth@test.com",
+        phone="13800138017",
+        password="Teacher123!",
+        name="Reauth Teacher",
+    )
+
+    login_response = auth_client.post(
+        "/api/auth/login",
+        json={
+            "account": "teacher_change_password_reauth",
+            "password": "Teacher123!",
+            "user_type": "teacher",
+        },
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()["data"]
+    headers = {"Authorization": f"Bearer {login_payload['access_token']}"}
+
+    change_response = auth_client.post(
+        "/api/auth/change-password",
+        headers=headers,
+        json={"old_password": "Teacher123!", "new_password": "Teacher456!"},
+    )
+    assert change_response.status_code == 200
+
+    assert auth_client.get("/api/auth/profile", headers=headers).status_code == 401
+    assert auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": login_payload["refresh_token"]},
+    ).status_code == 401
+
+
 def test_refresh_token_without_session_id_is_rejected(auth_client, db_session):
     result = AuthService.register_teacher(
         db=db_session,

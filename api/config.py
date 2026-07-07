@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # JWT配置（生产必须显式配置 SECRET_KEY）
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24小时
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7天
     
     # OpenAI配置（优先从 model_config 表读取，这里仅作为 fallback）

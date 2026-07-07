@@ -20,6 +20,7 @@ from utils.security import (
     create_refresh_token,
     hash_password,
     is_server_session_active,
+    mark_all_server_sessions_requires_reauth,
     normalize_contract_role,
     persist_ws_ticket,
     persist_server_session,
@@ -499,8 +500,10 @@ class AuthService:
             raise ValueError("旧密码错误")
         
         # 更新密码
+        normalized_user_id = str(user.id)
         user.password_hash = hash_password(new_password)
         db.commit()
+        AuthService.require_reauthentication_for_user(normalized_user_id)
         
         return True
     
@@ -538,8 +541,10 @@ class AuthService:
             raise ValueError("当前密码错误")
         
         # 更新密码 - 使用相同的哈希机制
+        normalized_user_id = str(admin_user.id)
         admin_user.password_hash = hash_password(new_password)
         db.commit()
+        AuthService.require_reauthentication_for_user(normalized_user_id)
         
         return True
     
@@ -627,6 +632,18 @@ class AuthService:
         return {
             "revoked": revoked_count > 0 or legacy_revoked_at is not None,
             "revoked_session_count": revoked_count,
+            "legacy_token_revoked_at": (
+                legacy_revoked_at.isoformat() if legacy_revoked_at is not None else None
+            ),
+        }
+
+    @staticmethod
+    def require_reauthentication_for_user(user_id: str) -> Dict[str, Any]:
+        marked_count = mark_all_server_sessions_requires_reauth(str(user_id))
+        legacy_revoked_at = revoke_legacy_access_tokens(str(user_id))
+        return {
+            "requires_reauth": True,
+            "marked_session_count": marked_count,
             "legacy_token_revoked_at": (
                 legacy_revoked_at.isoformat() if legacy_revoked_at is not None else None
             ),

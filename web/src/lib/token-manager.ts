@@ -40,7 +40,8 @@ const unwrapResponseData = <T>(payload: unknown): T => {
     payload &&
     typeof payload === 'object' &&
     'data' in payload &&
-    ('code' in payload || 'message' in payload)
+    (('code' in payload || 'message' in payload) ||
+      ('access_token' in ((payload as { data?: unknown }).data as Record<string, unknown> | undefined || {})))
   ) {
     return (payload as { data: T }).data;
   }
@@ -49,6 +50,7 @@ const unwrapResponseData = <T>(payload: unknown): T => {
 };
 
 const storageAvailable = () => typeof localStorage !== 'undefined';
+const sessionStorageAvailable = () => typeof sessionStorage !== 'undefined';
 
 class TokenManager {
   private static refreshPromise: Promise<RefreshTokenResult> | null = null;
@@ -59,8 +61,11 @@ class TokenManager {
     }
 
     localStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
-    localStorage.setItem(REFRESH_TOKEN_KEY, tokenData.refresh_token);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.setItem(TOKEN_TYPE_KEY, tokenData.token_type || 'bearer');
+    if (sessionStorageAvailable()) {
+      sessionStorage.setItem(REFRESH_TOKEN_KEY, tokenData.refresh_token);
+    }
 
     if (tokenData.expires_in) {
       const expiresAt = Date.now() + tokenData.expires_in * 1000;
@@ -85,7 +90,12 @@ class TokenManager {
       return null;
     }
 
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    if (!sessionStorageAvailable()) {
+      return null;
+    }
+
+    return sessionStorage.getItem(REFRESH_TOKEN_KEY);
   }
 
   static getTokenType(): string {
@@ -158,6 +168,9 @@ class TokenManager {
     localStorage.removeItem(TOKEN_TYPE_KEY);
     localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
     localStorage.removeItem(USER_INFO_KEY);
+    if (sessionStorageAvailable()) {
+      sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+    }
   }
 
   static async refreshToken(): Promise<RefreshTokenResult> {

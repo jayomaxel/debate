@@ -320,6 +320,40 @@ def _list_memory_user_sessions(user_id: str) -> set[str]:
         return set(_memory_user_session_index.get(normalized_user_id, set()))
 
 
+def _normalize_session_member(value: Any) -> str:
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+    return str(value or "").strip()
+
+
+def _session_remaining_ttl_seconds(payload: Dict[str, Any]) -> int:
+    expires_at = _coerce_datetime(payload.get("expires_at"))
+    if expires_at is None:
+        return _session_ttl_seconds()
+    return max(1, int((expires_at - _utcnow()).total_seconds()))
+
+
+def _persist_existing_session_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    persisted_payload = _persist_memory_session(payload)
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            session_id = str(payload["session_id"])
+            user_id = str(payload["user_id"])
+            ttl = _session_remaining_ttl_seconds(payload)
+            pipeline = redis_client.pipeline()
+            pipeline.setex(_session_key(session_id), ttl, _serialize_session_payload(payload))
+            pipeline.sadd(_user_sessions_key(user_id), session_id)
+            pipeline.expire(_user_sessions_key(user_id), ttl)
+            pipeline.execute()
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"session update failed: {exc}")
+    return persisted_payload
+
+
 def _persist_memory_ws_ticket(payload: Dict[str, Any]) -> Dict[str, Any]:
     ticket = str(payload["ticket"])
     with _memory_ws_ticket_lock:
@@ -459,6 +493,46 @@ def is_server_session_active(session_id: str, user_id: Optional[str] = None) -> 
     if user_id is not None and str(payload.get("user_id")) != str(user_id):
         return False
     return not bool(payload.get("requires_reauth"))
+
+
+def mark_server_session_requires_reauth(session_id: str) -> bool:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return False
+
+    payload = get_server_session(normalized_session_id)
+    if payload is None:
+        return False
+
+    payload["requires_reauth"] = True
+    payload["updated_at"] = _utcnow().isoformat()
+    _persist_existing_session_payload(payload)
+    return True
+
+
+def mark_all_server_sessions_requires_reauth(user_id: str) -> int:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return 0
+
+    session_ids = _list_memory_user_sessions(normalized_user_id)
+    redis_client = _get_redis_session_client()
+    if redis_client is not None:
+        try:
+            redis_members = redis_client.smembers(_user_sessions_key(normalized_user_id)) or set()
+            session_ids.update(
+                normalized
+                for normalized in (_normalize_session_member(member) for member in redis_members)
+                if normalized
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime services
+            _disable_redis_session_backend(f"user session reauth index read failed: {exc}")
+
+    marked_count = 0
+    for session_id in session_ids:
+        if mark_server_session_requires_reauth(session_id):
+            marked_count += 1
+    return marked_count
 
 
 def revoke_server_session(session_id: str) -> bool:

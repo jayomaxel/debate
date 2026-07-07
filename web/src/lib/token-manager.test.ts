@@ -7,6 +7,7 @@ vi.mock('axios');
 describe('TokenManager', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-03T00:00:00.000Z'));
   });
@@ -14,9 +15,10 @@ describe('TokenManager', () => {
   afterEach(() => {
     vi.useRealTimers();
     localStorage.clear();
+    sessionStorage.clear();
   });
 
-  it('stores token bundle in localStorage', () => {
+  it('stores access tokens in localStorage and refresh tokens in sessionStorage', () => {
     TokenManager.setTokens({
       access_token: 'access-1',
       refresh_token: 'refresh-1',
@@ -24,7 +26,8 @@ describe('TokenManager', () => {
     });
 
     expect(localStorage.getItem('access_token')).toBe('access-1');
-    expect(localStorage.getItem('refresh_token')).toBe('refresh-1');
+    expect(localStorage.getItem('refresh_token')).toBeNull();
+    expect(sessionStorage.getItem('refresh_token')).toBe('refresh-1');
     expect(localStorage.getItem('token_type')).toBe('bearer');
     expect(Number(localStorage.getItem('token_expires_at'))).toBe(Date.now() + 3600 * 1000);
   });
@@ -63,7 +66,8 @@ describe('TokenManager', () => {
 
     expect(axios.post).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('access_token')).toBe('access-2');
-    expect(localStorage.getItem('refresh_token')).toBe('refresh-2');
+    expect(localStorage.getItem('refresh_token')).toBeNull();
+    expect(sessionStorage.getItem('refresh_token')).toBe('refresh-2');
     expect(TokenManager.getUserInfo()?.name).toBe('Student Updated');
     expect(result.access_token).toBe('access-2');
   });
