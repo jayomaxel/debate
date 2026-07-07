@@ -8,10 +8,10 @@ from config import settings
 async def test_export_to_pdf_async_fallback_generates_pdf_and_caches(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
 
-    async def fake_generate_markdown_via_coze(db, report):
-        return ""
+    async def fake_generate_markdown_report_async(db, debate_topic, content_str=""):
+        return "# 测试报告\n\n这是一次测试发言。"
 
-    monkeypatch.setattr(ReportGenerator, "_generate_markdown_via_coze", fake_generate_markdown_via_coze, raising=True)
+    monkeypatch.setattr(ReportGenerator, "generate_markdown_report_async", fake_generate_markdown_report_async, raising=True)
 
     report = Report(
         debate_id="debate-1",
@@ -65,11 +65,15 @@ async def test_export_to_pdf_async_fallback_generates_pdf_and_caches(tmp_path, m
         winner="positive",
     )
 
-    pdf_bytes = await ReportGenerator.export_to_pdf_async(object(), report)
+    pdf_bytes = await ReportGenerator.export_to_pdf_async(
+        object(),
+        report.debate_id,
+        report.topic,
+        content_str="这是一次测试发言。",
+    )
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
 
     cache_path = ReportGenerator._get_report_pdf_cache_path(report.debate_id)
     assert cache_path.exists()
     assert cache_path.read_bytes().startswith(b"%PDF")
-
