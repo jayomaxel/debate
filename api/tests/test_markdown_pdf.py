@@ -3,6 +3,9 @@
 """
 import asyncio
 from pathlib import Path
+
+import pytest
+
 from utils.markdown_to_pdf import markdown_to_pdf
 
 # 测试Markdown内容
@@ -92,6 +95,7 @@ model.compile(
 """
 
 
+@pytest.mark.asyncio
 async def test_markdown_to_pdf():
     """测试Markdown转PDF转换"""
     print("开始测试Markdown转PDF转换...")

@@ -50,6 +50,28 @@ def test_competition_and_teaching_prompts_differ_without_changing_shape():
     assert competition.render() != teaching.render()
 
 
+def test_render_agent_prompt_keeps_pack_and_task_detail():
+    prompt = PromptPackService.render_agent_prompt(
+        PromptBuildContext(agent="debater", phase="questioning", topic="AI in class"),
+        task_prompt="legacy task body",
+        extra_sections={"debug_contract": {"field": "value"}},
+    )
+
+    assert prompt.startswith("prompt_pack_version: a.prompt_pack.v1")
+    assert "## global_rules" in prompt
+    assert "task_detail:" in prompt
+    assert "legacy task body" in prompt
+    assert "debug_contract:" in prompt
+    assert '"field": "value"' in prompt
+
+
+def test_resolve_mode_from_context_reads_frozen_meta_without_agent_logic():
+    history = [{"content": "hello"}, {"config_meta": {"mode": "teaching"}}]
+
+    assert PromptPackService.resolve_mode_from_context(history) == "teaching"
+    assert PromptPackService.resolve_mode_from_context(history, mode="competition") == "competition"
+
+
 def test_default_domain_pack_does_not_inject_stablecoin_content():
     pack = DomainPackService.build_domain_pack()
 

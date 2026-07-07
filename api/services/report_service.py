@@ -21,6 +21,9 @@ from models.user import User
 from services.scoring_service import ScoringService
 from services.config_service import ConfigService
 from services.coze_client import CozeClient
+from services.domain_pack_service import DEFAULT_DOMAIN_PACK_ID
+from services.mode_policy_service import DEFAULT_MODE, ModePolicyService
+from services.score_validation_service import ScoreValidationService
 from config import settings
 
 from reportlab.lib.pagesizes import A4
@@ -51,7 +54,16 @@ class Report:
         participants: List[Dict],
         speeches: List[Dict],
         statistics: Dict,
-        winner: str
+        winner: str,
+        mode: str = DEFAULT_MODE,
+        domain_pack_id: str = DEFAULT_DOMAIN_PACK_ID,
+        report_meta: Optional[Dict] = None,
+        turning_points: Optional[List[Dict]] = None,
+        evidence_anchors: Optional[List[Dict]] = None,
+        improvement_actions: Optional[List[Dict]] = None,
+        participant_scores: Optional[List[Dict]] = None,
+        team_summary: Optional[Dict] = None,
+        teaching_summary: Optional[Dict] = None,
     ):
         self.debate_id = debate_id
         self.topic = topic
@@ -60,8 +72,182 @@ class Report:
         self.duration = duration
         self.participants = participants
         self.speeches = speeches
-        self.statistics = statistics
+        self.statistics = dict(statistics or {})
         self.winner = winner
+        self.mode = ModePolicyService.normalize_mode(mode)
+        self.domain_pack_id = domain_pack_id or DEFAULT_DOMAIN_PACK_ID
+        default_report_meta = ScoreValidationService.build_report_meta(
+            provider="local",
+            mode=self.mode,
+        ).to_dict()
+        if report_meta:
+            default_report_meta.update(report_meta)
+        default_report_meta["mode"] = self.mode
+        self.report_meta = default_report_meta
+        self.turning_points = list(turning_points or self._build_turning_points(self.speeches, self.statistics))
+        self.evidence_anchors = list(evidence_anchors or self._build_evidence_anchors(self.speeches))
+        self.improvement_actions = list(improvement_actions or self._build_improvement_actions(self.participants))
+        self.participant_scores = list(participant_scores or self._build_participant_scores(self.participants))
+        self.team_summary = dict(team_summary or self._build_team_summary(self.participants, self.speeches))
+        self.teaching_summary = dict(
+            teaching_summary
+            or (
+                {
+                    "learning_objectives": [],
+                    "common_issues": [],
+                    "improvement_actions": list(self.improvement_actions),
+                }
+                if self.mode == "teaching"
+                else {}
+            )
+        )
+        self._attach_calibration_summary()
+
+    @staticmethod
+    def _build_participant_scores(participants: List[Dict]) -> List[Dict]:
+        score_fields = (
+            "logic_score",
+            "argument_score",
+            "response_score",
+            "persuasion_score",
+            "teamwork_score",
+            "overall_score",
+        )
+        participant_scores: List[Dict] = []
+        for participant in participants or []:
+            final_score = dict(participant.get("final_score") or {})
+            legacy_scores = {field: final_score.get(field, 0.0) for field in score_fields}
+            participant_scores.append(
+                {
+                    "user_id": participant.get("user_id"),
+                    "name": participant.get("name"),
+                    "speaker_role": participant.get("role"),
+                    "stance": participant.get("stance"),
+                    "score_status": participant.get("score_status") or final_score.get("score_status"),
+                    "overall_score": legacy_scores["overall_score"],
+                    "legacy_scores": legacy_scores,
+                }
+            )
+        return participant_scores
+
+    @staticmethod
+    def _build_evidence_anchors(speeches: List[Dict]) -> List[Dict]:
+        anchors: List[Dict] = []
+        for index, speech in enumerate(speeches or [], start=1):
+            turn_id = str(speech.get("id") or f"turn_{index}")
+            excerpt = str(speech.get("content") or "").strip()
+            if not excerpt:
+                continue
+            anchors.append(
+                {
+                    "anchor_id": f"anchor_{index}",
+                    "anchor_type": "turn",
+                    "turn_id": turn_id,
+                    "speaker_role": str(speech.get("speaker_role") or speech.get("role") or ""),
+                    "excerpt": excerpt[:180],
+                    "source_document_id": "",
+                    "source_location": "",
+                    "evidence_relation": "support",
+                }
+            )
+        return anchors
+
+    @staticmethod
+    def _build_turning_points(speeches: List[Dict], statistics: Dict) -> List[Dict]:
+        scored_speeches: List[Dict] = []
+        for speech in speeches or []:
+            score = speech.get("score") or {}
+            try:
+                overall_score = float(score.get("overall_score"))
+            except (TypeError, ValueError):
+                continue
+            scored_speeches.append({"speech": speech, "overall_score": overall_score})
+
+        if scored_speeches:
+            best = max(scored_speeches, key=lambda item: item["overall_score"])
+            speech = best["speech"]
+            return [
+                {
+                    "turn_id": str(speech.get("id") or ""),
+                    "speaker_role": str(speech.get("speaker_role") or speech.get("role") or ""),
+                    "summary": "highest impact turn by current scoring data",
+                    "impact": f"overall_score={best['overall_score']}",
+                }
+            ]
+
+        winning_reason = str((statistics or {}).get("winning_reason") or "").strip()
+        if winning_reason:
+            return [
+                {
+                    "turn_id": "",
+                    "speaker_role": "",
+                    "summary": winning_reason[:180],
+                    "impact": "global winning reason",
+                }
+            ]
+        return []
+
+    @staticmethod
+    def _build_improvement_actions(participants: List[Dict]) -> List[Dict]:
+        actions: List[Dict] = []
+        for participant in participants or []:
+            final_score = participant.get("final_score") or {}
+            status = participant.get("score_status") or final_score.get("score_status")
+            if status in {"ready", None}:
+                continue
+            actions.append(
+                {
+                    "speaker_role": participant.get("role"),
+                    "action": "wait for complete scoring before final review",
+                    "priority": "medium",
+                }
+            )
+        return actions
+
+    @staticmethod
+    def _build_team_summary(participants: List[Dict], speeches: List[Dict]) -> Dict:
+        summary: Dict[str, Dict] = {
+            "positive": {"participant_count": 0, "speech_count": 0, "average_score": 0.0},
+            "negative": {"participant_count": 0, "speech_count": 0, "average_score": 0.0},
+        }
+        score_values: Dict[str, List[float]] = {"positive": [], "negative": []}
+        for participant in participants or []:
+            stance = str(participant.get("stance") or "").lower()
+            if stance not in summary:
+                continue
+            summary[stance]["participant_count"] += 1
+            final_score = participant.get("final_score") or {}
+            try:
+                score_values[stance].append(float(final_score.get("overall_score") or 0.0))
+            except (TypeError, ValueError):
+                pass
+        for speech in speeches or []:
+            stance = str(speech.get("stance") or "").lower()
+            if stance in summary:
+                summary[stance]["speech_count"] += 1
+        for stance, values in score_values.items():
+            if values:
+                summary[stance]["average_score"] = round(sum(values) / len(values), 2)
+        return summary
+
+    def _attach_calibration_summary(self) -> None:
+        existing_samples = self.statistics.get("anomaly_samples")
+        if isinstance(existing_samples, list):
+            samples = list(existing_samples)
+        else:
+            samples = ScoreValidationService.collect_anomaly_samples(
+                {
+                    "report_meta": self.report_meta,
+                    "evidence_anchors": self.evidence_anchors,
+                    "participant_scores": self.participant_scores,
+                    "participants": self.participants,
+                }
+            )
+        self.statistics.setdefault("anomaly_samples", samples)
+        self.statistics.setdefault(
+            "calibration_summary",
+            ScoreValidationService.build_calibration_summary(samples),
+        )
     
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -74,7 +260,16 @@ class Report:
             "participants": self.participants,
             "speeches": self.speeches,
             "statistics": self.statistics,
-            "winner": self.winner
+            "winner": self.winner,
+            "mode": self.mode,
+            "domain_pack_id": self.domain_pack_id,
+            "report_meta": dict(self.report_meta),
+            "turning_points": list(self.turning_points),
+            "evidence_anchors": list(self.evidence_anchors),
+            "improvement_actions": list(self.improvement_actions),
+            "participant_scores": list(self.participant_scores),
+            "team_summary": dict(self.team_summary),
+            "teaching_summary": dict(self.teaching_summary),
         }
 
 
@@ -89,6 +284,37 @@ class ReportGenerator:
             return uuid.UUID(str(value))
         except (TypeError, ValueError, AttributeError):
             return value
+
+    @staticmethod
+    def _resolve_report_contract(report_data: Any) -> Dict[str, Any]:
+        if not isinstance(report_data, dict):
+            report_data = {}
+
+        report_meta = report_data.get("report_meta") if isinstance(report_data.get("report_meta"), dict) else None
+        mode = report_data.get("mode") or ((report_meta or {}).get("mode"))
+        normalized_mode = ModePolicyService.normalize_mode(mode)
+        if report_meta:
+            report_meta = {**report_meta, "mode": normalized_mode}
+
+        def _optional_list(key: str) -> Optional[List[Dict]]:
+            value = report_data.get(key)
+            return list(value) if isinstance(value, list) else None
+
+        def _optional_dict(key: str) -> Optional[Dict]:
+            value = report_data.get(key)
+            return dict(value) if isinstance(value, dict) else None
+
+        return {
+            "mode": normalized_mode,
+            "domain_pack_id": str(report_data.get("domain_pack_id") or DEFAULT_DOMAIN_PACK_ID),
+            "report_meta": report_meta,
+            "turning_points": _optional_list("turning_points"),
+            "evidence_anchors": _optional_list("evidence_anchors"),
+            "improvement_actions": _optional_list("improvement_actions"),
+            "participant_scores": _optional_list("participant_scores"),
+            "team_summary": _optional_dict("team_summary"),
+            "teaching_summary": _optional_dict("teaching_summary"),
+        }
     
     @staticmethod
     def generate_student_report(
@@ -422,7 +648,8 @@ class ReportGenerator:
                 participants=participants,
                 speeches=speech_list,
                 statistics=statistics,
-                winner=statistics.get("winner", "unknown")
+                winner=statistics.get("winner", "unknown"),
+                **ReportGenerator._resolve_report_contract(debate.report),
             )
             
             logger.info(f"学生报告生成成功: debate_id={debate_id}, student_id={student_id}")
@@ -605,8 +832,23 @@ class ReportGenerator:
         )
 
     @staticmethod
-    async def _generate_markdown_via_coze(db: Session,debate_id:str, message_str: str) -> str:
+    async def _generate_markdown_via_coze(
+        db: Session,
+        debate_id: Any,
+        message_str: Optional[str] = None,
+    ) -> str:
         try:
+            if isinstance(debate_id, Report):
+                report = debate_id
+                debate_id = report.debate_id
+                message_str = (
+                    f"{ReportGenerator._build_coze_prompt(report)}\n\n"
+                    f"{json.dumps(report.to_dict(), ensure_ascii=False, indent=2)}"
+                )
+            else:
+                debate_id = str(debate_id)
+                message_str = str(message_str or "")
+
             config_service = ConfigService(db)
             coze_config = await config_service.get_coze_config()
             bot_id = (getattr(coze_config, "judge_bot_id", "") or "").strip()
@@ -749,8 +991,8 @@ class ReportGenerator:
     @staticmethod
     async def export_to_pdf_async(
         db: Session,
-        debate_id: str,
-        debate_topic: str,
+        debate_id: Any,
+        debate_topic: Optional[str] = None,
         content_str: str = "",
         start_time: str = None,
         end_time: str = None,
@@ -772,6 +1014,38 @@ class ReportGenerator:
             PDF字节流
         """
         try:
+            if isinstance(debate_id, Report):
+                report = debate_id
+                markdown_text = await ReportGenerator._generate_markdown_via_coze(db, report)
+                if not markdown_text:
+                    markdown_text = ReportGenerator._build_fallback_markdown(report)
+
+                report_start_time = (
+                    report.start_time.isoformat()
+                    if hasattr(report.start_time, "isoformat")
+                    else report.start_time
+                )
+                report_end_time = (
+                    report.end_time.isoformat()
+                    if hasattr(report.end_time, "isoformat")
+                    else report.end_time
+                )
+                pdf_bytes = await ReportGenerator.render_markdown_to_pdf_async(
+                    markdown_text=markdown_text,
+                    debate_topic=report.topic,
+                    start_time=report_start_time,
+                    end_time=report_end_time,
+                    duration=report.duration,
+                )
+                if pdf_bytes:
+                    cache_path = ReportGenerator._get_report_pdf_cache_path(report.debate_id)
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(bytes(pdf_bytes))
+                return pdf_bytes
+
+            if debate_topic is None:
+                raise ValueError("debate_topic is required when debate_id is not a Report")
+
             markdown_text = await ReportGenerator.generate_markdown_report_async(
                 db=db,
                 debate_topic=debate_topic,

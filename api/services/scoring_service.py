@@ -14,6 +14,11 @@ from models.speech import Speech
 from models.score import Score
 from models.debate import Debate, DebateParticipation
 from agents.judge_agent import JudgeAgent, ScoreBreakdown, Violation
+from services.domain_pack_service import DEFAULT_DOMAIN_PACK_ID
+from services.mode_policy_service import ModePolicyService
+from services.prompt_pack_service import PromptPackService
+from services.rubric_service import RubricService
+from services.score_validation_service import ScoreValidationService
 
 logger = get_logger(__name__)
 
@@ -102,6 +107,193 @@ class ScoringService:
         # Product rule: human is always affirmative, AI is always negative.
         return "positive" if str(speaker_type) == "human" else "negative"
 
+    @staticmethod
+    def _normalize_speaker_role(speaker_role: Optional[str]) -> str:
+        role = str(speaker_role or "").strip()
+        if role.startswith("ai_"):
+            parts = role.split("_", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                return f"debater_{parts[1]}"
+        if role.startswith("debater_"):
+            return role
+        return "debater_1"
+
+    @staticmethod
+    def _build_a_report_contract_patch(
+        *,
+        topic: str,
+        speech_score_items: List[Dict],
+        speech_map: Dict[str, Speech],
+        context: List[Dict],
+        existing_report: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        existing_report = existing_report if isinstance(existing_report, dict) else {}
+        mode = PromptPackService.resolve_mode_from_context(
+            context,
+            mode=existing_report.get("mode"),
+        )
+        domain_pack_id = str(existing_report.get("domain_pack_id") or DEFAULT_DOMAIN_PACK_ID)
+        report_meta = ScoreValidationService.build_report_meta(
+            provider="local",
+            mode=mode,
+        ).to_dict()
+
+        anchors: List[Dict[str, Any]] = []
+        turning_candidates: List[Dict[str, Any]] = []
+        role_buckets: Dict[str, Dict[str, Any]] = {}
+        team_scores: Dict[str, List[float]] = {"positive": [], "negative": []}
+        team_speech_count: Dict[str, int] = {"positive": 0, "negative": 0}
+
+        for index, item in enumerate(speech_score_items, start=1):
+            speech_id = str(item.get("speech_id") or "").strip()
+            speech = speech_map.get(speech_id)
+            scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
+            if not speech or not scores:
+                continue
+
+            content = str(getattr(speech, "content", "") or "").strip()
+            speaker_role = ScoringService._normalize_speaker_role(
+                getattr(speech, "speaker_role", "")
+            )
+            stance = ScoringService._speech_stance(str(getattr(speech, "speaker_type", "")))
+            try:
+                overall_score = float(scores.get("overall_score") or 0.0)
+            except (TypeError, ValueError):
+                overall_score = 0.0
+
+            if content:
+                anchors.append(
+                    {
+                        "anchor_id": f"anchor_{index}",
+                        "anchor_type": "turn",
+                        "turn_id": speech_id,
+                        "speaker_role": speaker_role,
+                        "excerpt": content[:180],
+                        "source_document_id": "",
+                        "source_location": "",
+                        "evidence_relation": "support",
+                    }
+                )
+
+            turning_candidates.append(
+                {
+                    "turn_id": speech_id,
+                    "speaker_role": speaker_role,
+                    "summary": "highest impact turn by current scoring data",
+                    "impact": f"overall_score={overall_score}",
+                    "_score": overall_score,
+                }
+            )
+
+            bucket = role_buckets.setdefault(
+                speaker_role,
+                {
+                    "speaker_role": speaker_role,
+                    "stance": stance,
+                    "speech_count": 0,
+                    "scores": {
+                        "logic_score": [],
+                        "argument_score": [],
+                        "response_score": [],
+                        "persuasion_score": [],
+                        "teamwork_score": [],
+                        "overall_score": [],
+                    },
+                },
+            )
+            bucket["speech_count"] += 1
+            for field in bucket["scores"]:
+                try:
+                    bucket["scores"][field].append(float(scores.get(field) or 0.0))
+                except (TypeError, ValueError):
+                    bucket["scores"][field].append(0.0)
+
+            if stance in team_scores:
+                team_scores[stance].append(overall_score)
+                team_speech_count[stance] += 1
+
+        participant_scores: List[Dict[str, Any]] = []
+        for role, bucket in role_buckets.items():
+            averaged_scores = {
+                field: round(sum(values) / len(values), 2) if values else 0.0
+                for field, values in bucket["scores"].items()
+            }
+            participant_score = RubricService.build_participant_score(
+                role,
+                averaged_scores,
+                mode=mode,
+            )
+            participant_score.update(
+                {
+                    "stance": bucket["stance"],
+                    "speech_count": bucket["speech_count"],
+                    "score_status": "ready",
+                }
+            )
+            participant_scores.append(participant_score)
+
+        turning_points: List[Dict[str, Any]] = []
+        if turning_candidates:
+            best_turn = max(turning_candidates, key=lambda item: item["_score"])
+            best_turn.pop("_score", None)
+            turning_points.append(best_turn)
+
+        improvement_actions = []
+        for item in participant_scores:
+            if float(item.get("overall_score") or 0.0) < 65:
+                improvement_actions.append(
+                    {
+                        "speaker_role": item.get("speaker_role"),
+                        "action": "strengthen claim-evidence-warrant links in the next review",
+                        "priority": "medium",
+                    }
+                )
+
+        def _team_average(stance: str) -> float:
+            values = team_scores.get(stance, [])
+            return round(sum(values) / len(values), 2) if values else 0.0
+
+        team_participant_count = {"positive": 0, "negative": 0}
+        for item in participant_scores:
+            stance = str(item.get("stance") or "")
+            if stance in team_participant_count:
+                team_participant_count[stance] += 1
+
+        team_summary = {
+            "positive": {
+                "participant_count": team_participant_count["positive"],
+                "speech_count": team_speech_count["positive"],
+                "average_score": _team_average("positive"),
+            },
+            "negative": {
+                "participant_count": team_participant_count["negative"],
+                "speech_count": team_speech_count["negative"],
+                "average_score": _team_average("negative"),
+            },
+        }
+
+        report_patch = {
+            "mode": ModePolicyService.normalize_mode(mode),
+            "domain_pack_id": domain_pack_id,
+            "report_meta": report_meta,
+            "turning_points": turning_points,
+            "evidence_anchors": anchors,
+            "improvement_actions": improvement_actions,
+            "participant_scores": participant_scores,
+            "team_summary": team_summary,
+            "teaching_summary": {
+                "learning_objectives": [],
+                "common_issues": [],
+                "improvement_actions": improvement_actions,
+            }
+            if mode == "teaching"
+            else {},
+        }
+        samples = ScoreValidationService.collect_anomaly_samples(report_patch)
+        report_patch["anomaly_samples"] = samples
+        report_patch["calibration_summary"] = ScoreValidationService.build_calibration_summary(samples)
+        return report_patch
+    
     @staticmethod
     def _phase_label(phase: str) -> str:
         return {
@@ -518,6 +710,21 @@ class ScoringService:
                 speech_score_items=speech_scores,
                 speech_map=speech_map,
             )
+
+            if debate:
+                existing_report = debate.report if isinstance(debate.report, dict) else {}
+                report_patch = ScoringService._build_a_report_contract_patch(
+                    topic=topic,
+                    speech_score_items=speech_scores,
+                    speech_map=speech_map,
+                    context=context,
+                    existing_report=existing_report,
+                )
+                debate.report = {
+                    **existing_report,
+                    **report_patch,
+                    "global_report": global_report,
+                }
 
             db.commit()
             return global_report

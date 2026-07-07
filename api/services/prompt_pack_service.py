@@ -245,6 +245,38 @@ class PromptPackService:
         return PromptPack(version=PROMPT_PACK_VERSION, context=ctx, layers=layers)
 
     @classmethod
+    def render_agent_prompt(cls, context, task_prompt="", extra_sections=None):
+        task_prompt = str(task_prompt or "").strip()
+        extra_sections = extra_sections or {}
+        pack = cls.build_prompt(context)
+        sections = [pack.render()]
+        if task_prompt:
+            sections.append("task_detail:")
+            sections.append(task_prompt)
+        for name, value in extra_sections.items():
+            normalized_name = str(name or "extra_section").strip() or "extra_section"
+            sections.append(f"{normalized_name}:")
+            sections.append(PromptPack._render_value(value))
+        return chr(10).join(sections).strip()
+
+    @classmethod
+    def resolve_mode_from_context(cls, history=None, mode=None):
+        if mode:
+            return ModePolicyService.normalize_mode(mode)
+        for item in reversed(list(history or [])):
+            if not isinstance(item, Mapping):
+                continue
+            candidates = [item.get("mode"), item.get("debate_mode")]
+            meta = item.get("config_meta")
+            if isinstance(meta, Mapping):
+                candidates.append(meta.get("mode"))
+            for candidate in candidates:
+                normalized = ModePolicyService.normalize_mode(candidate)
+                if candidate and normalized == str(candidate).strip().lower():
+                    return normalized
+        return DEFAULT_MODE
+
+    @classmethod
     def _build_global_rules(cls, context: PromptBuildContext) -> Dict[str, Any]:
         return {
             "language": "zh-CN",
