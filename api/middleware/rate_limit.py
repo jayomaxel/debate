@@ -101,7 +101,7 @@ RATE_LIMIT_POLICIES = (
     ),
     RateLimitPolicy(
         bucket="report_regeneration",
-        path_pattern=re.compile(r"^/api/.*/reports/[^/]+/(?:export/(?:pdf|excel)|send-email)$"),
+        path_pattern=re.compile(r"^/api/.*/reports/[^/]+(?:/(?:export/(?:pdf|excel)|send-email))?$"),
         methods=frozenset({"GET", "POST", "PUT"}),
         limit=6,
         window_seconds=60,

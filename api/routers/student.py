@@ -640,6 +640,13 @@ async def get_student_report(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="报告不存在或您未参与该辩论"
         )
+    _record_report_generation_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        debate_id=debate_id,
+        action="get_student_report",
+        metadata={"generated_report": True},
+    )
     
     return {
         "code": 200,
@@ -833,6 +840,13 @@ async def export_report_excel(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Excel生成失败"
         )
+    _record_report_generation_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        debate_id=debate_id,
+        action="export_report_excel",
+        metadata={"generated_report": True, "export_format": "excel"},
+    )
     
     return Response(
         content=excel_data,

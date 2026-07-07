@@ -35,6 +35,11 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+class FakeReport:
+    def to_dict(self):
+        return {"debate_id": "fake-report", "overall_score": 88}
+
+
 @pytest.fixture(scope="function")
 def setup_database():
     create_test_schema(engine)
@@ -188,4 +193,54 @@ def test_export_pdf_generation_records_audit_event(tmp_path, teacher_token, deba
     assert event["metadata"]["action"] == "export_report_pdf"
     assert event["metadata"]["generated_pdf"] is True
     assert event["metadata"]["generated_markdown"] is False
+    AuditService.clear_events()
+
+
+def test_get_student_report_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):
+    AuditService.clear_events()
+
+    async def fake_ensure_report_ready(*args, **kwargs):
+        return {"ready": True}
+
+    monkeypatch.setattr(student_router, "_ensure_report_ready", fake_ensure_report_ready, raising=True)
+    monkeypatch.setattr(ReportGenerator, "generate_student_report", lambda *a, **k: FakeReport(), raising=True)
+
+    resp = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+
+    assert resp.status_code == 200
+    events = AuditService.list_events(limit=10, event_type="report_regeneration")
+    assert events
+    event = events[0]
+    assert event["target_id"] == str(debate_for_teacher.id)
+    assert event["metadata"]["action"] == "get_student_report"
+    assert event["metadata"]["generated_report"] is True
+    AuditService.clear_events()
+
+
+def test_export_report_excel_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):
+    AuditService.clear_events()
+
+    async def fake_ensure_report_ready(*args, **kwargs):
+        return {"ready": True}
+
+    monkeypatch.setattr(student_router, "_ensure_report_ready", fake_ensure_report_ready, raising=True)
+    monkeypatch.setattr(ReportGenerator, "generate_student_report", lambda *a, **k: FakeReport(), raising=True)
+    monkeypatch.setattr(ReportGenerator, "export_to_excel", lambda *a, **k: b"excel-bytes", raising=True)
+
+    resp = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}/export/excel",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+
+    assert resp.status_code == 200
+    events = AuditService.list_events(limit=10, event_type="report_regeneration")
+    assert events
+    event = events[0]
+    assert event["target_id"] == str(debate_for_teacher.id)
+    assert event["metadata"]["action"] == "export_report_excel"
+    assert event["metadata"]["generated_report"] is True
+    assert event["metadata"]["export_format"] == "excel"
     AuditService.clear_events()

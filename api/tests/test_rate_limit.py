@@ -34,6 +34,10 @@ def rate_limit_client(monkeypatch):
         content = await file.read()
         return {"size": len(content)}
 
+    @app.get("/api/student/reports/{debate_id}")
+    async def get_report(debate_id: str):
+        return {"debate_id": debate_id, "ok": True}
+
     @app.get("/api/student/reports/{debate_id}/export/pdf")
     async def export_report_pdf(debate_id: str):
         return {"debate_id": debate_id, "ok": True}
@@ -115,6 +119,17 @@ def test_report_pdf_export_generation_is_rate_limited(rate_limit_client):
     assert blocked.json()["data"]["bucket"] == "report_regeneration"
     events = AuditService.list_events(event_type="report_regeneration", result="denied")
     assert events[0]["metadata"]["bucket"] == "report_regeneration"
+
+
+def test_report_fetch_generation_is_rate_limited(rate_limit_client):
+    for _ in range(6):
+        response = rate_limit_client.get("/api/student/reports/debate-1")
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.get("/api/student/reports/debate-1")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "report_regeneration"
 
 
 def test_candidate_topic_generation_is_rate_limited(rate_limit_client):
