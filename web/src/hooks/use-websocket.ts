@@ -124,7 +124,7 @@ export function useWebSocket(
         origin: typeof window !== 'undefined' ? window.location.origin : '',
       });
 
-      await clientRef.current.connect(roomId, token);
+      await clientRef.current.connect(roomId);
       audioPlaybackDebug('useWebSocket', '房间 websocket 连接成功', { roomId });
     } catch (error) {
       console.error('[useWebSocket] Connect failed:', error);
