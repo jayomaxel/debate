@@ -3,13 +3,15 @@ FastAPI application entrypoint.
 """
 
 from pathlib import Path
+from time import time
 
 import uvicorn
 import database as database_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, Gauge, Info, generate_latest
 from sqlalchemy import text
 
 from config import settings
@@ -31,6 +33,23 @@ app = FastAPI(
     description="Realtime debate-teaching backend API.",
     version="1.0.0",
 )
+
+SERVICE_INFO = Info("debate_service", "Static service metadata.")
+SERVICE_INFO.info(
+    {
+        "app_name": app.title,
+        "version": app.version,
+        "environment": settings.ENVIRONMENT,
+    }
+)
+SERVICE_START_TIME = Gauge(
+    "debate_service_start_time_seconds",
+    "Unix timestamp when the API process started.",
+)
+SERVICE_START_TIME.set(time())
+DATABASE_UP = Gauge("debate_database_up", "Database connectivity status.")
+REDIS_UP = Gauge("debate_redis_up", "Redis connectivity status.")
+REDIS_ENABLED = Gauge("debate_redis_enabled", "Whether Redis is configured for use.")
 
 # CORS：生产环境不建议 allow_origins=["*"] 与 allow_credentials=True 同时出现
 _cors_origins = settings.ALLOWED_ORIGINS if settings.ALLOWED_ORIGINS else ["*"]
@@ -90,6 +109,15 @@ def _redis_health() -> tuple[str, str | None]:
         return "connected", None
     except Exception as exc:  # pragma: no cover - depends on runtime services
         return "disconnected", str(exc)
+
+
+def _update_operational_metrics() -> None:
+    database_connected, _ = _database_health()
+    redis_status, _ = _redis_health()
+
+    DATABASE_UP.set(1 if database_connected else 0)
+    REDIS_UP.set(1 if redis_status == "connected" else 0)
+    REDIS_ENABLED.set(0 if redis_status == "disabled" else 1)
 
 
 @app.on_event("startup")
@@ -185,6 +213,7 @@ async def startup_event():
         else:
             logger.warning("Redis connection failed during startup: %s", redis_error)
 
+        _update_operational_metrics()
         logger.info("AIDebate API started successfully.")
     except Exception:
         logger.exception("Application startup failed.")
@@ -208,6 +237,7 @@ async def root():
 async def health_check():
     database_connected, database_error = _database_health()
     redis_status, redis_error = _redis_health()
+    _update_operational_metrics()
 
     status = "healthy"
     status_code = 200
@@ -238,6 +268,12 @@ async def health_check():
         payload["redis"]["error"] = redis_error
 
     return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    _update_operational_metrics()
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 if __name__ == "__main__":

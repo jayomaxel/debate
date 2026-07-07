@@ -26,6 +26,7 @@ api/logs/
 
 # Local secrets
 .env
+.env.deploy
 api/.env
 
 # Dependencies (will be installed in container)

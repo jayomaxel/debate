@@ -1,3 +1,5 @@
+import asyncio
+
 import main
 
 
@@ -18,3 +20,15 @@ def test_database_health_uses_runtime_session_factory(monkeypatch):
 
     assert ok is True
     assert error is None
+
+
+def test_metrics_endpoint_exposes_operational_status(monkeypatch):
+    monkeypatch.setattr(main, "_database_health", lambda: (True, None))
+    monkeypatch.setattr(main, "_redis_health", lambda: ("disabled", None))
+
+    response = asyncio.run(main.metrics())
+    body = response.body.decode("utf-8")
+
+    assert response.status_code == 200
+    assert "debate_database_up" in body
+    assert "debate_redis_enabled" in body

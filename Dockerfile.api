@@ -1,24 +1,22 @@
-# 后端API Dockerfile
+# Backend API Dockerfile
 FROM python:3.11-slim-bookworm
 
 ARG APT_MIRROR=http://deb.debian.org/debian
 ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 
-# 设置时区为上海
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 设置工作目录
 WORKDIR /app
 
-# 设置环境变量
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    ENVIRONMENT=production \
+    DEBUG=false
 
-# 安装系统依赖（仅保留必需的）
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       sed -i \
@@ -51,10 +49,8 @@ RUN set -eux; \
     done; \
     rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件
 COPY api/requirements.txt .
 
-# 安装Python依赖
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_TRUSTED_HOST=
 RUN python -m pip install --upgrade pip setuptools wheel \
@@ -65,18 +61,18 @@ RUN python -m pip install --upgrade pip setuptools wheel \
       ${PIP_TRUSTED_HOST:+--trusted-host ${PIP_TRUSTED_HOST}} \
       -r requirements.txt
 
-# 复制应用代码
 COPY api/ .
 
-# 创建必要的目录
-RUN mkdir -p /app/logs /app/uploads/audio /app/uploads/asr_tmp /app/uploads/reports
+RUN mkdir -p \
+    /app/logs \
+    /app/uploads/audio \
+    /app/uploads/asr_tmp \
+    /app/uploads/reports \
+    /app/uploads/quarantine
 
-# 暴露端口
 EXPOSE 7860
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:7860/health || exit 1
 
-# 启动命令
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

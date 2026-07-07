@@ -1,5 +1,40 @@
 services:
-  # 后端API
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.db.local
+    image: debate-db:latest
+    container_name: debate-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-debate_system}
+      POSTGRES_USER: ${POSTGRES_USER:-pgvector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required. Use --env-file .env.deploy with docker-compose.yml.}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pgvector} -d ${POSTGRES_DB:-debate_system}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: debate-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - backend
+
   api:
     build:
       context: .
@@ -7,37 +42,67 @@ services:
     image: debate-api:latest
     container_name: debate-api
     environment:
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
-    ports:
-      - "7860:7860"
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required. Use --env-file .env.deploy with docker-compose.yml.}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required. Use --env-file .env.deploy with docker-compose.yml.}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required. Use --env-file .env.deploy with docker-compose.yml.}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required. Use --env-file .env.deploy with docker-compose.yml.}
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn main:app --host 0.0.0.0 --port 7860"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "7860"
     volumes:
       - ./api/logs:/app/logs
       - ./api/uploads:/app/uploads
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:7860/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    networks:
+      - backend
 
-  # 前端Web
   web:
     build:
       context: .
       dockerfile: Dockerfile.web
     image: debate-web:latest
     container_name: debate-web
+    environment:
+      API_UPSTREAM: api:7860
+    depends_on:
+      api:
+        condition: service_healthy
     ports:
       - "8860:80"
-    depends_on:
-      - api
-    volumes:
-      - ./web/.env.production:/app/.env.production
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  frontend:
+  backend:
