@@ -12,10 +12,17 @@ if ROOT_STR not in sys.path:
 
 from middleware.upload_guard import UploadGuardMiddleware
 from services.audit_service import AuditService
+from config import settings
 
 
 @pytest.fixture
-def upload_client():
+def quarantine_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "UPLOAD_QUARANTINE_DIR", str(tmp_path), raising=False)
+    return tmp_path
+
+
+@pytest.fixture
+def upload_client(quarantine_dir):
     AuditService.clear_events()
     app = FastAPI()
     app.add_middleware(UploadGuardMiddleware)
@@ -56,6 +63,22 @@ def test_valid_pdf_upload_passes_and_reaches_downstream(upload_client):
     assert response.json() == {"filename": "lesson.pdf", "size": 17}
 
 
+def test_valid_upload_uses_temporary_quarantine(upload_client, quarantine_dir):
+    response = upload_client.post(
+        "/api/admin/kb/documents",
+        headers={"x-request-id": "req-quarantine-ok"},
+        files={"file": ("lesson.pdf", b"%PDF-1.7\nmock-pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert list(quarantine_dir.iterdir()) == []
+    events = AuditService.list_events(event_type="upload", result="success")
+    assert events
+    metadata = events[0]["metadata"]
+    assert metadata["quarantine_file"].startswith("req-quarantine-ok_file_")
+    assert metadata["quarantine_file"].endswith(".pdf")
+
+
 def test_invalid_document_extension_is_blocked(upload_client):
     response = upload_client.post(
         "/api/admin/kb/documents",
@@ -66,6 +89,22 @@ def test_invalid_document_extension_is_blocked(upload_client):
     payload = response.json()
     assert payload["code"] == "extension_invalid"
     assert payload["request_id"].startswith("req_")
+
+
+def test_blocked_upload_cleans_temporary_quarantine(upload_client, quarantine_dir):
+    response = upload_client.post(
+        "/api/admin/kb/documents",
+        headers={"x-request-id": "req-quarantine-denied"},
+        files={"file": ("lesson.exe", b"MZfake", "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    assert list(quarantine_dir.iterdir()) == []
+    events = AuditService.list_events(event_type="upload", result="denied")
+    assert events
+    metadata = events[0]["metadata"]
+    assert metadata["reason"] == "extension_invalid"
+    assert metadata["quarantine_file"].endswith(".exe")
 
 
 def test_invalid_document_mime_is_blocked(upload_client):

@@ -15,8 +15,10 @@ from utils.security import (
 )
 from utils.upload_security import (
     UploadPart,
+    cleanup_quarantined_uploads,
     is_multipart_request,
     parse_multipart_upload_parts,
+    quarantine_upload_part,
     resolve_upload_policy,
     validate_upload_part,
 )
@@ -71,65 +73,104 @@ class UploadGuardMiddleware(BaseHTTPMiddleware):
         if not parts:
             return await call_next(request)
 
-        for part in parts:
-            validation_error = validate_upload_part(policy, part)
-            if validation_error is None:
-                continue
-
-            code, message = validation_error
+        quarantine_paths = []
+        try:
+            quarantine_paths = [
+                quarantine_upload_part(part, request_id=request_id)
+                for part in parts
+            ]
+        except Exception:
             UPLOAD_GUARD_TOTAL.labels(
                 policy=policy.name,
-                result="denied",
-                code=code,
+                result="failed",
+                code="scan_failed",
             ).inc()
             self._record_audit(
                 request=request,
                 policy_name=policy.name,
                 target_type=policy.target_type,
-                result="denied",
-                target_id=part.filename,
+                result="failed",
+                target_id=request.url.path,
                 metadata={
-                    "action": "upload_guard_blocked",
+                    "action": "upload_guard_quarantine_failed",
                     "path": request.url.path,
-                    "filename": part.filename,
-                    "content_type": part.content_type,
-                    "size": part.size,
                     "request_id": request_id,
-                    "reason": code,
                 },
             )
+            cleanup_quarantined_uploads(quarantine_paths)
             return self._error_response(
-                code=code,
-                message=message,
+                code="scan_failed",
+                message="Failed to inspect uploaded file.",
                 request_id=request_id,
                 status_code=400,
             )
 
-        first_part = parts[0]
-        UPLOAD_GUARD_TOTAL.labels(
-            policy=policy.name,
-            result="success",
-            code="ok",
-        ).inc()
-        self._record_audit(
-            request=request,
-            policy_name=policy.name,
-            target_type=policy.target_type,
-            result="success",
-            target_id=first_part.filename,
-            metadata={
-                "action": "upload_guard_passed",
-                "path": request.url.path,
-                "filename": first_part.filename,
-                "content_type": first_part.content_type,
-                "size": first_part.size,
-                "request_id": request_id,
-                "file_count": len(parts),
-            },
-        )
-        request.state.upload_guard_request_id = request_id
-        request.state.upload_guard_policy = policy.name
-        return await call_next(request)
+        try:
+            for index, part in enumerate(parts):
+                validation_error = validate_upload_part(policy, part)
+                if validation_error is None:
+                    continue
+
+                code, message = validation_error
+                quarantine_path = quarantine_paths[index]
+                UPLOAD_GUARD_TOTAL.labels(
+                    policy=policy.name,
+                    result="denied",
+                    code=code,
+                ).inc()
+                self._record_audit(
+                    request=request,
+                    policy_name=policy.name,
+                    target_type=policy.target_type,
+                    result="denied",
+                    target_id=part.filename,
+                    metadata={
+                        "action": "upload_guard_blocked",
+                        "path": request.url.path,
+                        "filename": part.filename,
+                        "content_type": part.content_type,
+                        "size": part.size,
+                        "request_id": request_id,
+                        "reason": code,
+                        "quarantine_file": quarantine_path.name,
+                    },
+                )
+                return self._error_response(
+                    code=code,
+                    message=message,
+                    request_id=request_id,
+                    status_code=400,
+                )
+
+            first_part = parts[0]
+            first_quarantine_path = quarantine_paths[0]
+            UPLOAD_GUARD_TOTAL.labels(
+                policy=policy.name,
+                result="success",
+                code="ok",
+            ).inc()
+            self._record_audit(
+                request=request,
+                policy_name=policy.name,
+                target_type=policy.target_type,
+                result="success",
+                target_id=first_part.filename,
+                metadata={
+                    "action": "upload_guard_passed",
+                    "path": request.url.path,
+                    "filename": first_part.filename,
+                    "content_type": first_part.content_type,
+                    "size": first_part.size,
+                    "request_id": request_id,
+                    "file_count": len(parts),
+                    "quarantine_file": first_quarantine_path.name,
+                },
+            )
+            request.state.upload_guard_request_id = request_id
+            request.state.upload_guard_policy = policy.name
+            return await call_next(request)
+        finally:
+            cleanup_quarantined_uploads(quarantine_paths)
 
     @staticmethod
     def _error_response(*, code: str, message: str, request_id: str, status_code: int):

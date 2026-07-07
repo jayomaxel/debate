@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 import zipfile
 from dataclasses import dataclass
 from email.parser import BytesParser
@@ -151,6 +152,31 @@ def parse_multipart_upload_parts(content_type: str, body: bytes) -> list[UploadP
     return parts
 
 
+def quarantine_upload_part(
+    part: UploadPart,
+    *,
+    request_id: str,
+    quarantine_dir: Optional[str | Path] = None,
+) -> Path:
+    base_dir = Path(quarantine_dir or settings.UPLOAD_QUARANTINE_DIR)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_request_id = _safe_path_component(request_id, fallback="request")
+    safe_field_name = _safe_path_component(part.field_name, fallback="file")
+    suffix = part.extension if re.fullmatch(r"\.[a-z0-9]{1,12}", part.extension) else ".bin"
+    quarantine_path = base_dir / f"{safe_request_id}_{safe_field_name}_{uuid.uuid4().hex}{suffix}"
+    quarantine_path.write_bytes(part.data)
+    return quarantine_path
+
+
+def cleanup_quarantined_uploads(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 def validate_upload_part(policy: UploadPolicy, part: UploadPart) -> Optional[tuple[str, str]]:
     extension = part.extension
     if extension not in policy.allowed_extensions:
@@ -166,6 +192,12 @@ def validate_upload_part(policy: UploadPolicy, part: UploadPart) -> Optional[tup
         return "magic_number_invalid", _build_magic_message(policy)
 
     return None
+
+
+def _safe_path_component(value: str, *, fallback: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    normalized = normalized.strip("._-")
+    return (normalized or fallback)[:80]
 
 
 def _is_mime_allowed(policy: UploadPolicy, extension: str, content_type: str) -> bool:
