@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from services.config_service import ConfigService
 from services.coze_client import CozeClient
+from services.prompt_pack_service import PromptBuildContext, PromptPackService
 from utils.http_client_pool import async_http_client_pool
 from utils.voice_processor import voice_processor
 from config import settings
@@ -105,6 +106,25 @@ class AIDebaterAgent:
             4: "Moon",     # 四辩：深沉
         }
         return voice_map.get(self.position, "Cherry")
+
+    def _build_prompt_pack_prompt(self, topic, stance, phase, task_prompt, context=None, knowledge_snippets=None):
+        normalized_stance = "pro" if stance == "positive" else "con"
+        role = "affirmative" if stance == "positive" else "negative"
+        mode = PromptPackService.resolve_mode_from_context(context)
+        return PromptPackService.render_agent_prompt(
+            PromptBuildContext(
+                agent="debater",
+                mode=mode,
+                phase=phase,
+                topic=topic,
+                role=role,
+                speaker_role=f"debater_{self.position}",
+                stance=normalized_stance,
+                history=list(context or []),
+                knowledge_snippets=list(knowledge_snippets or []),
+            ),
+            task_prompt=task_prompt,
+        )
     
     async def _get_config(self):
         """获取Coze配置"""
@@ -351,6 +371,7 @@ class AIDebaterAgent:
         if knowledge_base_content:
             prompt += f"\n\n参考资料：\n{knowledge_base_content}"
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "opening", prompt)
         return await self._call_agent(prompt, stream_callback=stream_callback)
     
     async def generate_question(
@@ -451,6 +472,7 @@ class AIDebaterAgent:
 6. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "questioning", prompt, context)
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_response(
@@ -488,6 +510,7 @@ class AIDebaterAgent:
 5. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "questioning", prompt, context)
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_rebuttal(
@@ -526,6 +549,7 @@ class AIDebaterAgent:
 6. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "free_debate", prompt, context)
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_closing_statement(
@@ -566,6 +590,7 @@ class AIDebaterAgent:
 5. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "closing", prompt, context)
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_free_debate_speech(
@@ -612,6 +637,7 @@ class AIDebaterAgent:
 5. 控制在{self.MAX_REPLY_CHARS}字以内
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, "free_debate", prompt, context)
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
 
     async def generate_speech_with_audio(

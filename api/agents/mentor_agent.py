@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from services.config_service import ConfigService
 from services.coze_client import CozeClient
+from services.prompt_pack_service import PromptBuildContext, PromptPackService
 from config import settings
 
 logger = get_logger(__name__)
@@ -29,6 +30,24 @@ class MentorAgent:
         self.api_token = None
         self.base_url = None
         self._coze_context: Optional[List[Dict]] = None
+
+    def _build_prompt_pack_prompt(self, topic, stance, student_role, phase, task_prompt, context=None):
+        normalized_stance = "pro" if stance == "positive" else "con"
+        role = "affirmative" if stance == "positive" else "negative"
+        mode = PromptPackService.resolve_mode_from_context(context)
+        return PromptPackService.render_agent_prompt(
+            PromptBuildContext(
+                agent="mentor",
+                mode=mode,
+                phase=phase,
+                topic=topic,
+                role=role,
+                speaker_role=student_role or "mentor",
+                stance=normalized_stance,
+                history=list(context or []),
+            ),
+            task_prompt=task_prompt,
+        )
     
     async def _get_config(self):
         """获取Coze配置"""
@@ -146,6 +165,7 @@ class MentorAgent:
 建议要具体、实用、易于理解。
 """
         
+        prompt = self._build_prompt_pack_prompt(topic, stance, student_role, current_phase, prompt, context)
         self._coze_context = context
         try:
             suggestion = await self._call_coze_bot(prompt)
@@ -196,7 +216,26 @@ class MentorAgent:
 请简洁明了地给出分析（200字以内）。
 """
         
-        analysis = await self._call_coze_bot(prompt)
+        context = [
+            {"speaker_role": "mentor", "content": speech, "phase": "report"}
+            for speech in student_speeches
+        ] + [
+            {"speaker_role": "opponent", "content": speech, "phase": "report"}
+            for speech in opponent_speeches
+        ]
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "mentor",
+            "report",
+            prompt,
+            context,
+        )
+        self._coze_context = context
+        try:
+            analysis = await self._call_coze_bot(prompt)
+        finally:
+            self._coze_context = None
         
         return {
             "analysis": analysis if analysis else "继续保持当前表现",
@@ -237,6 +276,14 @@ class MentorAgent:
 建议要具体、可操作。
 """
         
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "mentor",
+            "free_debate",
+            prompt,
+            context,
+        )
         self._coze_context = context
         try:
             suggestion = await self._call_coze_bot(prompt)
@@ -285,5 +332,29 @@ class MentorAgent:
 建议要有感染力和说服力。
 """
         
-        suggestion = await self._call_coze_bot(prompt)
+        context = [
+            {"speaker_role": "mentor", "content": argument, "phase": "closing"}
+            for argument in key_arguments
+        ]
+        if debate_summary:
+            context.append(
+                {
+                    "speaker_role": "mentor",
+                    "content": debate_summary,
+                    "phase": "closing",
+                }
+            )
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "mentor",
+            "closing",
+            prompt,
+            context,
+        )
+        self._coze_context = context
+        try:
+            suggestion = await self._call_coze_bot(prompt)
+        finally:
+            self._coze_context = None
         return suggestion if suggestion else "回顾核心论点，强调己方优势，升华主题。"

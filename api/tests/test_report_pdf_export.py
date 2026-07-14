@@ -74,14 +74,18 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
         winner="positive",
     )
 
-    pdf_bytes = await ReportGenerator.export_to_pdf_async(
-        object(),
-        debate_id=report.debate_id,
-        debate_topic=report.topic,
-        content_str="\n".join(speech["content"] for speech in report.speeches),
-        start_time=report.start_time,
-        end_time=report.end_time,
-        duration=report.duration,
-    )
+    report_data = report.to_dict()
+    assert report_data["mode"] == "competition"
+    assert report_data["report_meta"]["scoring_quality"] == "validated"
+    assert report_data["participant_scores"][0]["legacy_scores"]["overall_score"] == 80
+    assert report_data["evidence_anchors"][0]["turn_id"] == "s1"
+    assert report_data["team_summary"]["positive"]["speech_count"] == 1
+    assert report_data["statistics"]["calibration_summary"]["sample_count"] == 0
+
+    pdf_bytes = await ReportGenerator.export_to_pdf_async(object(), report)
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
+
+    cache_path = ReportGenerator._get_report_pdf_cache_path(report.debate_id)
+    assert cache_path.exists()
+    assert cache_path.read_bytes().startswith(b"%PDF")
