@@ -12,6 +12,7 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from models.kb_document import KBDocument
+from services.document_service import DocumentService
 from testing_db import create_test_engine
 from utils.security import hash_password, create_token
 
@@ -32,6 +33,15 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def use_admin_kb_test_database(monkeypatch):
+    async def skip_background_processing(self, document_id):
+        return None
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(DocumentService, "process_document", skip_background_processing)
 
 
 @pytest.fixture(scope="function")

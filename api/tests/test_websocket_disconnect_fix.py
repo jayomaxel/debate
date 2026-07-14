@@ -2,9 +2,12 @@
 测试WebSocket断开连接时的竞态条件修复
 """
 import asyncio
+import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from utils.websocket_manager import WebSocketManager
 from datetime import datetime
+
+pytestmark = pytest.mark.asyncio
 
 
 async def test_disconnect_race_condition():

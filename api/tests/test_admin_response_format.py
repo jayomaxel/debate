@@ -11,7 +11,7 @@ sys.path.insert(0, '.')
 
 from main import app
 from models.user import User
-from services.auth_service import AuthService
+from utils.security import create_token
 
 client = TestClient(app)
 
@@ -26,7 +26,7 @@ def admin_token():
     admin_user.user_type = "administrator"
     
     # 生成token
-    token = AuthService.create_access_token(
+    token = create_token(
         data={"sub": admin_user.account, "user_type": admin_user.user_type}
     )
     return token

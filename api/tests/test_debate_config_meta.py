@@ -5,6 +5,11 @@ import pytest
 
 from models.class_model import Class
 from models.debate import Debate
+from models.teaching_design import (
+    ClassTeachingDesignVersion,
+    TopicRecommendationItem,
+    TopicRecommendationRun,
+)
 from models.user import User
 from routers.teacher import UpdateDebateRequest, _config_meta_payload
 from services.debate_service import DebateService
@@ -36,6 +41,62 @@ def _teacher_class(db_session):
     db_session.add(cls)
     db_session.commit()
     return teacher, cls
+
+
+def _topic_recommendation_fixture(db_session, cls: Class, teacher: User, topic_text: str = "课堂中是否应限制生成式AI的直接代写使用？"):
+    design = ClassTeachingDesignVersion(
+        id=uuid.uuid4(),
+        class_id=cls.id,
+        created_by=teacher.id,
+        version_name="v1",
+        title="教学设计",
+        extracted_payload={
+            "course_title": "人工智能导论",
+            "chapter_theme": "生成式AI与教育",
+            "learning_objectives": ["理解生成式AI课堂应用"],
+            "knowledge_points": ["生成式AI", "课堂规范"],
+            "debate_focuses": ["应用边界"],
+        },
+        extraction_status="completed",
+        is_active=True,
+        activated_at=datetime.utcnow(),
+    )
+    db_session.add(design)
+    db_session.flush()
+
+    run = TopicRecommendationRun(
+        id=uuid.uuid4(),
+        class_id=cls.id,
+        teaching_design_version_id=design.id,
+        created_by=teacher.id,
+        mode="competition",
+        status="available",
+        teaching_design_status="available",
+        provider="fallback",
+        generation_quality="fallback",
+        preferred_count=4,
+    )
+    db_session.add(run)
+    db_session.flush()
+
+    item = TopicRecommendationItem(
+        id=uuid.uuid4(),
+        run_id=run.id,
+        candidate_order=1,
+        topic_text=topic_text,
+        course_objectives=["理解生成式AI课堂应用"],
+        knowledge_points=["生成式AI", "课堂规范"],
+        classroom_scene="课堂辩论",
+        debatability_reason="题目存在清晰的治理与开放之争。",
+        difficulty_level="medium",
+        recommendation_reason="能够直接对应课程中的应用边界讨论。",
+        source_basis=["课程：人工智能导论"],
+        quality_score=88.0,
+        quality_flags=[],
+    )
+    db_session.add(item)
+    db_session.commit()
+    return run, item
 
 
 @pytest.mark.asyncio
@@ -210,6 +271,92 @@ def test_update_debate_request_accepts_config_meta_only():
         "rounds": 6,
         "evaluation_focus": ["回应质量"],
     }
+
+
+@pytest.mark.asyncio
+async def test_create_debate_persists_topic_recommendation_provenance(db_session):
+    teacher, cls = _teacher_class(db_session)
+    run, item = _topic_recommendation_fixture(db_session, cls, teacher)
+
+    created = await DebateService.create_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic=item.topic_text,
+        duration=20,
+        config_meta={
+            "topic_recommendation_run_id": str(run.id),
+            "selected_topic_candidate_id": str(item.id),
+            "topic_source": "ai_recommended",
+        },
+    )
+
+    assert created["config_meta"]["topic_recommendation_run_id"] == str(run.id)
+    assert created["config_meta"]["selected_topic_candidate_id"] == str(item.id)
+    assert created["config_meta"]["topic_source"] == "ai_recommended"
+    assert created["config_meta"]["teaching_design_version_id"] == str(run.teaching_design_version_id)
+
+
+@pytest.mark.asyncio
+async def test_update_debate_marks_edited_topic_source_when_teacher_changes_candidate_text(db_session):
+    teacher, cls = _teacher_class(db_session)
+    run, item = _topic_recommendation_fixture(db_session, cls, teacher)
+    created = await DebateService.create_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic=item.topic_text,
+        duration=20,
+        config_meta={
+            "topic_recommendation_run_id": str(run.id),
+            "selected_topic_candidate_id": str(item.id),
+            "topic_source": "ai_recommended",
+        },
+    )
+
+    updated = await DebateService.update_debate(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        debate_id=created["id"],
+        topic=item.topic_text + "（课堂试行）",
+        config_meta={
+            "topic_recommendation_run_id": str(run.id),
+            "selected_topic_candidate_id": str(item.id),
+            "topic_source": "ai_recommended_edited",
+        },
+    )
+
+    assert updated["config_meta"]["topic_source"] == "ai_recommended_edited"
+    assert updated["config_meta"]["teaching_design_version_id"] == str(run.teaching_design_version_id)
+
+
+@pytest.mark.asyncio
+async def test_create_reservation_persists_topic_recommendation_provenance(db_session):
+    teacher, cls = _teacher_class(db_session)
+    student = _user(f"student_{uuid.uuid4().hex[:8]}", "Student", "student", cls.id)
+    db_session.add(student)
+    db_session.commit()
+    run, item = _topic_recommendation_fixture(db_session, cls, teacher)
+
+    result = await DebateService.create_reservation(
+        db=db_session,
+        teacher_id=str(teacher.id),
+        class_id=str(cls.id),
+        topic=item.topic_text,
+        duration=30,
+        config_meta={
+            "topic_recommendation_run_id": str(run.id),
+            "selected_topic_candidate_id": str(item.id),
+            "topic_source": "ai_recommended",
+        },
+        scheduled_start_time=datetime.utcnow() + timedelta(hours=1),
+        student_ids=[str(student.id)],
+    )
+
+    assert result["config_meta"]["topic_recommendation_run_id"] == str(run.id)
+    assert result["config_meta"]["selected_topic_candidate_id"] == str(item.id)
+    assert result["config_meta"]["topic_source"] == "ai_recommended"
+    assert result["config_meta"]["teaching_design_version_id"] == str(run.teaching_design_version_id)
 
 
 @pytest.mark.asyncio

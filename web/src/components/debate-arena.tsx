@@ -723,13 +723,22 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       if (!speechId) return;
       const startCount = increaseStreamEventCount(ttsStreamStartCountRef, speechId);
       const transcriptEntryId = buildTranscriptSpeechEntryId(speechId);
+      const speakerRole = toOptionalString(data?.role);
+      const streamSegmentId = toOptionalString(data?.segment_id);
+      if (speakerRole?.startsWith('ai_')) {
+        aiSpeechMetaRef.current.set(speechId, {
+          segmentId: streamSegmentId || undefined,
+          speakerRole,
+        });
+      }
       if (!autoPlayEnabledRef.current) {
         // 自动播放关闭时，整条流式 TTS 都应静默跳过，直到收到 end 事件再清理忽略标记。
         ignoredLiveTtsSpeechIdsRef.current.add(speechId);
         sendSpeechPlaybackEvent({
           status: 'skipped',
           speechId,
-          speakerRole: toOptionalString(data?.role),
+          segmentId: streamSegmentId,
+          speakerRole,
           source: 'stream',
         });
         debugStreamEvent('tts_stream_start', speechId, {

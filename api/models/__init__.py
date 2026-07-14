@@ -21,6 +21,11 @@ from .assessment import AbilityAssessment
 from .config import ModelConfig, CozeConfig, AsrConfig, TtsConfig
 from .kb_document import KBDocument, KBDocumentChunk
 from .kb_conversation import KBConversation
+from .teaching_design import (
+    ClassTeachingDesignVersion,
+    TopicRecommendationRun,
+    TopicRecommendationItem,
+)
 
 __all__ = [
     "User",
@@ -45,4 +50,7 @@ __all__ = [
     "KBDocument",
     "KBDocumentChunk",
     "KBConversation",
+    "ClassTeachingDesignVersion",
+    "TopicRecommendationRun",
+    "TopicRecommendationItem",
 ]

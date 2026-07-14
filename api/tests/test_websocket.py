@@ -84,7 +84,7 @@ def test_build_speech_payload_contains_unified_fields():
         segment_title="立论阶段",
     )
 
-    assert payload == {
+    expected_core = {
         "speech_id": speech_id,
         "message_id": speech_id,
         "user_id": "user-001",
@@ -103,6 +103,19 @@ def test_build_speech_payload_contains_unified_fields():
         "segment_id": "opening_positive_1",
         "segment_title": "立论阶段",
     }
+    for key, value in expected_core.items():
+        assert payload[key] == value
+
+    for key in [
+        "match_state",
+        "side",
+        "speaker_position",
+        "started_at",
+        "ended_at",
+        "official_duration_sec",
+        "actual_duration_sec",
+    ]:
+        assert key in payload
 
 
 def test_auto_score_filters_invalid_speeches(db_session, monkeypatch):

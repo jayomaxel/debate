@@ -4,6 +4,7 @@
 import os
 import hashlib
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +19,7 @@ from models.user import User
 from services.profile_service import ProfileService
 from services.assessment_service import AssessmentService
 from services.debate_service import DebateService
+from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
 from middleware.auth_middleware import require_student, PermissionChecker, require_role
 
@@ -550,6 +552,46 @@ def _get_cached_report_markdown(debate: Debate) -> Optional[str]:
     return None
 
 
+def _get_report_pdf_cache_response(
+    db: Session,
+    debate: Debate,
+    debate_id: str,
+) -> Optional[Response]:
+    report_meta = debate.report if isinstance(debate.report, dict) else {}
+    markdown_hash = report_meta.get("report_markdown_hash")
+    cache_is_valid = (
+        (
+            markdown_hash
+            and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+        )
+        or _legacy_pdf_cache_allowed(debate, report_meta)
+    )
+    if not cache_is_valid:
+        return None
+
+    candidate_paths = []
+    if debate.report_pdf:
+        candidate_paths.append(Path(debate.report_pdf))
+    candidate_paths.append(
+        BASE_DIR / settings.UPLOAD_DIR / "reports" / f"debate_report_{debate_id}.pdf"
+    )
+
+    for pdf_file in candidate_paths:
+        if pdf_file.exists():
+            if debate.report_pdf != pdf_file.as_posix():
+                debate.report_pdf = pdf_file.as_posix()
+                db.commit()
+            return Response(
+                content=pdf_file.read_bytes(),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"
+                },
+            )
+
+    return None
+
+
 async def _ensure_report_ready(db: Session, debate_id: str) -> Dict[str, object]:
     return await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
 
@@ -575,6 +617,14 @@ async def _get_or_generate_report_markdown(
         content_str=content_str,
     )
     if not markdown_text:
+        existing = debate.report if isinstance(debate.report, dict) else {}
+        debate.report = {
+            **existing,
+            "report_markdown_status": "failed",
+            "report_markdown_error": "empty_result",
+            "report_markdown_failed_at": datetime.utcnow().isoformat(),
+        }
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="报告生成失败",
@@ -585,6 +635,9 @@ async def _get_or_generate_report_markdown(
         **existing,
         "report_markdown": markdown_text,
         "report_markdown_hash": _compute_markdown_hash(markdown_text, _report_score_revision(debate)),
+        "report_markdown_status": "ready",
+        "report_markdown_error": None,
+        "report_markdown_generated_at": datetime.utcnow().isoformat(),
     }
     db.commit()
     return markdown_text
@@ -620,10 +673,19 @@ async def get_student_report(
             detail="报告不存在或您未参与该辩论"
         )
     
+    debate_uuid = _uuid_value(debate_id)
+    debate = db.query(Debate).filter(Debate.id == debate_uuid).first()
+    report_payload = ReportOrchestrationService.attach_report_meta(
+        db=db,
+        debate=debate,
+        report_payload=report.to_dict(),
+        teacher_view=current_user.user_type == "teacher",
+    ) if debate else report.to_dict()
+
     return {
         "code": 200,
         "message": "获取成功",
-        "data": report.to_dict()
+        "data": report_payload
     }
 
 
@@ -653,6 +715,10 @@ async def export_report_pdf(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="该辩论不存在"
         )
+
+    cached_pdf_response = _get_report_pdf_cache_response(db, debate, debate_id)
+    if cached_pdf_response is not None:
+        return cached_pdf_response
 
     await _ensure_report_ready(db, debate_id)
     db.refresh(debate)
@@ -687,26 +753,9 @@ async def export_report_pdf(
     markdown_hash = report_meta.get("report_markdown_hash")
     pdf_path = debate.report_pdf
 
-    if (
-        pdf_path
-        and os.path.exists(pdf_path)
-        and (
-            (
-                markdown_hash
-                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
-            )
-            or (
-                _legacy_pdf_cache_allowed(debate, report_meta)
-            )
-        )
-    ):
-        pdf_file = Path(pdf_path)
-        pdf_data = pdf_file.read_bytes()
-        return Response(
-            content=pdf_data,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"},
-        )
+    cached_pdf_response = _get_report_pdf_cache_response(db, debate, debate_id)
+    if cached_pdf_response is not None:
+        return cached_pdf_response
 
     start_time = debate.start_time.isoformat() if debate.start_time else None
     end_time = debate.end_time.isoformat() if debate.end_time else None
@@ -719,6 +768,14 @@ async def export_report_pdf(
         duration=debate.duration,
     )
     if not pdf_data:
+        existing = debate.report if isinstance(debate.report, dict) else {}
+        debate.report = {
+            **existing,
+            "report_pdf_status": "failed",
+            "report_pdf_error": "empty_result",
+            "report_pdf_failed_at": datetime.utcnow().isoformat(),
+        }
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="PDF生成失败"
@@ -735,6 +792,13 @@ async def export_report_pdf(
     updated_report = debate.report if isinstance(debate.report, dict) else {}
     if markdown_hash:
         updated_report = {**updated_report, "report_pdf_markdown_hash": markdown_hash}
+    updated_report = {
+        **updated_report,
+        "report_pdf_status": "ready",
+        "report_pdf_error": None,
+        "report_pdf_generated_at": datetime.utcnow().isoformat(),
+    }
+    if updated_report:
         debate.report = updated_report
 
     debate.report_pdf = target_pdf_path.as_posix()

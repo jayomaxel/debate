@@ -1,7 +1,7 @@
 """
 教师端API路由
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Literal, Optional, List
@@ -10,11 +10,15 @@ from logging_config import get_logger
 from database import get_db
 from models.user import User
 from models.document import Document
+from models.debate import Debate
 from services.class_service import ClassService
 from services.student_service import StudentService
 from services.debate_service import DebateService
+from services.report_orchestration_service import ReportOrchestrationService
 from services.analytics_service import AnalyticsService
 from services.knowledge_base import KnowledgeBase
+from services.teaching_design_service import TeachingDesignService
+from services.topic_recommendation_service import TopicRecommendationService
 from middleware.auth_middleware import require_teacher, PermissionChecker
 
 logger = get_logger(__name__)
@@ -62,6 +66,9 @@ class DebateConfigMetaRequest(BaseModel):
     support_document_ids: Optional[List[str]] = None
     domain_pack_id: Optional[str] = None
     teaching_design_version_id: Optional[str] = None
+    topic_recommendation_run_id: Optional[str] = None
+    selected_topic_candidate_id: Optional[str] = None
+    topic_source: Optional[Literal["manual", "ai_recommended", "ai_recommended_edited"]] = None
     activity_focus: Optional[DebateActivityFocusRequest] = None
 
 
@@ -139,6 +146,46 @@ class PreviewRoleAssignmentRequest(BaseModel):
     role_assignments: Optional[List[RoleAssignmentRequest]] = None
 
 
+class TeachingDesignPayloadRequest(BaseModel):
+    course_title: Optional[str] = None
+    chapter_theme: Optional[str] = None
+    learning_objectives: Optional[List[str]] = None
+    knowledge_points: Optional[List[str]] = None
+    key_difficulties: Optional[List[str]] = None
+    capability_targets: Optional[List[str]] = None
+    grade_level: Optional[str] = None
+    time_constraints: Optional[str] = None
+    debate_focuses: Optional[List[str]] = None
+    forbidden_boundaries: Optional[List[str]] = None
+    source_summary: Optional[str] = None
+
+
+class UpsertTeachingDesignRequest(BaseModel):
+    version_name: Optional[str] = None
+    title: Optional[str] = None
+    raw_text: Optional[str] = None
+    extracted_payload: TeachingDesignPayloadRequest
+
+
+class CorrectTeachingDesignRequest(BaseModel):
+    version_name: Optional[str] = None
+    title: Optional[str] = None
+    correction_notes: Optional[str] = None
+    extracted_payload: TeachingDesignPayloadRequest
+
+
+class TopicRecommendationRequest(BaseModel):
+    teaching_design_version_id: Optional[str] = None
+    mode: Optional[Literal["competition", "teaching"]] = None
+    activity_focus: Optional[DebateActivityFocusRequest] = None
+    objective: Optional[List[str]] = None
+    knowledge_points: Optional[List[str]] = None
+    support_document_ids: Optional[List[str]] = None
+    preferred_count: Optional[int] = None
+    difficulty_preference: Optional[Literal["low", "medium", "high", "mixed"]] = None
+    regenerate_from_run_id: Optional[str] = None
+
+
 def _config_meta_payload(config_meta: Optional[DebateConfigMetaRequest]) -> Optional[dict]:
     return config_meta.model_dump(exclude_none=True) if config_meta is not None else None
 
@@ -172,6 +219,17 @@ def _ensure_teacher_can_modify_debate(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权访问该辩论",
         )
+
+
+def _get_debate_or_404(db: Session, debate_id: str) -> Debate:
+    debate_uuid = DebateService._uuid_or_none(debate_id)
+    debate = db.query(Debate).filter(Debate.id == debate_uuid).first() if debate_uuid else None
+    if not debate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="辩论不存在",
+        )
+    return debate
 
 
 def _resolve_support_file_type(file: UploadFile) -> str:
@@ -261,6 +319,441 @@ async def get_teacher_dashboard(
 
 
 # ==================== 学生管理 ====================
+
+@router.get("/classes/{class_id}/teaching-design/current", summary="获取班级当前教学设计")
+async def get_current_teaching_design(
+    class_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    version = TeachingDesignService.get_active_version(db, class_id)
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": TeachingDesignService.serialize_version(version),
+    }
+
+
+@router.get("/classes/{class_id}/teaching-design/versions", summary="获取班级教学设计版本列表")
+async def list_teaching_design_versions(
+    class_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": TeachingDesignService.list_versions(db, class_id),
+    }
+
+
+@router.get("/classes/{class_id}/teaching-design/versions/{version_id}", summary="获取教学设计版本详情")
+async def get_teaching_design_version_detail(
+    class_id: str,
+    version_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    version = TeachingDesignService.get_version_by_id(db, version_id)
+    if version is None or str(version.class_id) != str(class_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="教学设计版本不存在",
+        )
+
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": TeachingDesignService.serialize_version(version),
+    }
+
+
+@router.post("/classes/{class_id}/teaching-design/versions/{version_id}/activate", summary="激活教学设计版本")
+async def activate_teaching_design_version(
+    class_id: str,
+    version_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TeachingDesignService.activate_version(
+            db=db,
+            class_id=class_id,
+            version_id=version_id,
+        )
+        return {
+            "code": 200,
+            "message": "激活成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/classes/{class_id}/teaching-design/upload", summary="上传并抽取班级教学设计")
+async def upload_teaching_design(
+    class_id: str,
+    file: UploadFile = File(...),
+    version_name: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        file_type = TeachingDesignService.resolve_upload_file_type(
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+        file_data = await file.read()
+        result = TeachingDesignService.upload_and_extract_current_version(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            file_data=file_data,
+            filename=file.filename or "teaching-design",
+            file_type=file_type,
+            version_name=version_name,
+            title=title,
+        )
+        return {
+            "code": 200,
+            "message": "上传成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.put("/classes/{class_id}/teaching-design/current", summary="保存班级当前教学设计")
+async def upsert_current_teaching_design(
+    class_id: str,
+    request: UpsertTeachingDesignRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TeachingDesignService.upsert_current_version(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            version_name=request.version_name,
+            title=request.title,
+            raw_text=request.raw_text,
+            extracted_payload=request.extracted_payload.model_dump(exclude_none=True),
+        )
+        return {
+            "code": 200,
+            "message": "保存成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/classes/{class_id}/teaching-design/versions/{version_id}/correct", summary="基于旧版本生成校正版教学设计")
+async def create_corrected_teaching_design_version(
+    class_id: str,
+    version_id: str,
+    request: CorrectTeachingDesignRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TeachingDesignService.create_corrected_version(
+            db=db,
+            class_id=class_id,
+            version_id=version_id,
+            created_by=str(current_user.id),
+            extracted_payload=request.extracted_payload.model_dump(exclude_none=True),
+            version_name=request.version_name,
+            title=request.title,
+            correction_notes=request.correction_notes,
+        )
+        return {
+            "code": 200,
+            "message": "校正成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/classes/{class_id}/topic-recommendations", summary="生成候选辩题")
+async def generate_topic_recommendations(
+    class_id: str,
+    request: TopicRecommendationRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = await TopicRecommendationService.generate_recommendations(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            teaching_design_version_id=request.teaching_design_version_id,
+            mode=request.mode,
+            activity_focus=request.activity_focus.model_dump(exclude_none=True) if request.activity_focus else None,
+            objective=request.objective,
+            knowledge_points=request.knowledge_points,
+            support_document_ids=request.support_document_ids,
+            preferred_count=request.preferred_count,
+            difficulty_preference=request.difficulty_preference,
+            regenerate_from_run_id=request.regenerate_from_run_id,
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/classes/{class_id}/topic-recommendations", summary="获取班级候选辩题推荐历史")
+async def list_topic_recommendation_runs(
+    class_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TopicRecommendationService.list_runs(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            limit=limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/classes/{class_id}/topic-recommendations/analytics", summary="获取班级候选辩题推荐统计")
+async def get_topic_recommendation_analytics(
+    class_id: str,
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TopicRecommendationService.get_class_analytics(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/classes/{class_id}/topic-recommendations/dashboard", summary="获取班级候选辩题推荐看板")
+async def get_topic_recommendation_dashboard(
+    class_id: str,
+    recent_limit: int = Query(5, ge=1, le=20),
+    leaderboard_limit: int = Query(5, ge=1, le=20),
+    observation_limit: int = Query(5, ge=1, le=20),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TopicRecommendationService.get_dashboard_payload(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            recent_limit=recent_limit,
+            date_from=date_from,
+            date_to=date_to,
+            leaderboard_limit=leaderboard_limit,
+            observation_limit=observation_limit,
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/classes/{class_id}/topic-recommendations/version-comparison", summary="获取教学设计版本对比摘要")
+async def get_topic_recommendation_version_comparison(
+    class_id: str,
+    current_version_id: Optional[str] = Query(None),
+    previous_version_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+
+    try:
+        result = TopicRecommendationService.get_version_comparison_payload(
+            db=db,
+            class_id=class_id,
+            created_by=str(current_user.id),
+            current_version_id=current_version_id,
+            previous_version_id=previous_version_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": result,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/topic-recommendations/{run_id}", summary="获取候选辩题推荐结果")
+async def get_topic_recommendation_run(
+    run_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    result = TopicRecommendationService.get_run(
+        db=db,
+        run_id=run_id,
+        created_by=str(current_user.id),
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="候选辩题推荐结果不存在",
+        )
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": result,
+    }
+
 
 @router.post("/students", summary="添加学生")
 async def add_student(
@@ -460,6 +953,84 @@ async def get_debate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+@router.get("/debates/{debate_id}/report", summary="获取教师端辩论报告")
+async def get_teacher_report(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    _get_debate_or_404(db, debate_id)
+    try:
+        result = await ReportOrchestrationService.build_teacher_report_payload(
+            db=db,
+            debate_id=debate_id,
+            teacher_id=str(current_user.id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": result,
+    }
+
+
+@router.get("/debates/{debate_id}/teaching-summary", summary="获取教师复盘摘要")
+async def get_teacher_teaching_summary(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    _get_debate_or_404(db, debate_id)
+
+    try:
+        result = ReportOrchestrationService.build_teaching_summary(db=db, debate_id=debate_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": result,
+    }
+
+
+@router.post("/debates/{debate_id}/report/recalculate", summary="轻量重算教师端辩论报告")
+async def recalculate_teacher_report(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    _get_debate_or_404(db, debate_id)
+
+    try:
+        result = await ReportOrchestrationService.recalculate_teacher_report(
+            db=db,
+            debate_id=debate_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+    return {
+        "code": 200,
+        "message": "重算已触发",
+        "data": result,
+    }
 
 
 @router.get("/debates", summary="获取辩论列表")

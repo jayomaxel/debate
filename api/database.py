@@ -3,6 +3,7 @@ Database session and optional Redis helpers.
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Generator
 
 from sqlalchemy import create_engine, inspect, text
@@ -92,9 +93,14 @@ def get_redis() -> Any:
 
 
 def init_db():
-    """Create tables and apply lightweight compatibility fixes."""
+    """Prepare the database schema for the current environment."""
     if engine is None:
         init_engine()
+
+    if settings.IS_PRODUCTION:
+        _ensure_production_schema_at_head()
+        return
+
     Base.metadata.create_all(bind=engine)
     _ensure_user_avatar_columns()
     _ensure_speech_columns()
@@ -102,6 +108,40 @@ def init_db():
     _ensure_debate_report_columns()
     _ensure_debate_participation_columns()
     _ensure_lobby_reservation_columns()
+
+
+def _ensure_production_schema_at_head():
+    """Fail fast in production unless Alembic has already migrated the DB."""
+    try:
+        from alembic.config import Config
+        from alembic.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        raise RuntimeError(
+            "Alembic is required to validate production database migrations."
+        ) from exc
+
+    if engine is None:
+        raise RuntimeError("Database engine is not initialized.")
+
+    alembic_cfg = Config()
+    alembic_cfg.set_main_option(
+        "script_location",
+        str(Path(__file__).resolve().parent / "alembic"),
+    )
+    expected_heads = set(ScriptDirectory.from_config(alembic_cfg).get_heads())
+
+    with engine.connect() as connection:
+        current_heads = set(MigrationContext.configure(connection).get_current_heads())
+
+    if current_heads != expected_heads:
+        current = ", ".join(sorted(current_heads)) if current_heads else "<none>"
+        expected = ", ".join(sorted(expected_heads)) if expected_heads else "<none>"
+        raise RuntimeError(
+            "Production database is not at the Alembic head revision. "
+            f"current={current}; expected={expected}. "
+            "Run `alembic upgrade head` before starting the API."
+        )
 
 
 def _ensure_user_avatar_columns():

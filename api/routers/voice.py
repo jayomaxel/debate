@@ -10,6 +10,7 @@ from datetime import datetime
 import uuid
 import os
 
+from config import settings
 from logging_config import get_logger
 from database import get_db
 from middleware.auth_middleware import verify_token_middleware
@@ -18,6 +19,26 @@ from utils.voice_processor import voice_processor
 from services.config_service import ConfigService
 
 logger = get_logger(__name__)
+
+ALLOWED_AUDIO_FORMATS = {"webm", "wav", "mp3", "m4a", "ogg", "pcm"}
+
+
+def _normalize_audio_format(audio_format: Optional[str]) -> str:
+    normalized = (audio_format or "webm").strip().lower().lstrip(".")
+    if normalized not in ALLOWED_AUDIO_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported audio format",
+        )
+    return normalized
+
+
+def _validate_audio_size(audio_data: bytes) -> None:
+    if len(audio_data or b"") > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio upload exceeds the configured size limit",
+        )
 
 router = APIRouter(prefix="/api/voice", tags=["语音"])
 
@@ -44,11 +65,13 @@ async def transcribe_audio_file(
 ):
     try:
         audio_data = await file.read()
+        _validate_audio_size(audio_data)
         if not audio_format:
             if file.filename and "." in file.filename:
                 audio_format = file.filename.rsplit(".", 1)[-1].lower()
             else:
                 audio_format = "webm"
+        audio_format = _normalize_audio_format(audio_format)
 
         result = await voice_processor.transcribe_audio(
             audio_data=audio_data,
@@ -75,9 +98,11 @@ async def transcribe_audio_base64(
 ):
     try:
         audio_data = voice_processor.decode_audio_base64(request.audio_base64)
+        _validate_audio_size(audio_data)
+        audio_format = _normalize_audio_format(request.audio_format)
         result = await voice_processor.transcribe_audio(
             audio_data=audio_data,
-            audio_format=request.audio_format,
+            audio_format=audio_format,
             language=request.language,
             db=db,
         )

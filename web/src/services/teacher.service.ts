@@ -4,6 +4,7 @@
  */
 
 import { api } from '../lib/api';
+import type { DebateReport } from './student.service';
 
 export interface DebateGroupingItem {
   user_id: string;
@@ -210,6 +211,97 @@ export interface ConfigData {
   coze: CozeConfig | null;
 }
 
+export type TeacherReportQuality = 'validated' | 'partial' | 'fallback' | string;
+
+export interface TeacherScoreStatus {
+  ready: boolean;
+  generated?: boolean;
+  speech_count: number;
+  scored_count: number;
+  missing_score_count: number;
+  score_revision?: number;
+  score_generation_mode?: string | null;
+  score_fallback_detected?: boolean;
+  report_status?: string | null;
+  report_quality?: TeacherReportQuality | null;
+}
+
+export interface TeacherReportMeta {
+  report_status?: string | null;
+  report_quality?: TeacherReportQuality | null;
+  report_markdown_status?: string | null;
+  report_markdown_error?: string | null;
+  report_markdown_cache_status?: string | null;
+  report_markdown_cached?: boolean;
+  report_pdf_status?: string | null;
+  report_pdf_error?: string | null;
+  report_pdf_cache_status?: string | null;
+  report_pdf_cached?: boolean;
+  score_speech_count?: number;
+  score_ready_count?: number;
+  score_missing_count?: number;
+  score_fallback_detected?: boolean;
+  score_fallback_count?: number;
+  score_generation_mode?: string | null;
+  score_revision?: number;
+  quality_flags?: string[];
+  report_quality_supported_values?: string[];
+  legacy_report_quality?: string | null;
+  recalculated_at?: string | null;
+  generated_at?: string | null;
+}
+
+export interface TeacherSpeechAnchor {
+  anchor_id: string;
+  speech_id?: string | null;
+  sequence: number;
+  speaker_name?: string | null;
+  speaker_role?: string | null;
+  phase?: string | null;
+  timestamp?: string | null;
+  summary?: string | null;
+  overall_score?: number | null;
+  score_status?: string | null;
+}
+
+export interface TeachingSummaryItem {
+  type?: string;
+  title?: string;
+  detail?: string;
+  focus?: string;
+  reason?: string;
+  anchor_id?: string;
+  speech_id?: string | null;
+  phase?: string | null;
+  speaker_name?: string | null;
+  overall_score?: number | null;
+}
+
+export interface TeachingSummaryResult {
+  debate_id: string;
+  common_issues: TeachingSummaryItem[];
+  turning_points: TeachingSummaryItem[];
+  next_training_focus: TeachingSummaryItem[];
+  score_status?: TeacherScoreStatus;
+  report_quality?: TeacherReportQuality;
+  report_meta?: TeacherReportMeta;
+  generated_at?: string;
+}
+
+export interface TeacherReportPayload {
+  report: DebateReport;
+  report_meta: TeacherReportMeta;
+  speech_anchors: TeacherSpeechAnchor[];
+}
+
+export interface TeacherRecalculateReportResponse {
+  debate_id: string;
+  mode: 'lightweight' | string;
+  score_status?: TeacherScoreStatus;
+  report_meta: TeacherReportMeta;
+  teaching_summary: TeachingSummaryResult;
+}
+
 class TeacherService {
   static async createClass(params: CreateClassParams): Promise<Class> {
     try {
@@ -400,6 +492,39 @@ class TeacherService {
       );
     } catch (error) {
       console.error('[TeacherService] Delete debate support document failed:', error);
+      throw error;
+    }
+  }
+
+  static async getReport(debateId: string): Promise<TeacherReportPayload> {
+    try {
+      return await api.get<TeacherReportPayload>(`/api/teacher/debates/${debateId}/report`);
+    } catch (error) {
+      console.error('[TeacherService] Get report failed:', error);
+      throw error;
+    }
+  }
+
+  static async getTeachingSummary(debateId: string): Promise<TeachingSummaryResult> {
+    try {
+      return await api.get<TeachingSummaryResult>(
+        `/api/teacher/debates/${debateId}/teaching-summary`
+      );
+    } catch (error) {
+      console.error('[TeacherService] Get teaching summary failed:', error);
+      throw error;
+    }
+  }
+
+  static async recalculateReport(
+    debateId: string
+  ): Promise<TeacherRecalculateReportResponse> {
+    try {
+      return await api.post<TeacherRecalculateReportResponse>(
+        `/api/teacher/debates/${debateId}/report/recalculate`
+      );
+    } catch (error) {
+      console.error('[TeacherService] Recalculate report failed:', error);
       throw error;
     }
   }

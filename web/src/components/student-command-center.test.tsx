@@ -23,6 +23,7 @@ vi.mock('@/hooks/use-student-assessment', () => ({
 vi.mock('@/services/student.service', () => ({
   default: {
     getHistory: vi.fn(),
+    getMyReservations: vi.fn(),
   },
 }));
 
@@ -73,6 +74,12 @@ describe('StudentCommandCenter', () => {
       total: 0,
       page: 1,
       page_size: 8,
+    });
+    (StudentService.getMyReservations as any).mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 10,
     });
 
     shouldShowPromptMock.mockReturnValue(true);

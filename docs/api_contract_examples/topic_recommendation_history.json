@@ -1,0 +1,44 @@
+{
+  "code": 200,
+  "message": "获取成功",
+  "data": [
+    {
+      "run_id": "11111111-1111-1111-1111-111111111111",
+      "recommendation_run_id": "11111111-1111-1111-1111-111111111111",
+      "parent_run_id": null,
+      "status": "ready",
+      "legacy_status": "ready",
+      "teaching_design_status": "available",
+      "teaching_design_version_id": "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+      "mode": "competition",
+      "activity_focus": {
+        "chapter_focus": "生成式AI课堂应用",
+        "training_focus": "价值权衡",
+        "classroom_scene": "课堂辩论"
+      },
+      "generation_source": "llm",
+      "provider": "llm",
+      "generation_quality": "validated",
+      "retry_count": 0,
+      "preferred_count": 4,
+      "difficulty_preference": "medium",
+      "warnings": [],
+      "generated_at": "2026-01-08T10:00:00",
+      "candidate_count": 4,
+      "candidate_topics": [
+        "生成式AI进入课堂后，教师评价应更看重过程思辨还是结果产出？",
+        "在生成式AI辅助学习中，课堂更应优先培养工具使用效率还是独立论证能力？",
+        "围绕生成式AI教学应用，课堂规则应优先强调开放探索还是使用约束？"
+      ],
+      "adoption_summary": {
+        "total_adoptions": 3,
+        "direct_adoptions": 2,
+        "edited_adoptions": 1,
+        "debate_adoptions": 2,
+        "reservation_adoptions": 1,
+        "distinct_candidates_adopted": 2,
+        "last_adopted_at": "2026-01-10T10:00:00"
+      }
+    }
+  ]
+}

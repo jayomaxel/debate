@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StudentCompetitionHub from './student-competition-hub';
 import StudentService from '@/services/student.service';
 
+const toastMock = vi.fn();
+
 vi.mock('@/hooks/use-page-activity-refresh', () => ({
   usePageActivityRefresh: vi.fn(),
 }));
 
 vi.mock('@/hooks/use-toast', () => ({
   useToast: () => ({
-    toast: vi.fn(),
+    toast: toastMock,
   }),
 }));
 
@@ -53,6 +55,8 @@ describe('StudentCompetitionHub', () => {
         invitation_code: 'ABC123',
         created_at: '2026-05-03T00:00:00Z',
         is_joined: true,
+        mode: 'teacher_assigned',
+        room_source: 'teacher_created',
       },
     ] as any);
 

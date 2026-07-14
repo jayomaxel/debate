@@ -17,8 +17,8 @@ RUN pnpm install --frozen-lockfile
 # 再复制前端源码，避免源码改动导致依赖层缓存失效
 COPY web/ .
 
-# 构建应用（直接使用 vite build，跳过类型检查）
-RUN pnpm exec vite build
+# 构建应用（执行 TypeScript 检查和 Vite 构建）
+RUN pnpm run build
 
 # 生产阶段
 FROM nginx:alpine

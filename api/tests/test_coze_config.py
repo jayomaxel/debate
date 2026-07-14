@@ -32,7 +32,7 @@ def test_coze_config_creation(db_session):
     """Test that CozeConfig can be created with all required fields"""
     config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="coze_agent_123",
+        debater_1_bot_id="coze_agent_123",
         api_token="test_token_abc",
         parameters={"temperature": 0.8, "max_length": 1000}
     )
@@ -42,11 +42,11 @@ def test_coze_config_creation(db_session):
     
     # Query back and verify
     retrieved_config = db_session.query(CozeConfig).filter(
-        CozeConfig.agent_id == "coze_agent_123"
+        CozeConfig.debater_1_bot_id == "coze_agent_123"
     ).first()
     
     assert retrieved_config is not None
-    assert retrieved_config.agent_id == "coze_agent_123"
+    assert retrieved_config.debater_1_bot_id == "coze_agent_123"
     assert retrieved_config.api_token == "test_token_abc"
     assert retrieved_config.parameters == {"temperature": 0.8, "max_length": 1000}
     assert retrieved_config.created_at is not None
@@ -57,7 +57,7 @@ def test_coze_config_default_parameters(db_session):
     """Test that CozeConfig uses default empty dict for parameters"""
     config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="coze_agent_456",
+        debater_1_bot_id="coze_agent_456",
         api_token="test_token_def"
     )
     
@@ -65,7 +65,7 @@ def test_coze_config_default_parameters(db_session):
     db_session.commit()
     
     retrieved_config = db_session.query(CozeConfig).filter(
-        CozeConfig.agent_id == "coze_agent_456"
+        CozeConfig.debater_1_bot_id == "coze_agent_456"
     ).first()
     
     assert retrieved_config.parameters == {}  # Default empty dict
@@ -75,7 +75,12 @@ def test_coze_config_get_default_method(db_session):
     """Test that get_default() class method returns default configuration"""
     default_config = CozeConfig.get_default()
     
-    assert default_config.agent_id == ""
+    assert default_config.debater_1_bot_id == ""
+    assert default_config.debater_2_bot_id == ""
+    assert default_config.debater_3_bot_id == ""
+    assert default_config.debater_4_bot_id == ""
+    assert default_config.judge_bot_id == ""
+    assert default_config.mentor_bot_id == ""
     assert default_config.api_token == ""
     assert default_config.parameters == {}
 
@@ -84,7 +89,7 @@ def test_coze_config_update(db_session):
     """Test that CozeConfig can be updated"""
     config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="coze_agent_789",
+        debater_1_bot_id="coze_agent_789",
         api_token="old_token",
         parameters={"setting1": "value1"}
     )
@@ -121,7 +126,7 @@ def test_coze_config_parameters_json(db_session):
     
     config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="coze_agent_complex",
+        debater_1_bot_id="coze_agent_complex",
         api_token="test_token",
         parameters=complex_params
     )
@@ -130,7 +135,7 @@ def test_coze_config_parameters_json(db_session):
     db_session.commit()
     
     retrieved_config = db_session.query(CozeConfig).filter(
-        CozeConfig.agent_id == "coze_agent_complex"
+        CozeConfig.debater_1_bot_id == "coze_agent_complex"
     ).first()
     
     assert retrieved_config.parameters == complex_params
@@ -143,7 +148,7 @@ def test_coze_config_repr(db_session):
     """Test that __repr__ method returns expected string"""
     config = CozeConfig(
         id=uuid.uuid4(),
-        agent_id="test-agent",
+        debater_1_bot_id="test-agent",
         api_token="test_token"
     )
     
@@ -153,23 +158,20 @@ def test_coze_config_repr(db_session):
 
 
 def test_coze_config_required_fields(db_session):
-    """Test that CozeConfig requires agent_id and api_token"""
-    # Missing agent_id
-    with pytest.raises(Exception):
-        config = CozeConfig(
-            id=uuid.uuid4(),
-            api_token="test_token"
-        )
-        db_session.add(config)
-        db_session.commit()
-    
-    db_session.rollback()
-    
+    """Test that CozeConfig requires api_token and defaults bot IDs."""
+    config = CozeConfig(
+        id=uuid.uuid4(),
+        api_token="test_token"
+    )
+    db_session.add(config)
+    db_session.commit()
+    assert config.debater_1_bot_id == ""
+
     # Missing api_token
     with pytest.raises(Exception):
         config = CozeConfig(
             id=uuid.uuid4(),
-            agent_id="test_agent"
+            debater_1_bot_id="test_agent"
         )
         db_session.add(config)
         db_session.commit()

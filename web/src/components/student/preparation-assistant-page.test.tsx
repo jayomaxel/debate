@@ -161,8 +161,7 @@ describe('PreparationAssistantPage', () => {
 
     expect(await screen.findByText('AI辩题资料.pdf')).toBeInTheDocument();
 
-    const downloadButtons = screen.getAllByRole('button');
-    fireEvent.click(downloadButtons[downloadButtons.length - 1]);
+    fireEvent.click(screen.getByRole('button', { name: '下载 AI辩题资料.pdf' }));
 
     await waitFor(() => {
       expect(StudentService.downloadKBDocument).toHaveBeenCalledWith(

@@ -261,7 +261,9 @@ async def get_model_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             parameters=config.parameters,
@@ -325,7 +327,9 @@ async def update_model_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             parameters=config.parameters,
@@ -367,7 +371,9 @@ async def get_asr_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at,
@@ -409,7 +415,9 @@ async def update_asr_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at,
@@ -440,7 +448,9 @@ async def get_tts_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at,
@@ -482,7 +492,9 @@ async def update_tts_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at,
@@ -526,7 +538,9 @@ async def get_coze_config(
             debater_4_bot_id=config.debater_4_bot_id,
             judge_bot_id=config.judge_bot_id,
             mentor_bot_id=config.mentor_bot_id,
-            api_token=config.api_token,
+            api_token=_masked_secret_value(config.api_token),
+            api_token_configured=_mask_secret(config.api_token)[0],
+            api_token_masked=_mask_secret(config.api_token)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at
@@ -591,7 +605,9 @@ async def update_coze_config(
             debater_4_bot_id=config.debater_4_bot_id,
             judge_bot_id=config.judge_bot_id,
             mentor_bot_id=config.mentor_bot_id,
-            api_token=config.api_token,
+            api_token=_masked_secret_value(config.api_token),
+            api_token_configured=_mask_secret(config.api_token)[0],
+            api_token_masked=_mask_secret(config.api_token)[1],
             parameters=config.parameters,
             created_at=config.created_at,
             updated_at=config.updated_at
@@ -641,7 +657,9 @@ async def get_vector_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             embedding_dimension=config.embedding_dimension,
             parameters=config.parameters,
             created_at=config.created_at,
@@ -701,7 +719,9 @@ async def update_vector_config(
             id=str(config.id),
             model_name=config.model_name,
             api_endpoint=config.api_endpoint,
-            api_key=config.api_key,
+            api_key=_masked_secret_value(config.api_key),
+            api_key_configured=_mask_secret(config.api_key)[0],
+            api_key_masked=_mask_secret(config.api_key)[1],
             embedding_dimension=config.embedding_dimension,
             parameters=config.parameters,
             created_at=config.created_at,
@@ -723,6 +743,19 @@ async def update_vector_config(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="更新向量配置失败"
         )
+
+
+def _mask_secret(secret: Optional[str]) -> tuple[bool, Optional[str]]:
+    value = (secret or "").strip()
+    if not value:
+        return False, None
+    if len(value) <= 8:
+        return True, "****"
+    return True, f"{value[:4]}****{value[-4:]}"
+
+
+def _masked_secret_value(secret: Optional[str]) -> str:
+    return _mask_secret(secret)[1] or ""
 
 
 def _mask_password(password: Optional[str]) -> tuple[bool, Optional[str]]:

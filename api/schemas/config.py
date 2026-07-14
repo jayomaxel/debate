@@ -129,6 +129,8 @@ class ModelConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    api_key_configured: bool = False
+    api_key_masked: Optional[str] = None
     temperature: float = Field(ge=0.0, le=2.0, description="Temperature for model sampling")
     max_tokens: int = Field(gt=0, description="Maximum tokens for model output")
     parameters: Dict[str, Any] = Field(default_factory=dict)
@@ -186,6 +188,8 @@ class CozeConfigResponse(BaseModel):
     mentor_bot_id: str
     # API Token
     api_token: str
+    api_token_configured: bool = False
+    api_token_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -286,6 +290,8 @@ class AsrConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    api_key_configured: bool = False
+    api_key_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -306,6 +312,8 @@ class TtsConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    api_key_configured: bool = False
+    api_key_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -345,6 +353,8 @@ class VectorConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    api_key_configured: bool = False
+    api_key_masked: Optional[str] = None
     embedding_dimension: int = Field(gt=0, description="向量维度")
     parameters: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

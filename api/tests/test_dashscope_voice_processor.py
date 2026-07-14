@@ -3,6 +3,7 @@ import pytest
 import shutil
 
 from utils.voice_processor import voice_processor
+from utils.http_client_pool import async_http_client_pool
 from config import settings
 
 
@@ -28,6 +29,9 @@ class DummyClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
+    async def aclose(self):
+        return None
+
     async def post(self, url, json=None, headers=None, files=None, data=None):
         self.calls.append(("POST", url, json, headers))
         return self._responses.pop(0)
@@ -35,6 +39,13 @@ class DummyClient:
     async def get(self, url, headers=None):
         self.calls.append(("GET", url, None, headers))
         return self._responses.pop(0)
+
+
+@pytest.fixture(autouse=True)
+def clear_http_client_pool():
+    asyncio.run(async_http_client_pool.aclose_all())
+    yield
+    asyncio.run(async_http_client_pool.aclose_all())
 
 
 def test_dashscope_tts_returns_wav_bytes(monkeypatch):

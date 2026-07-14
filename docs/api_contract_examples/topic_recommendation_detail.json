@@ -1,0 +1,119 @@
+{
+  "code": 200,
+  "message": "获取成功",
+  "data": {
+    "run_id": "11111111-1111-1111-1111-111111111111",
+    "recommendation_run_id": "11111111-1111-1111-1111-111111111111",
+    "status": "ready",
+    "legacy_status": "ready",
+    "teaching_design_status": "available",
+    "teaching_design_version_id": "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+    "mode": "competition",
+    "activity_focus": {
+      "chapter_focus": "生成式AI课堂应用",
+      "training_focus": "价值权衡",
+      "classroom_scene": "课堂辩论"
+    },
+    "generation_source": "llm",
+    "provider": "llm",
+    "generation_quality": "validated",
+    "retry_count": 0,
+    "warnings": [],
+    "generated_at": "2026-01-08T10:00:00",
+    "adoption_summary": {
+      "total_adoptions": 3,
+      "direct_adoptions": 2,
+      "edited_adoptions": 1,
+      "debate_adoptions": 2,
+      "reservation_adoptions": 1,
+      "distinct_candidates_adopted": 2,
+      "last_adopted_at": "2026-01-10T10:00:00"
+    },
+    "candidates": [
+      {
+        "candidate_id": "c1111111-1111-1111-1111-111111111111",
+        "candidate_order": 1,
+        "topic_text": "生成式AI进入课堂后，教师评价应更看重过程思辨还是结果产出？",
+        "mapped_course_objectives": [
+          "理解生成式AI的课堂应用价值"
+        ],
+        "mapped_knowledge_points": [
+          "课堂评价",
+          "生成式AI"
+        ],
+        "recommended_classroom_scene": "课堂辩论",
+        "evidence_basis": [
+          "课程：人工智能导论",
+          "章节：生成式AI与教育"
+        ],
+        "course_objectives": [
+          "理解生成式AI的课堂应用价值"
+        ],
+        "knowledge_points": [
+          "课堂评价",
+          "生成式AI"
+        ],
+        "classroom_scene": "课堂辩论",
+        "debatability_reason": "该题存在清晰的评价导向分歧。",
+        "difficulty_level": "medium",
+        "recommendation_reason": "能直接对应本章的评价与应用边界讨论。",
+        "source_basis": [
+          "课程：人工智能导论",
+          "章节：生成式AI与教育"
+        ],
+        "quality_score": 88.0,
+        "quality_flags": [],
+        "adoption_stats": {
+          "is_adopted": true,
+          "total_adoptions": 2,
+          "direct_adoptions": 1,
+          "edited_adoptions": 1,
+          "debate_adoptions": 1,
+          "reservation_adoptions": 1,
+          "last_adopted_at": "2026-01-10T10:00:00"
+        }
+      },
+      {
+        "candidate_id": "c2222222-2222-2222-2222-222222222222",
+        "candidate_order": 2,
+        "topic_text": "在生成式AI辅助学习中，课堂更应优先培养工具使用效率还是独立论证能力？",
+        "mapped_course_objectives": [
+          "训练立场论证"
+        ],
+        "mapped_knowledge_points": [
+          "学习迁移",
+          "生成式AI"
+        ],
+        "recommended_classroom_scene": "课堂辩论",
+        "evidence_basis": [
+          "课程：人工智能导论"
+        ],
+        "course_objectives": [
+          "训练立场论证"
+        ],
+        "knowledge_points": [
+          "学习迁移",
+          "生成式AI"
+        ],
+        "classroom_scene": "课堂辩论",
+        "debatability_reason": "该题具有清晰的能力培养取向冲突。",
+        "difficulty_level": "medium",
+        "recommendation_reason": "适合连接课程知识与能力训练目标。",
+        "source_basis": [
+          "课程：人工智能导论"
+        ],
+        "quality_score": 86.0,
+        "quality_flags": [],
+        "adoption_stats": {
+          "is_adopted": false,
+          "total_adoptions": 0,
+          "direct_adoptions": 0,
+          "edited_adoptions": 0,
+          "debate_adoptions": 0,
+          "reservation_adoptions": 0,
+          "last_adopted_at": null
+        }
+      }
+    ]
+  }
+}

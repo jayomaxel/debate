@@ -30,6 +30,8 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(autouse=True)
 def setup_database():
+    app.dependency_overrides[get_db] = override_get_db
+    drop_test_schema(engine)
     create_test_schema(engine)
     yield
     drop_test_schema(engine)

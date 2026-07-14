@@ -1,10 +1,24 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import StudentService, { type DebateReport } from '../services/student.service';
+import TeacherService, {
+  type TeacherReportMeta,
+  type TeacherSpeechAnchor,
+  type TeachingSummaryResult,
+} from '../services/teacher.service';
 import DebateReportOverview from './debate-report-overview';
 import { DebateReportDetail } from './debate-report-detail';
-import { ChevronLeft, Download, Loader2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronLeft,
+  Download,
+  Loader2,
+  MapPinned,
+  RefreshCw,
+  Target,
+} from 'lucide-react';
 import { useAuth } from '../store/auth.context';
 
 interface DebateReportPageProps {
@@ -13,6 +27,38 @@ interface DebateReportPageProps {
   onBack: () => void;
   studentMode?: boolean;
 }
+
+const getQualityLabel = (quality?: string | null) => {
+  if (quality === 'validated') return '报告已校验';
+  if (quality === 'partial') return '报告部分可用';
+  if (quality === 'fallback') return '报告降级可用';
+  return '报告状态待确认';
+};
+
+const getQualityTone = (quality?: string | null) => {
+  if (quality === 'validated') {
+    return {
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+      icon: CheckCircle2,
+    };
+  }
+  if (quality === 'fallback') {
+    return {
+      className: 'border-amber-200 bg-amber-50 text-amber-950',
+      icon: AlertTriangle,
+    };
+  }
+  return {
+    className: 'border-sky-200 bg-sky-50 text-sky-950',
+    icon: AlertTriangle,
+  };
+};
+
+const formatMetaStatus = (value?: string | number | boolean | null) => {
+  if (value === undefined || value === null || value === '') return '-';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  return String(value);
+};
 
 const DebateReportPage: React.FC<DebateReportPageProps> = ({
   debateId,
@@ -27,12 +73,24 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
   const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
   const [view, setView] = useState<'overview' | 'detail'>('overview');
   const [selectedParticipantId, setSelectedParticipantId] = useState('all');
+  const [reportMeta, setReportMeta] = useState<TeacherReportMeta | null>(null);
+  const [speechAnchors, setSpeechAnchors] = useState<TeacherSpeechAnchor[]>([]);
+  const [teachingSummary, setTeachingSummary] = useState<TeachingSummaryResult | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
+  const [pendingAnchorId, setPendingAnchorId] = useState<string | undefined>();
 
   useEffect(() => {
     const fetchReport = async () => {
       try {
         setLoading(true);
-        const data = await StudentService.getReport(debateId);
+        const data = studentMode
+          ? await StudentService.getReport(debateId)
+          : await TeacherService.getReport(debateId).then((payload) => {
+              setReportMeta(payload.report_meta || null);
+              setSpeechAnchors(payload.speech_anchors || []);
+              return payload.report;
+            });
         setReport(data);
         const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
         setSelectedParticipantId(
@@ -50,6 +108,37 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
     };
     fetchReport();
   }, [debateId, studentMode, toast, user?.id]);
+
+  const reloadTeacherReport = useCallback(async () => {
+    const payload = await TeacherService.getReport(debateId);
+    setReportMeta(payload.report_meta || null);
+    setSpeechAnchors(payload.speech_anchors || []);
+    setReport(payload.report);
+    return payload.report;
+  }, [debateId]);
+
+  useEffect(() => {
+    if (studentMode) return;
+    const fetchTeachingSummary = async () => {
+      try {
+        setSummaryLoading(true);
+        const summary = await TeacherService.getTeachingSummary(debateId);
+        setTeachingSummary(summary);
+        if (summary.report_meta) {
+          setReportMeta(summary.report_meta);
+        }
+      } catch (error: any) {
+        toast({
+          title: '复盘摘要加载失败',
+          description: error?.message || '无法加载教师复盘摘要',
+          variant: 'destructive',
+        });
+      } finally {
+        setSummaryLoading(false);
+      }
+    };
+    fetchTeachingSummary();
+  }, [debateId, studentMode, toast]);
 
   const handleDownload = async (format: 'pdf' | 'excel') => {
     try {
@@ -69,6 +158,37 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
       setExporting(null);
     }
   };
+
+  const handleRecalculate = async () => {
+    if (studentMode) return;
+    try {
+      setRecalculating(true);
+      const result = await TeacherService.recalculateReport(debateId);
+      setReportMeta(result.report_meta);
+      setTeachingSummary(result.teaching_summary);
+      await reloadTeacherReport();
+      toast({
+        title: '报告已重算',
+        description: '已清理报告缓存并刷新教师复盘摘要',
+      });
+    } catch (error: any) {
+      toast({
+        title: '报告重算失败',
+        description: error?.message || '无法完成教师报告轻量重算',
+        variant: 'destructive',
+      });
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const handleAnchorClick = (anchorId: string) => {
+    setPendingAnchorId(anchorId);
+    setView('detail');
+  };
+
+  const qualityTone = getQualityTone(reportMeta?.report_quality);
+  const QualityIcon = qualityTone.icon;
 
   if (loading) {
     return studentMode ? (
@@ -117,6 +237,8 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
         initialReport={report}
         selectedParticipantId={selectedParticipantId}
         onSelectedParticipantIdChange={setSelectedParticipantId}
+        initialAnchorId={pendingAnchorId}
+        loadReport={studentMode ? undefined : reloadTeacherReport}
       />
     );
   }
@@ -206,6 +328,150 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
+        <section className={`mb-5 rounded-lg border p-4 shadow-sm ${qualityTone.className}`}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <QualityIcon className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <div className="text-base font-semibold">
+                  {getQualityLabel(reportMeta?.report_quality)}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                  <span>有效发言：{formatMetaStatus(reportMeta?.score_speech_count)}</span>
+                  <span>缺失评分：{formatMetaStatus(reportMeta?.score_missing_count)}</span>
+                  <span>Markdown：{formatMetaStatus(reportMeta?.report_markdown_cache_status || reportMeta?.report_markdown_status)}</span>
+                  <span>PDF：{formatMetaStatus(reportMeta?.report_pdf_cache_status || reportMeta?.report_pdf_status)}</span>
+                </div>
+                {reportMeta?.quality_flags?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    {reportMeta.quality_flags.map((flag) => (
+                      <span key={flag} className="rounded-full bg-white/65 px-2 py-1">
+                        {flag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={recalculating}
+              onClick={handleRecalculate}
+              className="border-current bg-white/70 text-current hover:bg-white"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${recalculating ? 'animate-spin' : ''}`} />
+              {recalculating ? '重算中...' : '重算报告'}
+            </Button>
+          </div>
+        </section>
+
+        <section className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                <Target className="h-5 w-5 text-slate-600" />
+                教师复盘摘要
+              </div>
+              {summaryLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+              ) : null}
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <div className="mb-2 text-sm font-medium text-slate-700">共性问题</div>
+                <div className="space-y-2">
+                  {(teachingSummary?.common_issues || []).slice(0, 3).map((item, index) => (
+                    <div key={`${item.type || 'issue'}-${index}`} className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                      <div className="font-medium text-slate-800">{item.title || item.type || '待关注项'}</div>
+                      {item.detail ? <div className="mt-1">{item.detail}</div> : null}
+                    </div>
+                  ))}
+                  {!teachingSummary?.common_issues?.length ? (
+                    <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">暂无明显共性问题</div>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 text-sm font-medium text-slate-700">高价值片段</div>
+                <div className="space-y-2">
+                  {(teachingSummary?.turning_points || []).slice(0, 3).map((item, index) => (
+                    <button
+                      key={`${item.speech_id || 'turn'}-${index}`}
+                      type="button"
+                      onClick={() => item.anchor_id && handleAnchorClick(item.anchor_id)}
+                      className="block w-full rounded-md bg-slate-50 p-3 text-left text-sm text-slate-600 transition hover:bg-slate-100"
+                    >
+                      <div className="font-medium text-slate-800">
+                        {item.speaker_name || '发言片段'}
+                        {item.overall_score ? ` · ${item.overall_score}` : ''}
+                      </div>
+                      {item.reason ? <div className="mt-1">{item.reason}</div> : null}
+                    </button>
+                  ))}
+                  {!teachingSummary?.turning_points?.length ? (
+                    <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">暂无可定位片段</div>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 text-sm font-medium text-slate-700">后续训练</div>
+                <div className="space-y-2">
+                  {(teachingSummary?.next_training_focus || []).slice(0, 3).map((item, index) => (
+                    <div key={`${item.focus || 'focus'}-${index}`} className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                      <div className="font-medium text-slate-800">{item.focus || '训练重点'}</div>
+                      {item.reason ? <div className="mt-1">{item.reason}</div> : null}
+                    </div>
+                  ))}
+                  {!teachingSummary?.next_training_focus?.length ? (
+                    <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">暂无训练建议</div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-900">
+              <MapPinned className="h-5 w-5 text-slate-600" />
+              发言锚点
+            </div>
+            <div className="max-h-[280px] space-y-2 overflow-y-auto pr-1">
+              {speechAnchors.slice(0, 12).map((anchor) => (
+                <button
+                  key={anchor.anchor_id}
+                  type="button"
+                  onClick={() => handleAnchorClick(anchor.anchor_id)}
+                  className="block w-full rounded-md border border-slate-100 px-3 py-2 text-left text-sm transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <div className="flex items-center justify-between gap-2 text-slate-800">
+                    <span className="truncate">
+                      {anchor.sequence}. {anchor.speaker_name || anchor.speaker_role || '发言'}
+                    </span>
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {anchor.score_status === 'ready' ? '已评分' : '未评分'}
+                    </span>
+                  </div>
+                  {anchor.summary ? (
+                    <div className="mt-1 line-clamp-2 text-xs text-slate-500">{anchor.summary}</div>
+                  ) : null}
+                </button>
+              ))}
+              {!speechAnchors.length ? (
+                <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">
+                  暂无可跳转的发言锚点
+                </div>
+              ) : null}
+            </div>
+            {speechAnchors.length > 12 ? (
+              <div className="mt-3 text-xs text-slate-500">
+                已显示前 12 条，可在详情页查看完整发言记录。
+              </div>
+            ) : null}
+          </div>
+        </section>
+
         <DebateReportOverview
           report={report}
           studentName={studentName}

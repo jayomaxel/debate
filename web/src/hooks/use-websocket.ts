@@ -7,7 +7,14 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import WebSocketClient from '../lib/websocket-client';
 import type { MessageType, EventHandler } from '../lib/websocket-client';
 import { audioPlaybackDebug, shouldDebugAudioMessageType } from '../lib/utils';
-import TokenManager from '../lib/token-manager';
+import api from '../lib/api';
+
+interface WsTicketContract {
+  ticket: string;
+  room_id: string;
+  expires_at: string;
+  connection_url: string;
+}
 
 interface UseWebSocketOptions {
   onConnect?: () => void;
@@ -68,6 +75,16 @@ export function useWebSocket(
   const onDisconnectRef = useRef(onDisconnect);
   const onErrorRef = useRef(onError);
 
+  const fetchWebSocketTicket = useCallback(async (targetRoomId: string) => {
+    const payload = await api.get<WsTicketContract>('/api/auth/ws-ticket', {
+      params: { room_id: targetRoomId },
+    });
+    if (!payload.ticket) {
+      throw new Error('No WebSocket ticket returned');
+    }
+    return payload.ticket;
+  }, []);
+
   useEffect(() => {
     onConnectRef.current = onConnect;
     onDisconnectRef.current = onDisconnect;
@@ -83,6 +100,7 @@ export function useWebSocket(
         reconnectInterval,
         maxReconnectAttempts,
         heartbeatInterval,
+        ticketProvider: fetchWebSocketTicket,
         onOpen: () => {
           setIsConnected(true);
           onConnectRef.current?.();
@@ -102,7 +120,7 @@ export function useWebSocket(
         },
       });
     }
-  }, [reconnectInterval, maxReconnectAttempts, heartbeatInterval]);
+  }, [reconnectInterval, maxReconnectAttempts, heartbeatInterval, fetchWebSocketTicket]);
 
   /**
    * 连接到WebSocket服务器
@@ -114,17 +132,13 @@ export function useWebSocket(
 
     try {
       audioPlaybackDebug('useWebSocket', '开始连接房间 websocket', { roomId });
-      const token = TokenManager.getAccessToken();
-      if (!token) {
-        throw new Error('No access token available');
-      }
       console.debug('[useWebSocket] Preparing debate websocket connection', {
         roomId,
-        hasToken: !!token,
+        authMode: 'ticket',
         origin: typeof window !== 'undefined' ? window.location.origin : '',
       });
 
-      await clientRef.current.connect(roomId, token);
+      await clientRef.current.connect(roomId);
       audioPlaybackDebug('useWebSocket', '房间 websocket 连接成功', { roomId });
     } catch (error) {
       console.error('[useWebSocket] Connect failed:', error);

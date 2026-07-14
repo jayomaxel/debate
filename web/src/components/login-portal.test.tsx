@@ -17,6 +17,12 @@ vi.mock('@/hooks/use-toast', () => ({
   useToast: vi.fn(),
 }));
 
+vi.mock('@/lib/router', () => ({
+  useAppRouter: () => ({
+    navigate: vi.fn(),
+  }),
+}));
+
 vi.mock('@/services/auth.service', () => ({
   default: {
     getPublicClasses: vi.fn(),
@@ -28,7 +34,7 @@ vi.mock('@/services/auth.service', () => ({
 describe('LoginPortal', () => {
   const switchToRegisterMode = async () => {
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: '注册' }));
+      fireEvent.click(screen.getByRole('button', { name: '注册账号' }));
     });
 
     await waitFor(() => {
@@ -37,8 +43,9 @@ describe('LoginPortal', () => {
   };
 
   const activateRoleTab = async (roleName: string) => {
+    const tab = screen.getByRole('tab', { name: roleName });
     act(() => {
-      fireEvent.mouseDown(screen.getByRole('tab', { name: roleName }));
+      fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
     });
 
     await waitFor(() => {
@@ -69,9 +76,17 @@ describe('LoginPortal', () => {
   it('hides administrator registration and resets the selected role back to student', async () => {
     render(<LoginPortal onLogin={vi.fn()} />);
 
-    await activateRoleTab('管理员');
+    expect(screen.queryByRole('tab', { name: '管理员' })).not.toBeInTheDocument();
+
+    await activateRoleTab('我是老师');
+    fireEvent.click(screen.getByRole('button', { name: '管理员登录' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('管理员账号')).toBeInTheDocument();
+    });
     expect(screen.getByRole('button', { name: '登录管理控制台' })).toBeInTheDocument();
 
+    await activateRoleTab('我是学生');
     await switchToRegisterMode();
 
     await waitFor(() => {

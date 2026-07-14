@@ -44,6 +44,14 @@ class ConfigService:
         self.db = db
 
     @staticmethod
+    def is_masked_secret(value: Optional[str]) -> bool:
+        """Return whether a submitted secret is only a masked display placeholder."""
+        if not isinstance(value, str):
+            return False
+        normalized = value.strip()
+        return bool(normalized) and "****" in normalized
+
+    @staticmethod
     def _clone_cache_value(value):
         """
         复制可变对象，避免调用方修改返回值时污染缓存。
@@ -304,7 +312,7 @@ class ConfigService:
                     config.model_name = model_name
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
-                if api_key is not None:
+                if api_key is not None and not self.is_masked_secret(api_key):
                     config.api_key = api_key
                 if temperature is not None:
                     config.temperature = temperature
@@ -467,7 +475,7 @@ class ConfigService:
                     config.model_name = model_name
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
-                if api_key is not None:
+                if api_key is not None and not self.is_masked_secret(api_key):
                     config.api_key = api_key
                 if parameters is not None:
                     normalized_parameters = (
@@ -600,7 +608,7 @@ class ConfigService:
                     config.model_name = model_name
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
-                if api_key is not None:
+                if api_key is not None and not self.is_masked_secret(api_key):
                     config.api_key = api_key
                 if parameters is not None:
                     # 保存前统一规整参数，避免脏输入直接影响 AI 发言 TTS。
@@ -713,7 +721,7 @@ class ConfigService:
                     config.judge_bot_id = judge_bot_id
                 if mentor_bot_id is not None:
                     config.mentor_bot_id = mentor_bot_id
-                if api_token is not None:
+                if api_token is not None and not self.is_masked_secret(api_token):
                     config.api_token = api_token
                 if parameters is not None:
                     config.parameters = self._normalize_coze_parameters(
@@ -815,7 +823,7 @@ class ConfigService:
                     config.model_name = model_name
                 if api_endpoint is not None:
                     config.api_endpoint = api_endpoint
-                if api_key is not None:
+                if api_key is not None and not self.is_masked_secret(api_key):
                     config.api_key = api_key
                 if embedding_dimension is not None:
                     config.embedding_dimension = embedding_dimension

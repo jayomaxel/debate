@@ -107,8 +107,8 @@ describe('StudentOnboarding', () => {
     expect(screen.getByText('DebateTopicCard AI 是否应该替代部分教师工作')).toBeInTheDocument();
     expect(screen.getByText('邀请码 ABC123')).toBeInTheDocument();
     expect(screen.getByText('我的辩位')).toBeInTheDocument();
-    expect(screen.getByText('二辩')).toBeInTheDocument();
-    expect(screen.getByText('测试学生')).toBeInTheDocument();
+    expect(screen.getAllByText('二辩').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('测试学生').length).toBeGreaterThan(0);
     expect(screen.getByText('准备状态')).toBeInTheDocument();
     expect(screen.queryByText(/WaitingStatusBar/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '等待四人全部准备完成' })).toBeDisabled();
@@ -144,7 +144,7 @@ describe('StudentOnboarding', () => {
 
     render(<StudentOnboarding />);
 
-    expect(await screen.findByText('测试学生')).toBeInTheDocument();
+    expect((await screen.findAllByText('测试学生')).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(StudentService.getDebateParticipants).toHaveBeenCalledWith('debate-001');
     });

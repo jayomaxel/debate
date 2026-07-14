@@ -33,6 +33,11 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def use_admin_router_test_database():
+    app.dependency_overrides[get_db] = override_get_db
+
+
 def assert_success_response(response, *, expected_status=200):
     body = response.json()
     assert response.status_code == expected_status
@@ -44,6 +49,7 @@ def assert_success_response(response, *, expected_status=200):
 @pytest.fixture(scope="function")
 def setup_database():
     """设置测试数据库"""
+    drop_test_schema(engine)
     create_test_schema(engine)
     yield
     drop_test_schema(engine)

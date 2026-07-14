@@ -32,6 +32,8 @@ interface ReportDetailProps {
   initialReport?: DebateReport | null;
   selectedParticipantId?: string;
   onSelectedParticipantIdChange?: (id: string) => void;
+  initialAnchorId?: string;
+  loadReport?: () => Promise<DebateReport>;
 }
 
 export const DebateReportDetail: React.FC<ReportDetailProps> = ({
@@ -41,6 +43,8 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
   initialReport = null,
   selectedParticipantId,
   onSelectedParticipantIdChange,
+  initialAnchorId,
+  loadReport: loadReportOverride,
 }) => {
   const [report, setReport] = useState<DebateReport | null>(initialReport);
   const [loading, setLoading] = useState(!initialReport);
@@ -59,7 +63,7 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
   const loadReport = async () => {
     try {
       setLoading(true);
-      const data = await StudentService.getReport(debateId);
+      const data = await (loadReportOverride ? loadReportOverride() : StudentService.getReport(debateId));
       setReport(data);
     } catch (error) {
       console.error('加载报告失败:', error);
@@ -67,6 +71,20 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!initialAnchorId || loading || !report) return;
+    if (typeof window === 'undefined') return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(initialAnchorId)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialAnchorId, loading, report]);
 
   const handleExport = async (format: 'pdf' | 'excel') => {
     try {
@@ -406,8 +424,16 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
             发言详情与评分
           </h2>
           <div className="space-y-4">
-            {visibleSpeeches.map((speech) => (
-              <div key={speech.id} className="student-card-muted p-4">
+            {visibleSpeeches.map((speech) => {
+              const speechAnchorId = `speech:${speech.id}`;
+              return (
+              <div
+                key={speech.id}
+                id={speechAnchorId}
+                className={`student-card-muted scroll-mt-24 p-4 ${
+                  initialAnchorId === speechAnchorId ? 'ring-2 ring-sky-300' : ''
+                }`}
+              >
                 <div className="mb-2 flex items-start justify-between gap-4">
                   <div>
                     <div className="mb-1 text-sm font-semibold text-slate-900">
@@ -469,7 +495,8 @@ export const DebateReportDetail: React.FC<ReportDetailProps> = ({
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
             {visibleSpeeches.length === 0 ? (
               <div className="student-card-muted p-4 text-center text-sm text-slate-500">
                 当前查看对象暂无有效发言记录

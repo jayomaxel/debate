@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, '.')
 
 from database import Base
+from config import settings
 from models.config import ModelConfig, CozeConfig
 from services.config_service import ConfigService
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
@@ -48,10 +49,10 @@ async def test_get_model_config_creates_default_when_empty(db_session):
     
     # 验证返回了配置
     assert config is not None, "应该返回配置对象"
-    assert config.model_name == "gpt-3.5-turbo"
-    assert config.api_endpoint == "https://api.openai.com/v1/chat/completions"
-    assert config.temperature == 0.7
-    assert config.max_tokens == 2000
+    assert config.model_name == settings.OPENAI_MODEL_NAME
+    assert config.api_endpoint == f"{settings.OPENAI_BASE_URL}/chat/completions"
+    assert config.temperature == settings.OPENAI_TEMPERATURE
+    assert config.max_tokens == settings.OPENAI_MAX_TOKENS
     
     # 验证配置已保存到数据库
     saved_config = db_session.execute(
@@ -78,9 +79,15 @@ async def test_get_coze_config_creates_default_when_empty(db_session):
     
     # 验证返回了配置
     assert config is not None, "应该返回配置对象"
-    assert config.agent_id == ""
+    assert config.debater_1_bot_id == ""
+    assert config.debater_2_bot_id == ""
+    assert config.debater_3_bot_id == ""
+    assert config.debater_4_bot_id == ""
+    assert config.judge_bot_id == ""
+    assert config.mentor_bot_id == ""
     assert config.api_token == ""
-    assert config.parameters == {}
+    assert config.parameters["base_url"] == settings.COZE_BASE_URL
+    assert "ai_turns" in config.parameters
     
     # 验证配置已保存到数据库
     saved_config = db_session.execute(

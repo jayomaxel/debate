@@ -534,6 +534,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
                         variant="outline"
                         size="sm"
                         className="student-light-button h-auto px-3 py-2"
+                        aria-label={`下载 ${document.filename}`}
                         onClick={() => void handleDownloadDocument(document)}
                         disabled={downloadingDocumentId === document.id}
                       >

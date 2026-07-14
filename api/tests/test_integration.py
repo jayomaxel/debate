@@ -8,6 +8,7 @@ from main import app
 
 # 测试基础URL
 BASE_URL = "http://test"
+pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio

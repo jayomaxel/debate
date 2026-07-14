@@ -40,7 +40,15 @@ const unwrapResponseData = <T>(payload: unknown): T => {
     payload &&
     typeof payload === 'object' &&
     'data' in payload &&
-    ('code' in payload || 'message' in payload)
+    (
+      'code' in payload ||
+      'message' in payload ||
+      (
+        (payload as { data?: unknown }).data &&
+        typeof (payload as { data?: unknown }).data === 'object' &&
+        'access_token' in ((payload as { data?: unknown }).data as Record<string, unknown>)
+      )
+    )
   ) {
     return (payload as { data: T }).data;
   }

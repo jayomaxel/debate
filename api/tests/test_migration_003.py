@@ -6,6 +6,8 @@ from sqlalchemy import inspect
 from database import engine, init_engine
 from models.config import ModelConfig, CozeConfig
 
+pytestmark = pytest.mark.integration
+
 
 def test_model_config_table_exists():
     """Test that model_config table was created"""

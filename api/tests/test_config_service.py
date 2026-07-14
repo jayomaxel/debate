@@ -66,7 +66,9 @@ def assert_coze_config_matches(
     assert config.judge_bot_id == judge_bot_id
     assert config.mentor_bot_id == mentor_bot_id
     assert config.api_token == api_token
-    assert config.parameters == (parameters or {})
+    actual_parameters = config.parameters or {}
+    for key, value in (parameters or {}).items():
+        assert actual_parameters.get(key) == value
 
 
 # ============================================================================

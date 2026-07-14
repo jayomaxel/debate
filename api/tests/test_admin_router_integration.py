@@ -2,9 +2,12 @@
 管理员路由集成测试
 测试管理员班级管理端点的功能（需要运行的API服务器）
 """
+import pytest
 import requests
 import uuid
 import json
+
+pytestmark = pytest.mark.integration
 
 # API基础URL（根据实际部署调整）
 BASE_URL = "http://localhost:7860/api"

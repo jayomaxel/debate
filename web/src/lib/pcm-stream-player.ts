@@ -29,6 +29,7 @@ interface PendingStreamState {
 export class PcmStreamPlayer {
   private static readonly INITIAL_PLAYBACK_LEAD_SECONDS = 0.18;
   private static readonly STEADY_PLAYBACK_LEAD_SECONDS = 0.1;
+  private static readonly STREAM_RELEASE_GRACE_MS = 10;
   private audioContext: AudioContext | null = null;
   private nextPlaybackTime = 0;
   private activeStreamId: string | null = null;
@@ -225,7 +226,7 @@ export class PcmStreamPlayer {
       }
 
       this.onPlaybackStateChange?.(false);
-    }, tailMs + 60);
+    }, tailMs + PcmStreamPlayer.STREAM_RELEASE_GRACE_MS);
   }
 
   async startStream(streamId: string): Promise<void> {

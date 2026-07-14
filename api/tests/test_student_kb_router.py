@@ -33,10 +33,18 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def override_app_database():
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    app.dependency_overrides.pop(get_db, None)
+
+
 @pytest.fixture(scope="function")
 def setup_database():
     """设置测试数据库"""
     # 只创建我们需要的表（不创建chunks和conversations表，因为SQLite不支持ARRAY和JSONB类型）
+    User.__table__.drop(bind=engine, checkfirst=True)
     User.__table__.create(bind=engine, checkfirst=True)
     yield
     # 清理表

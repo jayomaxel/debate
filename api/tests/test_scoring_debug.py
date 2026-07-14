@@ -5,6 +5,7 @@ import asyncio
 import sys
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+import pytest
 
 from database import SessionLocal, init_engine
 from models.debate import Debate, DebateParticipation
@@ -15,6 +16,8 @@ from agents.judge_agent import JudgeAgent
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+pytestmark = pytest.mark.integration
 
 
 async def test_scoring_for_debate(debate_id: str):

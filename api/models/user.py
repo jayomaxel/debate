@@ -23,7 +23,14 @@ class User(Base):
     account = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     user_type = Column(
-        Enum("teacher", "student", "administrator", name="user_type_enum"),
+        Enum(
+            "teacher",
+            "student",
+            "administrator",
+            name="user_type_enum",
+            validate_strings=True,
+            create_constraint=True,
+        ),
         nullable=False,
     )
     name = Column(String(100), nullable=False)

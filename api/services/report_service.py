@@ -23,17 +23,10 @@ from services.config_service import ConfigService
 from services.coze_client import CozeClient
 from config import settings
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, XPreformatted
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
 from agents.judge_agent import JudgeAgent
-from utils.markdown_to_pdf import markdown_to_pdf
 
 logger = get_logger(__name__)
 
@@ -644,6 +637,13 @@ class ReportGenerator:
         使用WeasyPrint将Markdown转换为PDF（已弃用，保留用于兼容）
         建议使用 _markdown_to_pdf_bytes_weasyprint
         """
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, XPreformatted
+
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
@@ -714,6 +714,8 @@ class ReportGenerator:
             PDF字节流
         """
         try:
+            from utils.markdown_to_pdf import markdown_to_pdf
+
             meta_info = {
                 "辩题": debate_topic,
             }

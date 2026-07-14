@@ -47,6 +47,7 @@ class RAGService:
         
         # OpenAI客户端将在需要时初始化（使用向量配置）
         self.openai_client = None
+        self.llm_client = None
         self.embedding_model = None
         self._embedding_column_is_vector: Optional[bool] = None
 
@@ -272,10 +273,10 @@ class RAGService:
             if not query_embedding:
                 raise ValueError("查询嵌入向量为空")
             
-            # if len(query_embedding) != 1536:
-            #     raise ValueError(
-            #         f"查询嵌入向量维度错误: 期望1536，实际{len(query_embedding)}"
-            #     )
+            if len(query_embedding) != 1536:
+                raise ValueError(
+                    f"查询嵌入向量维度错误: 期望1536，实际{len(query_embedding)}"
+                )
             
             if top_k <= 0:
                 raise ValueError(f"top_k必须大于0，实际值: {top_k}")
@@ -476,16 +477,21 @@ class RAGService:
             )
             
             try:
-                # 使用OpenAI客户端调用LLM（使用模型配置的客户端，不是向量配置的）
-                # 为LLM创建单独的客户端
-                llm_base_url = model_config.api_endpoint
-                if llm_base_url.endswith('/chat/completions'):
-                    llm_base_url = llm_base_url[:-len('/chat/completions')]
-                
-                llm_client = OpenAI(
-                    api_key=model_config.api_key,
-                    base_url=llm_base_url
-                )
+                llm_client = self.llm_client
+                if llm_client is None:
+                    if not model_config.api_key or not model_config.api_endpoint:
+                        raise RuntimeError("OpenAI客户端未初始化")
+
+                    # Use the model configuration for LLM calls. The embedding
+                    # client may point at a different endpoint.
+                    llm_base_url = model_config.api_endpoint
+                    if llm_base_url.endswith('/chat/completions'):
+                        llm_base_url = llm_base_url[:-len('/chat/completions')]
+
+                    llm_client = OpenAI(
+                        api_key=model_config.api_key,
+                        base_url=llm_base_url
+                    )
                 
                 response = llm_client.chat.completions.create(
                     model=model_config.model_name,

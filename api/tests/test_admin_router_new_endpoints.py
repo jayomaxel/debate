@@ -33,9 +33,22 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+def response_data(response, *, expected_status=200):
+    body = response.json()
+    assert response.status_code == expected_status
+    assert body["code"] == expected_status
+    return body["data"]
+
+
+@pytest.fixture(autouse=True)
+def use_admin_new_endpoints_test_database():
+    app.dependency_overrides[get_db] = override_get_db
+
+
 @pytest.fixture(scope="function")
 def setup_database():
     """设置测试数据库"""
+    drop_test_schema(engine)
     create_test_schema(engine)
     yield
     drop_test_schema(engine)
@@ -119,8 +132,7 @@ def test_get_model_config_as_admin(admin_token):
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
-    assert response.status_code == 200
-    config = response.json()
+    config = response_data(response)
     assert "model_name" in config
     assert "api_endpoint" in config
     assert "api_key" in config
@@ -141,8 +153,7 @@ def test_update_model_config_as_admin(admin_token):
         }
     )
     
-    assert response.status_code == 200
-    config = response.json()
+    config = response_data(response)
     assert config["model_name"] == "gpt-4"
     assert config["temperature"] == 0.8
     assert config["max_tokens"] == 3000
@@ -167,9 +178,13 @@ def test_get_coze_config_as_admin(admin_token):
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     
-    assert response.status_code == 200
-    config = response.json()
-    assert "agent_id" in config
+    config = response_data(response)
+    assert "debater_1_bot_id" in config
+    assert "debater_2_bot_id" in config
+    assert "debater_3_bot_id" in config
+    assert "debater_4_bot_id" in config
+    assert "judge_bot_id" in config
+    assert "mentor_bot_id" in config
     assert "api_token" in config
     assert "parameters" in config
 
@@ -180,16 +195,16 @@ def test_update_coze_config_as_admin(admin_token):
         "/api/admin/config/coze",
         headers={"Authorization": f"Bearer {admin_token}"},
         json={
-            "agent_id": "coze_agent_123",
+            "debater_1_bot_id": "coze_bot_123",
             "api_token": "new_token_456",
             "parameters": {"timeout": 60}
         }
     )
     
-    assert response.status_code == 200
-    config = response.json()
-    assert config["agent_id"] == "coze_agent_123"
-    assert config["api_token"] == "new_token_456"
+    config = response_data(response)
+    assert config["debater_1_bot_id"] == "coze_bot_123"
+    assert config["api_token"] == "new_****_456"
+    assert config["api_token_configured"] is True
     assert config["parameters"]["timeout"] == 60
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from models.debate import Debate, DebateParticipation, DebateReservationInvitation
 from models.user import User
 from models.class_model import Class
+from models.teaching_design import TopicRecommendationItem, TopicRecommendationRun
 from services.assessment_service import AssessmentService
 from services.avatar_service import AvatarService
 from services.config_service import ConfigService
@@ -57,7 +58,10 @@ class DebateService:
     CONFIG_OPTIONAL_STRING_FIELDS = {
         "domain_pack_id",
         "teaching_design_version_id",
+        "topic_recommendation_run_id",
+        "selected_topic_candidate_id",
     }
+    CONFIG_TOPIC_SOURCE_VALUES = {"manual", "ai_recommended", "ai_recommended_edited"}
     CONFIG_ACTIVITY_FOCUS_FIELDS = {
         "chapter_focus",
         "training_focus",
@@ -83,6 +87,9 @@ class DebateService:
         "support_document_ids": [],
         "domain_pack_id": None,
         "teaching_design_version_id": None,
+        "topic_recommendation_run_id": None,
+        "selected_topic_candidate_id": None,
+        "topic_source": "manual",
         "activity_focus": {
             "chapter_focus": None,
             "training_focus": None,
@@ -264,6 +271,12 @@ class DebateService:
             if field_name in patch:
                 target[field_name] = DebateService._clean_optional_string(patch.get(field_name))
 
+        if "topic_source" in patch:
+            value = DebateService._clean_optional_string(patch.get("topic_source")) or "manual"
+            if value not in DebateService.CONFIG_TOPIC_SOURCE_VALUES:
+                raise ValueError("config_meta.topic_source 浠呮敮鎸?manual銆乤i_recommended 鎴?ai_recommended_edited")
+            target["topic_source"] = value
+
         if "activity_focus" in patch:
             activity_focus = patch.get("activity_focus") or {}
             if not isinstance(activity_focus, dict):
@@ -344,6 +357,67 @@ class DebateService:
             "config_meta": DebateService._serialize_debate_config_meta(debate),
             "duration": debate.duration,
         }
+
+    @staticmethod
+    def _validate_topic_selection(
+        db: Session,
+        *,
+        class_id: str,
+        topic: str,
+        config_meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        normalized = dict(config_meta or {})
+        run_id = DebateService._clean_optional_string(normalized.get("topic_recommendation_run_id"))
+        candidate_id = DebateService._clean_optional_string(normalized.get("selected_topic_candidate_id"))
+        topic_source = DebateService._clean_optional_string(normalized.get("topic_source")) or "manual"
+
+        if topic_source not in DebateService.CONFIG_TOPIC_SOURCE_VALUES:
+            raise ValueError("config_meta.topic_source 浠呮敮鎸?manual銆乤i_recommended 鎴?ai_recommended_edited")
+
+        if not run_id and not candidate_id:
+            normalized["topic_source"] = "manual"
+            normalized["topic_recommendation_run_id"] = None
+            normalized["selected_topic_candidate_id"] = None
+            return normalized
+        run_uuid = DebateService._uuid_or_none(run_id)
+        candidate_uuid = DebateService._uuid_or_none(candidate_id)
+        if run_uuid is None:
+            raise ValueError("config_meta.topic_recommendation_run_id 格式不正确")
+        if candidate_uuid is None:
+            raise ValueError("config_meta.selected_topic_candidate_id 格式不正确")
+
+        run = db.query(TopicRecommendationRun).filter(TopicRecommendationRun.id == run_uuid).first()
+        if not run:
+            raise ValueError("候选辩题推荐记录不存在")
+        if str(run.class_id) != str(class_id):
+            raise ValueError("候选辩题推荐记录不属于当前班级")
+
+        candidate = (
+            db.query(TopicRecommendationItem)
+            .filter(
+                TopicRecommendationItem.id == candidate_uuid,
+                TopicRecommendationItem.run_id == run.id,
+            )
+            .first()
+        )
+        if not candidate:
+            raise ValueError("候选辩题条目不存在或不属于当前推荐记录")
+
+        normalized["topic_recommendation_run_id"] = str(run.id)
+        normalized["selected_topic_candidate_id"] = str(candidate.id)
+        if run.teaching_design_version_id is not None:
+            normalized["teaching_design_version_id"] = str(run.teaching_design_version_id)
+
+        cleaned_topic = (topic or "").strip()
+        candidate_topic = (candidate.topic_text or "").strip()
+        if cleaned_topic and candidate_topic and cleaned_topic != candidate_topic:
+            if topic_source == "ai_recommended":
+                raise ValueError("当前辩题文本与候选辩题不一致，请将 topic_source 改为 ai_recommended_edited")
+            normalized["topic_source"] = "ai_recommended_edited"
+        else:
+            normalized["topic_source"] = "ai_recommended"
+
+        return normalized
 
     @staticmethod
     def _uuid_or_none(value: Any) -> Optional[uuid.UUID]:
@@ -2116,6 +2190,12 @@ class DebateService:
             config_meta,
             description=description,
         )
+        normalized_config_meta = DebateService._validate_topic_selection(
+            db,
+            class_id=class_id,
+            topic=topic,
+            config_meta=normalized_config_meta,
+        )
         assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
         selected_student_ids = DebateService._validate_selected_student_ids(
             db=db,
@@ -2291,10 +2371,18 @@ class DebateService:
             debate.duration = duration
         if description is not None:
             debate.description = description
-        DebateService._persist_debate_config_meta(
-            debate,
+        next_config_meta = DebateService.normalize_debate_config_meta(
             config_meta if config_meta is not None else existing_config_meta,
+            description=debate.description,
+            base_meta=existing_config_meta,
         )
+        next_config_meta = DebateService._validate_topic_selection(
+            db,
+            class_id=normalized_class_id,
+            topic=debate.topic,
+            config_meta=next_config_meta,
+        )
+        DebateService._persist_debate_config_meta(debate, next_config_meta)
         effective_config_meta = DebateService._deserialize_debate_config_meta(debate)
         assignment_mode = effective_config_meta.get("role_assignment_mode") or "strength_first"
         resolved_assignment_run_id = DebateService._resolve_parent_assignment_run_id(
@@ -2923,6 +3011,12 @@ class DebateService:
             config_meta,
             description=description,
         )
+        normalized_config_meta = DebateService._validate_topic_selection(
+            db,
+            class_id=class_id,
+            topic=topic,
+            config_meta=normalized_config_meta,
+        )
         assignment_mode = normalized_config_meta.get("role_assignment_mode") or "strength_first"
         scheduled_dt = DebateService._normalize_datetime(scheduled_start_time)
         if not scheduled_dt:
@@ -3220,10 +3314,18 @@ class DebateService:
             debate.room_name = debate.room_name or topic[:30]
         if description is not None:
             debate.description = description
-        DebateService._persist_debate_config_meta(
-            debate,
+        next_config_meta = DebateService.normalize_debate_config_meta(
             config_meta if config_meta is not None else existing_config_meta,
+            description=debate.description,
+            base_meta=existing_config_meta,
         )
+        next_config_meta = DebateService._validate_topic_selection(
+            db,
+            class_id=str(debate.class_id),
+            topic=debate.topic,
+            config_meta=next_config_meta,
+        )
+        DebateService._persist_debate_config_meta(debate, next_config_meta)
         effective_config_meta = DebateService._deserialize_debate_config_meta(debate)
         assignment_mode = effective_config_meta.get("role_assignment_mode") or "strength_first"
         if duration is not None:

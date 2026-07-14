@@ -19,7 +19,8 @@ router = APIRouter(prefix="/api/auth", tags=["璁よ瘉"])
 
 # Pydantic妯″瀷
 class TeacherRegisterRequest(BaseModel):
-    account: str  # 鏁欏伐鍙?    email: EmailStr
+    account: str
+    email: EmailStr
     phone: str
     password: str
     name: str
@@ -498,4 +499,3 @@ async def delete_account(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-

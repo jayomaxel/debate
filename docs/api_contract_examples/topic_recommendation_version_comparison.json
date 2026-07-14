@@ -1,0 +1,93 @@
+{
+  "code": 200,
+  "message": "获取成功",
+  "data": {
+    "class_id": "99999999-9999-9999-9999-999999999999",
+    "date_from": "2026-01-01T00:00:00",
+    "date_to": "2026-01-31T23:59:59",
+    "current_version_id": "aaaaaaa2-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+    "previous_version_id": "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+    "version_comparison_summary": {
+      "current_version": {
+        "teaching_design_version_id": "aaaaaaa2-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+        "version_name": "v2",
+        "title": "Design B",
+        "is_active": true,
+        "total_runs": 3,
+        "total_candidates": 11,
+        "adopted_run_count": 2,
+        "adopted_candidate_count": 3,
+        "total_adoptions": 4,
+        "direct_adoptions": 3,
+        "edited_adoptions": 1,
+        "run_adoption_rate": 0.6667,
+        "candidate_adoption_rate": 0.2727,
+        "last_generated_at": "2026-01-18T10:00:00",
+        "last_adopted_at": "2026-01-20T10:00:00"
+      },
+      "previous_version": {
+        "teaching_design_version_id": "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        "version_name": "v1",
+        "title": "Design A",
+        "is_active": false,
+        "total_runs": 3,
+        "total_candidates": 11,
+        "adopted_run_count": 2,
+        "adopted_candidate_count": 2,
+        "total_adoptions": 3,
+        "direct_adoptions": 1,
+        "edited_adoptions": 2,
+        "run_adoption_rate": 0.6667,
+        "candidate_adoption_rate": 0.1818,
+        "last_generated_at": "2026-01-10T10:00:00",
+        "last_adopted_at": "2026-01-12T10:00:00"
+      },
+      "delta": {
+        "total_runs": 0,
+        "total_adoptions": 1,
+        "direct_adoptions": 2,
+        "edited_adoptions": -1,
+        "run_adoption_rate": 0.0,
+        "candidate_adoption_rate": 0.0909,
+        "direct_adoption_share": 0.4167,
+        "edited_adoption_share": -0.4167
+      }
+    },
+    "version_breakdown": [
+      {
+        "teaching_design_version_id": "aaaaaaa2-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+        "version_name": "v2",
+        "title": "Design B",
+        "is_active": true,
+        "total_runs": 3,
+        "total_candidates": 11,
+        "adopted_run_count": 2,
+        "adopted_candidate_count": 3,
+        "total_adoptions": 4,
+        "direct_adoptions": 3,
+        "edited_adoptions": 1,
+        "run_adoption_rate": 0.6667,
+        "candidate_adoption_rate": 0.2727,
+        "last_generated_at": "2026-01-18T10:00:00",
+        "last_adopted_at": "2026-01-20T10:00:00"
+      },
+      {
+        "teaching_design_version_id": "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        "version_name": "v1",
+        "title": "Design A",
+        "is_active": false,
+        "total_runs": 3,
+        "total_candidates": 11,
+        "adopted_run_count": 2,
+        "adopted_candidate_count": 2,
+        "total_adoptions": 3,
+        "direct_adoptions": 1,
+        "edited_adoptions": 2,
+        "run_adoption_rate": 0.6667,
+        "candidate_adoption_rate": 0.1818,
+        "last_generated_at": "2026-01-10T10:00:00",
+        "last_adopted_at": "2026-01-12T10:00:00"
+      }
+    ]
+  }
+}

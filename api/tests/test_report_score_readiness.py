@@ -8,6 +8,7 @@ from models.score import Score
 from models.speech import Speech
 from models.user import User
 from services.report_service import ReportGenerator
+from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
 
 
@@ -110,3 +111,259 @@ def test_report_includes_participants_without_speeches(db_session):
     assert report.participants[0]["has_speech"] is False
     assert report.participants[0]["score_status"] == "no_speech"
     assert report.participants[0]["final_score"]["speech_count"] == 0
+
+
+def test_report_meta_and_teaching_summary_for_empty_report(db_session):
+    teacher = User(
+        id=uuid.uuid4(),
+        account="summary_teacher",
+        name="Summary Teacher",
+        email="summary_teacher@test.com",
+        password_hash="hashed_password",
+        user_type="teacher",
+        created_at=datetime.utcnow(),
+    )
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="Empty report debate",
+        description="",
+        duration=5,
+        invitation_code="RPT003",
+        status="completed",
+        teacher_id=teacher.id,
+    )
+    db_session.add_all([teacher, debate])
+    db_session.commit()
+
+    meta = ReportOrchestrationService.build_report_meta(db_session, debate)
+    summary = ReportOrchestrationService.build_teaching_summary(db_session, str(debate.id))
+
+    assert meta["report_quality"] == "fallback"
+    assert meta["report_status"] == "empty"
+    assert summary["report_quality"] == "fallback"
+    assert summary["common_issues"][0]["type"] == "no_valid_speech"
+
+
+def test_report_meta_normalizes_repaired_and_flags_generation_failures(db_session):
+    student = User(
+        id=uuid.uuid4(),
+        account="quality_student",
+        name="Quality Student",
+        email="quality_student@test.com",
+        password_hash="hashed_password",
+        user_type="student",
+        created_at=datetime.utcnow(),
+    )
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="Quality signal debate",
+        description="",
+        duration=5,
+        invitation_code="RPT005",
+        status="completed",
+        report={
+            "report_quality": "repaired",
+            "report_markdown_status": "failed",
+            "report_markdown_error": "llm unavailable",
+            "report_pdf_status": "failed",
+            "report_pdf_error": "renderer unavailable",
+            "score_fallback_generated": True,
+            "score_generation_mode": "fallback",
+        },
+    )
+    participation = DebateParticipation(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        user_id=student.id,
+        role="debater_1",
+        stance="positive",
+    )
+    speech = Speech(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        speaker_id=student.id,
+        speaker_type="human",
+        speaker_role="debater_1",
+        phase="opening",
+        content="This speech has enough content to be scored.",
+        duration=18,
+        is_valid_for_scoring=True,
+        timestamp=datetime.utcnow(),
+    )
+    score = Score(
+        id=uuid.uuid4(),
+        participation_id=participation.id,
+        speech_id=speech.id,
+        logic_score=70,
+        argument_score=70,
+        response_score=70,
+        persuasion_score=70,
+        teamwork_score=70,
+        overall_score=70,
+        feedback="评分系统暂时不可用",
+    )
+    db_session.add_all([student, debate, participation, speech, score])
+    db_session.commit()
+
+    meta = ReportOrchestrationService.build_report_meta(db_session, debate)
+
+    assert meta["report_quality"] == "partial"
+    assert meta["legacy_report_quality"] == "repaired"
+    assert "repaired" not in meta["report_quality_supported_values"]
+    assert meta["score_fallback_detected"] is True
+    assert meta["score_fallback_count"] == 1
+    assert "legacy_repaired_quality" in meta["quality_flags"]
+    assert "markdown_generation_failed" in meta["quality_flags"]
+    assert "pdf_generation_failed" in meta["quality_flags"]
+    assert "score_fallback_detected" in meta["quality_flags"]
+
+
+def test_report_meta_flags_stale_markdown_and_pdf_caches(db_session):
+    student = User(
+        id=uuid.uuid4(),
+        account="stale_cache_student",
+        name="Stale Cache Student",
+        email="stale_cache_student@test.com",
+        password_hash="hashed_password",
+        user_type="student",
+        created_at=datetime.utcnow(),
+    )
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="Stale cache debate",
+        description="",
+        duration=5,
+        invitation_code="RPT006",
+        status="completed",
+        report={
+            "score_revision": 2,
+            "report_markdown": "# cached report",
+            "report_markdown_hash": "old-markdown-hash",
+            "report_pdf_markdown_hash": "old-pdf-hash",
+        },
+    )
+    participation = DebateParticipation(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        user_id=student.id,
+        role="debater_1",
+        stance="positive",
+    )
+    speech = Speech(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        speaker_id=student.id,
+        speaker_type="human",
+        speaker_role="debater_1",
+        phase="opening",
+        content="This speech has enough content to be scored.",
+        duration=18,
+        is_valid_for_scoring=True,
+        timestamp=datetime.utcnow(),
+    )
+    score = Score(
+        id=uuid.uuid4(),
+        participation_id=participation.id,
+        speech_id=speech.id,
+        logic_score=82,
+        argument_score=81,
+        response_score=80,
+        persuasion_score=79,
+        teamwork_score=78,
+        overall_score=80,
+        feedback="ready",
+    )
+    db_session.add_all([student, debate, participation, speech, score])
+    db_session.commit()
+
+    meta = ReportOrchestrationService.build_report_meta(db_session, debate)
+
+    assert meta["report_quality"] == "validated"
+    assert meta["report_markdown_cache_status"] == "stale"
+    assert meta["report_pdf_cache_status"] == "stale"
+    assert "markdown_cache_stale" in meta["quality_flags"]
+    assert "pdf_cache_stale" in meta["quality_flags"]
+
+
+@pytest.mark.asyncio
+async def test_lightweight_recalculation_clears_report_cache_without_replacing_scores(db_session):
+    teacher = User(
+        id=uuid.uuid4(),
+        account="recalc_teacher",
+        name="Recalc Teacher",
+        email="recalc_teacher@test.com",
+        password_hash="hashed_password",
+        user_type="teacher",
+        created_at=datetime.utcnow(),
+    )
+    student = User(
+        id=uuid.uuid4(),
+        account="recalc_student",
+        name="Recalc Student",
+        email="recalc_student@test.com",
+        password_hash="hashed_password",
+        user_type="student",
+        created_at=datetime.utcnow(),
+    )
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="Recalculate report debate",
+        description="",
+        duration=5,
+        invitation_code="RPT004",
+        status="completed",
+        teacher_id=teacher.id,
+        start_time=datetime.utcnow(),
+        end_time=datetime.utcnow(),
+        report={
+            "report_markdown": "# old",
+            "report_markdown_hash": "old-hash",
+            "report_pdf_markdown_hash": "old-pdf-hash",
+            "report_quality": "fallback",
+        },
+        report_pdf="old.pdf",
+    )
+    participation = DebateParticipation(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        user_id=student.id,
+        role="debater_1",
+        stance="positive",
+    )
+    speech = Speech(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        speaker_id=student.id,
+        speaker_type="human",
+        speaker_role="debater_1",
+        phase="opening",
+        content="First, the argument has evidence and a clear conclusion.",
+        duration=18,
+        is_valid_for_scoring=True,
+        timestamp=datetime.utcnow(),
+    )
+    score = Score(
+        id=uuid.uuid4(),
+        participation_id=participation.id,
+        speech_id=speech.id,
+        logic_score=82,
+        argument_score=81,
+        response_score=80,
+        persuasion_score=79,
+        teamwork_score=78,
+        overall_score=80,
+        feedback="ready",
+    )
+    db_session.add_all([teacher, student, debate, participation, speech, score])
+    db_session.commit()
+
+    score_id = score.id
+    meta = ReportOrchestrationService.clear_report_cache_for_recalculation(db_session, str(debate.id))
+    refreshed = db_session.query(Debate).filter(Debate.id == debate.id).one()
+
+    assert db_session.query(Score).filter(Score.id == score_id).count() == 1
+    assert refreshed.report_pdf is None
+    assert "report_markdown" not in refreshed.report
+    assert "report_markdown_hash" not in refreshed.report
+    assert refreshed.report["report_recalculation_count"] == 1
+    assert meta["report_quality"] == "validated"

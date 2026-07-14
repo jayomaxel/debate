@@ -4,9 +4,13 @@
 
 import asyncio
 import os
+
+import pytest
+
 from utils.voice_processor import voice_processor
 
 
+@pytest.mark.asyncio
 async def test_audio_validation():
     """测试音频质量验证"""
     print("=== 测试音频质量验证 ===")
@@ -30,6 +34,7 @@ async def test_audio_validation():
     print("✅ 音频质量验证测试通过\n")
 
 
+@pytest.mark.asyncio
 async def test_base64_encoding():
     """测试Base64编码/解码"""
     print("=== 测试Base64编码/解码 ===")
@@ -49,6 +54,8 @@ async def test_base64_encoding():
     print("✅ Base64编码/解码测试通过\n")
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_tts_synthesis():
     """测试TTS语音合成（需要配置OpenAI API密钥）"""
     print("=== 测试TTS语音合成 ===")
@@ -77,6 +84,8 @@ async def test_tts_synthesis():
         print("❌ TTS合成失败")
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_asr_transcription():
     """测试ASR语音识别（需要配置OpenAI API密钥和测试音频文件）"""
     print("=== 测试ASR语音识别 ===")

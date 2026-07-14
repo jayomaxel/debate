@@ -23,6 +23,15 @@ import time
 logger = logging.getLogger(__name__)
 
 
+class ApproximateTokenizer:
+    """Small offline fallback used when tiktoken encodings are unavailable."""
+
+    def encode(self, text: str) -> List[int]:
+        if not text:
+            return []
+        return [0] * max(1, len(text) // 4)
+
+
 class DocumentService:
     """
     文档服务。
@@ -61,7 +70,14 @@ class DocumentService:
             self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
         except Exception as e:
             logger.warning(f"无法加载tokenizer，使用默认编。 {e}")
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            try:
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            except Exception as fallback_error:
+                logger.warning(
+                    "Unable to load tiktoken fallback encoding; using approximate token counts. %s",
+                    fallback_error,
+                )
+                self.tokenizer = ApproximateTokenizer()
         
         # 确保上传目录存在
         os.makedirs(self.upload_dir, exist_ok=True)
@@ -1436,4 +1452,3 @@ class DocumentService:
             )
             mark_failed(error_msg)
             raise RuntimeError(error_msg)
-

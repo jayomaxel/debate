@@ -139,8 +139,9 @@ class TestRAGService:
             assert results[0]["content"] == mock_row.content
             assert results[0]["similarity_score"] == 0.95
             
-            # 验证数据库查询被调用
-            mock_execute.assert_called_once()
+            # One call may be used to detect the backing embedding column type;
+            # the final call is the vector search itself.
+            assert mock_execute.call_count >= 1
     
     @pytest.mark.asyncio
     async def test_search_similar_chunks_no_results_mock(
@@ -222,6 +223,7 @@ class TestGenerateAnswer:
         service = RAGService(db_session)
         # 创建模拟的OpenAI客户端
         service.openai_client = MagicMock()
+        service.llm_client = service.openai_client
         return service
     
     @pytest.mark.asyncio
@@ -267,11 +269,22 @@ class TestGenerateAnswer:
         service = RAGService(db_session)
         service.openai_client = None
         
-        with pytest.raises(RuntimeError, match="OpenAI客户端未初始化"):
-            await service.generate_answer(
-                question="什么是辩论？",
-                context_chunks=[]
-            )
+        mock_config = MagicMock()
+        mock_config.model_name = "gpt-3.5-turbo"
+        mock_config.api_key = ""
+        mock_config.api_endpoint = ""
+        mock_config.temperature = 0.7
+        mock_config.max_tokens = 2000
+
+        with patch('services.rag_service.ConfigService') as MockConfigService:
+            mock_config_service = MockConfigService.return_value
+            mock_config_service.get_model_config = AsyncMock(return_value=mock_config)
+
+            with pytest.raises(RuntimeError, match="OpenAI客户端未初始化"):
+                await service.generate_answer(
+                    question="什么是辩论？",
+                    context_chunks=[]
+                )
     
     @pytest.mark.asyncio
     async def test_generate_answer_with_context(
@@ -747,6 +760,7 @@ class TestAskQuestion:
         """创建带有模拟OpenAI客户端的RAG服务实例"""
         service = RAGService(db_session)
         service.openai_client = MagicMock()
+        service.llm_client = service.openai_client
         return service
     
     @pytest.mark.asyncio
@@ -1185,6 +1199,7 @@ class TestConversationStorage:
         """创建带有模拟OpenAI客户端的RAG服务实例"""
         service = RAGService(db_session)
         service.openai_client = MagicMock()
+        service.llm_client = service.openai_client
         return service
     
     @pytest.mark.asyncio

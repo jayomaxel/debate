@@ -1,5 +1,8 @@
+import pytest
 import requests
 import time
+
+pytestmark = pytest.mark.integration
 
 def test_endpoint():
     base_url = "http://127.0.0.1:7860"
