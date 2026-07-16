@@ -11,6 +11,8 @@ from main import app
 from models.class_model import Class
 from models.debate import Debate
 from models.user import User
+from routers import student as student_router
+from services.audit_service import AuditService
 from services.report_service import ReportGenerator
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import create_token, hash_password
@@ -38,6 +40,11 @@ def override_app_database():
     app.dependency_overrides[get_db] = override_get_db
     yield
     app.dependency_overrides.pop(get_db, None)
+
+
+class FakeReport:
+    def to_dict(self):
+        return {"debate_id": "fake-report", "overall_score": 88}
 
 
 @pytest.fixture(scope="function")
@@ -153,3 +160,95 @@ def test_export_pdf_uses_default_path_and_writes_report_pdf(tmp_path, teacher_to
     debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
     assert debate.report_pdf is not None and str(debate.report_pdf).strip()
     db.close()
+
+
+def test_export_pdf_generation_records_audit_event(tmp_path, teacher_token, debate_for_teacher, monkeypatch):
+    AuditService.clear_events()
+    upload_dir = tmp_path / "uploads"
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(upload_dir), raising=False)
+
+    markdown_text = "# Report\n\nCached markdown"
+    db = TestingSessionLocal()
+    debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
+    debate.report = {
+        "report_markdown": markdown_text,
+        "report_markdown_hash": student_router._compute_markdown_hash(markdown_text, 0),
+    }
+    debate.report_pdf = None
+    db.commit()
+    db.close()
+
+    async def fake_ensure_report_ready(*args, **kwargs):
+        return {"ready": True}
+
+    async def fake_render_markdown_to_pdf_async(*args, **kwargs):
+        return b"%PDF-1.4\n%generated\n%%EOF"
+
+    monkeypatch.setattr(student_router, "_ensure_report_ready", fake_ensure_report_ready, raising=True)
+    monkeypatch.setattr(ReportGenerator, "render_markdown_to_pdf_async", fake_render_markdown_to_pdf_async, raising=True)
+
+    resp = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}/export/pdf",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+
+    assert resp.status_code == 200
+    events = AuditService.list_events(limit=10, event_type="report_regeneration")
+    assert events
+    event = events[0]
+    assert event["target_id"] == str(debate_for_teacher.id)
+    assert event["result"] == "success"
+    assert event["metadata"]["action"] == "export_report_pdf"
+    assert event["metadata"]["generated_pdf"] is True
+    assert event["metadata"]["generated_markdown"] is False
+    AuditService.clear_events()
+
+
+def test_get_student_report_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):
+    AuditService.clear_events()
+
+    async def fake_ensure_report_ready(*args, **kwargs):
+        return {"ready": True}
+
+    monkeypatch.setattr(student_router, "_ensure_report_ready", fake_ensure_report_ready, raising=True)
+    monkeypatch.setattr(ReportGenerator, "generate_student_report", lambda *a, **k: FakeReport(), raising=True)
+
+    resp = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+
+    assert resp.status_code == 200
+    events = AuditService.list_events(limit=10, event_type="report_regeneration")
+    assert events
+    event = events[0]
+    assert event["target_id"] == str(debate_for_teacher.id)
+    assert event["metadata"]["action"] == "get_student_report"
+    assert event["metadata"]["generated_report"] is True
+    AuditService.clear_events()
+
+
+def test_export_report_excel_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):
+    AuditService.clear_events()
+
+    async def fake_ensure_report_ready(*args, **kwargs):
+        return {"ready": True}
+
+    monkeypatch.setattr(student_router, "_ensure_report_ready", fake_ensure_report_ready, raising=True)
+    monkeypatch.setattr(ReportGenerator, "generate_student_report", lambda *a, **k: FakeReport(), raising=True)
+    monkeypatch.setattr(ReportGenerator, "export_to_excel", lambda *a, **k: b"excel-bytes", raising=True)
+
+    resp = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}/export/excel",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+
+    assert resp.status_code == 200
+    events = AuditService.list_events(limit=10, event_type="report_regeneration")
+    assert events
+    event = events[0]
+    assert event["target_id"] == str(debate_for_teacher.id)
+    assert event["metadata"]["action"] == "export_report_excel"
+    assert event["metadata"]["generated_report"] is True
+    assert event["metadata"]["export_format"] == "excel"
+    AuditService.clear_events()

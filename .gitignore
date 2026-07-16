@@ -38,6 +38,7 @@ api/venv/
 
 # Environment variables
 .env
+.env.deploy
 .env.local
 .env.cloud
 

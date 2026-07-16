@@ -1,11 +1,13 @@
 """
 配置管理模块
 """
+import json
 import os
-from typing import Optional
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
 from pathlib import Path
+from typing import Annotated, Any, Optional
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PUBLIC_BASE_URL = "https://csidebate.xyz"
@@ -22,6 +24,33 @@ def _parse_env_list(name: str, default: Optional[str] = None) -> list[str]:
     if not raw:
         return []
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _coerce_list_value(value: Any, default: Optional[list[str]] = None) -> list[str]:
+    """Accept both JSON arrays and comma-separated strings for env-backed lists."""
+    fallback = list(default or [])
+
+    if value is None:
+        return fallback
+
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return fallback
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    normalized = str(value).strip()
+    return [normalized] if normalized else fallback
 
 
 class Settings(BaseSettings):
@@ -49,14 +78,12 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
 
     # CORS 配置（生产环境禁止 allow_origins=["*"] 与 allow_credentials=True 同时出现）
-    ALLOWED_ORIGINS: list[str] = _parse_env_list(
-        "ALLOWED_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)
-    )
+    ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = DEFAULT_ALLOWED_ORIGINS.copy()
 
     # JWT配置（生产必须显式配置 SECRET_KEY）
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24小时
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7天
     
     # OpenAI配置（优先从 model_config 表读取，这里仅作为 fallback）
@@ -91,6 +118,7 @@ class Settings(BaseSettings):
     
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
+    UPLOAD_QUARANTINE_DIR: str = "uploads/quarantine"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".doc"}
     AVATAR_MAX_UPLOAD_SIZE: int = 2 * 1024 * 1024  # 2MB
@@ -122,6 +150,11 @@ class Settings(BaseSettings):
             "DEBUG 必须是可解析的布尔值，例如 true/false、1/0、debug/dev 或 release/production。"
         )
     
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def normalize_allowed_origins(cls, value):
+        return _coerce_list_value(value, DEFAULT_ALLOWED_ORIGINS)
+
     class Config:
         env_file = ".env"
         case_sensitive = True

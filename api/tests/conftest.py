@@ -12,6 +12,7 @@ if root_str not in sys.path:
     sys.path.insert(0, root_str)
 
 from models.user import User
+from services.config_service import ConfigService
 from testing_db import (
     PGVECTOR_TEST_DATABASE_ENV,
     create_test_engine,
@@ -44,6 +45,7 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def db_session(request):
     """Create a test database session."""
+    ConfigService.invalidate_cache()
     database_url = resolve_test_database_url(
         TEST_DATABASE_URL,
         use_pgvector=bool(request.node.get_closest_marker("pgvector")),
@@ -71,3 +73,4 @@ def db_session(request):
     finally:
         session.close()
         drop_test_schema(engine)
+        ConfigService.invalidate_cache()

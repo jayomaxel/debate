@@ -36,9 +36,12 @@ jobs:
       DEBUG: "false"
       SECRET_KEY: ci-secret-key
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/debate_ci
+      PUBLIC_BASE_URL: http://localhost:8860
       REDIS_HOST: localhost
       REDIS_PORT: "6379"
-      ALLOWED_ORIGINS: http://localhost:5173
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:8860,http://127.0.0.1:8860
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,6 +71,12 @@ jobs:
           python -m pytest \
             api/tests/test_admin_secret_masking.py \
             api/tests/test_websocket_ticket.py \
+            api/tests/test_upload_guard.py \
+            api/tests/test_audit_service.py \
+            api/tests/test_rate_limit.py \
+            api/tests/test_auth_session.py \
+            api/tests/test_config_masking.py \
+            api/tests/test_health_check.py \
             api/tests/test_teaching_design_service.py \
             api/tests/test_topic_recommendation.py \
             api/tests/test_teacher_topic_recommendation_routes.py \

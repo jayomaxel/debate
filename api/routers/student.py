@@ -18,6 +18,7 @@ from database import get_db
 from models.user import User
 from services.profile_service import ProfileService
 from services.assessment_service import AssessmentService
+from services.audit_service import AuditService
 from services.debate_service import DebateService
 from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
@@ -596,6 +597,26 @@ async def _ensure_report_ready(db: Session, debate_id: str) -> Dict[str, object]
     return await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
 
 
+def _record_report_generation_audit(
+    *,
+    actor_id: str,
+    actor_role: str,
+    debate_id: str,
+    action: str,
+    result: str = "success",
+    metadata: Optional[Dict[str, object]] = None,
+) -> None:
+    AuditService.record_event(
+        event_type="report_regeneration",
+        actor_id=actor_id,
+        actor_role=actor_role,
+        target_type="report",
+        target_id=str(debate_id),
+        result=result,
+        metadata={"action": action, **dict(metadata or {})},
+    )
+
+
 async def _get_or_generate_report_markdown(
     db: Session,
     debate: Debate,
@@ -672,6 +693,13 @@ async def get_student_report(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="报告不存在或您未参与该辩论"
         )
+    _record_report_generation_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        debate_id=debate_id,
+        action="get_student_report",
+        metadata={"generated_report": True},
+    )
     
     debate_uuid = _uuid_value(debate_id)
     debate = db.query(Debate).filter(Debate.id == debate_uuid).first()
@@ -698,6 +726,8 @@ async def export_report_pdf(
     """
     导出报告为PDF
     """
+    actor_id = str(current_user.id)
+    actor_role = str(current_user.user_type)
     # 检查权限
     checker = PermissionChecker(db)
     if not checker.can_access_debate(current_user, debate_id):
@@ -723,7 +753,40 @@ async def export_report_pdf(
     await _ensure_report_ready(db, debate_id)
     db.refresh(debate)
 
+    report_meta = debate.report if isinstance(debate.report, dict) else {}
+    markdown_hash = report_meta.get("report_markdown_hash")
+    pdf_path = debate.report_pdf
+    default_pdf_path = (
+        BASE_DIR / settings.UPLOAD_DIR / "reports" / f"debate_report_{debate_id}.pdf"
+    )
+    if not pdf_path and default_pdf_path.exists():
+        pdf_path = default_pdf_path.as_posix()
+        debate.report_pdf = pdf_path
+        db.commit()
+
+    if (
+        pdf_path
+        and os.path.exists(pdf_path)
+        and (
+            (
+                markdown_hash
+                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+            )
+            or (
+                _legacy_pdf_cache_allowed(debate, report_meta)
+            )
+        )
+    ):
+        pdf_file = Path(pdf_path)
+        pdf_data = pdf_file.read_bytes()
+        return Response(
+            content=pdf_data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"},
+        )
+
     cached_markdown = _get_cached_report_markdown(debate)
+    markdown_was_cached = bool(cached_markdown)
 
     content = ""
     if not cached_markdown:
@@ -803,6 +866,17 @@ async def export_report_pdf(
 
     debate.report_pdf = target_pdf_path.as_posix()
     db.commit()
+    _record_report_generation_audit(
+        actor_id=actor_id,
+        actor_role=actor_role,
+        debate_id=debate_id,
+        action="export_report_pdf",
+        metadata={
+            "generated_pdf": True,
+            "generated_markdown": not markdown_was_cached,
+            "pdf_file": target_pdf_path.name,
+        },
+    )
     
     return Response(
         content=pdf_data,
@@ -851,6 +925,13 @@ async def export_report_excel(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Excel生成失败"
         )
+    _record_report_generation_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        debate_id=debate_id,
+        action="export_report_excel",
+        metadata={"generated_report": True, "export_format": "excel"},
+    )
     
     return Response(
         content=excel_data,
@@ -870,6 +951,8 @@ async def send_report_email(
     """
     手动发送辩论报告邮件
     """
+    actor_id = str(current_user.id)
+    actor_role = str(current_user.user_type)
     # 检查权限
     checker = PermissionChecker(db)
     if not checker.can_access_debate(current_user, debate_id):
@@ -896,6 +979,7 @@ async def send_report_email(
         raise HTTPException(status_code=400, detail="用户未设置邮箱")
 
     cached_markdown = _get_cached_report_markdown(debate)
+    markdown_was_cached = bool(cached_markdown)
     content = ""
     if not cached_markdown:
         speeches = (
@@ -929,6 +1013,16 @@ async def send_report_email(
     )
     
     if success:
+        _record_report_generation_audit(
+            actor_id=actor_id,
+            actor_role=actor_role,
+            debate_id=debate_id,
+            action="send_report_email",
+            metadata={
+                "generated_markdown": not markdown_was_cached,
+                "recipient_user_id": str(target_user.id),
+            },
+        )
         return {"code": 200, "message": "邮件发送成功", "data": None}
     else:
         raise HTTPException(status_code=500, detail="邮件发送失败")

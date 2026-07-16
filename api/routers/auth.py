@@ -1,5 +1,5 @@
-﻿"""
-璁よ瘉API璺敱
+"""
+认证API路由
 """
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func
@@ -8,18 +8,55 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from database import get_db
 from models.user import User
+from services.audit_service import AuditService
 from services.auth_service import AuthService
 from services.avatar_service import AvatarService
 from middleware.auth_middleware import verify_token_middleware
-from schemas.config import AuthSessionApiResponse, AuthSessionContract, WsTicketContract
+from schemas.config import (
+    AuditLogEventContract,
+    AuthSessionApiResponse,
+    AuthSessionContract,
+    UploadGuardErrorContract,
+    WsTicketContract,
+)
 from schemas.auth import SelectDefaultAvatarRequest
+from utils.security import (
+    build_audit_log_event_contract,
+    build_upload_guard_error_contract,
+    normalize_contract_role,
+)
 
-router = APIRouter(prefix="/api/auth", tags=["璁よ瘉"])
+router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 
-# Pydantic妯″瀷
+def _record_auth_audit(
+    *,
+    actor_id: str,
+    actor_role: str,
+    target_type: str,
+    target_id: str,
+    result: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    AuditService.record_event(
+        event_type="auth",
+        actor_id=actor_id,
+        actor_role=actor_role,
+        target_type=target_type,
+        target_id=target_id,
+        result=result,
+        metadata=metadata or {},
+    )
+
+
+def _normalize_requested_actor_role(user_type: str) -> str:
+    normalized = normalize_contract_role(user_type)
+    return normalized if normalized in {"student", "teacher", "admin"} else "system"
+
+
+# Pydantic模型
 class TeacherRegisterRequest(BaseModel):
-    account: str
+    account: str  # 教工号
     email: EmailStr
     phone: str
     password: str
@@ -30,7 +67,7 @@ class StudentRegisterRequest(BaseModel):
     account: str
     password: str
     name: str
-    class_id: Optional[str] = None  # 鐝骇ID锛堝彲閫夛級
+    class_id: Optional[str] = None  # 班级ID（可选）
     email: Optional[EmailStr] = None
     student_id: Optional[str] = None
 
@@ -38,11 +75,15 @@ class StudentRegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     account: str
     password: str
-    user_type: str  # teacher銆乻tudent鎴朼dministrator
+    user_type: str  # teacher、student或administrator
 
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+
+class WsTicketRequest(BaseModel):
+    room_id: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -55,14 +96,15 @@ class UpdateProfileRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     student_id: Optional[str] = None
-    class_id: Optional[str] = None  # 鏂板锛氱彮绾D
+    class_id: Optional[str] = None  # 新增：班级ID
 
 
-# API绔偣
-@router.get("/classes/public", summary="鑾峰彇鍏紑鐝骇鍒楄〃")
+# API端点
+@router.get("/classes/public", summary="获取公开班级列表")
 async def get_public_classes(db: Session = Depends(get_db)):
     """
-    鑾峰彇鎵€鏈夌彮绾у垪琛紙鐢ㄤ簬娉ㄥ唽鏃堕€夋嫨锛?    杩斿洖鐝骇ID銆佸悕绉般€佹暀甯堝鍚嶇瓑淇℃伅
+    获取所有班级列表（用于注册时选择）
+    返回班级ID、名称、教师姓名等信息
     """
     from models.class_model import Class
     from models.user import User
@@ -96,31 +138,33 @@ async def get_public_classes(db: Session = Depends(get_db)):
                 "id": str(cls.id),
                 "name": cls.name,
                 "code": cls.code,
-                "teacher_name": teacher_name or "鏈煡",
+                "teacher_name": teacher_name or "未知",
                 "student_count": int(student_count or 0)
             })
         
         return {
             "code": 200,
-            "message": "鑾峰彇鎴愬姛",
+            "message": "获取成功",
             "data": result
         }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"鑾峰彇鐝骇鍒楄〃澶辫触: {str(e)}"
+            detail=f"获取班级列表失败: {str(e)}"
         )
-@router.post("/register/teacher", summary="鏁欏笀娉ㄥ唽")
+@router.post("/register/teacher", summary="教师注册")
 async def register_teacher(
     request: TeacherRegisterRequest,
     db: Session = Depends(get_db)
 ):
     """
-    鏁欏笀娉ㄥ唽
+    教师注册
     
-    - **account**: 鏁欏伐鍙?    - **email**: 閭
-    - **phone**: 鎵嬫満鍙?    - **password**: 瀵嗙爜
-    - **name**: 濮撳悕
+    - **account**: 教工号
+    - **email**: 邮箱
+    - **phone**: 手机号
+    - **password**: 密码
+    - **name**: 姓名
     """
     try:
         user = AuthService.register_teacher(
@@ -133,7 +177,7 @@ async def register_teacher(
         )
         return {
             "code": 200,
-            "message": "娉ㄥ唽鎴愬姛",
+            "message": "注册成功",
             "data": user
         }
     except ValueError as e:
@@ -143,20 +187,20 @@ async def register_teacher(
         )
 
 
-@router.post("/register/student", summary="瀛︾敓娉ㄥ唽")
+@router.post("/register/student", summary="学生注册")
 async def register_student(
     request: StudentRegisterRequest,
     db: Session = Depends(get_db)
 ):
     """
-    瀛︾敓娉ㄥ唽
+    学生注册
     
-    - **account**: 璐﹀彿
-    - **password**: 瀵嗙爜
-    - **name**: 濮撳悕
-    - **class_id**: 鐝骇ID锛堝彲閫夛級
-    - **email**: 閭锛堝彲閫夛級
-    - **student_id**: 瀛﹀彿锛堝彲閫夛級
+    - **account**: 账号
+    - **password**: 密码
+    - **name**: 姓名
+    - **class_id**: 班级ID（可选）
+    - **email**: 邮箱（可选）
+    - **student_id**: 学号（可选）
     """
     try:
         user = AuthService.register_student(
@@ -170,7 +214,7 @@ async def register_student(
         )
         return {
             "code": 200,
-            "message": "娉ㄥ唽鎴愬姛",
+            "message": "注册成功",
             "data": user
         }
     except ValueError as e:
@@ -180,16 +224,22 @@ async def register_student(
         )
 
 
-@router.post("/login", summary="用户登录", response_model=AuthSessionApiResponse)
+@router.post(
+    "/login",
+    summary="用户登录",
+    response_model=AuthSessionApiResponse,
+)
 async def login(
     request: LoginRequest,
     db: Session = Depends(get_db)
 ):
     """
-    鐢ㄦ埛鐧诲綍
+    用户登录
     
-    - **account**: 鐠愶箑褰?    - **password**: 瀵嗙爜
-    - **user_type**: 鐢ㄦ埛绫诲瀷锛坱eacher銆乻tudent鎴朼dministrator锛?    """
+    - **account**: 璐﹀彿
+    - **password**: 密码
+    - **user_type**: 用户类型（teacher、student或administrator）
+    """
     try:
         result = AuthService.login(
             db=db,
@@ -197,39 +247,75 @@ async def login(
             password=request.password,
             user_type=request.user_type
         )
+        _record_auth_audit(
+            actor_id=str(result["user"]["id"]),
+            actor_role=str(result["user"]["user_type"]),
+            target_type="session",
+            target_id=str(result["session_id"]),
+            result="success",
+            metadata={"action": "login"},
+        )
         return {
             "code": 200,
-            "message": "鐧诲綍鎴愬姛",
+            "message": "登录成功",
             "data": result
         }
     except ValueError as e:
+        _record_auth_audit(
+            actor_id=(request.account or "").strip() or "anonymous",
+            actor_role=_normalize_requested_actor_role(request.user_type),
+            target_type="session",
+            target_id="login",
+            result="denied",
+            metadata={"action": "login", "reason": str(e)},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
         )
 
 
-@router.post("/refresh", summary="刷新令牌", response_model=AuthSessionApiResponse)
+@router.post(
+    "/refresh",
+    summary="刷新令牌",
+    response_model=AuthSessionApiResponse,
+)
 async def refresh_token(
     request: RefreshTokenRequest,
     db: Session = Depends(get_db)
 ):
     """
-    鍒锋柊璁块棶浠ょ墝
+    刷新访问令牌
     
-    - **refresh_token**: 鍒锋柊浠ょ墝
+    - **refresh_token**: 刷新令牌
     """
     try:
         result = AuthService.refresh_token(
             db=db,
             refresh_token=request.refresh_token
         )
+        _record_auth_audit(
+            actor_id=str(result["user"]["id"]),
+            actor_role=str(result["user"]["user_type"]),
+            target_type="session",
+            target_id=str(result["session_id"]),
+            result="success",
+            metadata={"action": "refresh"},
+        )
         return {
             "code": 200,
-            "message": "鍒锋柊鎴愬姛",
+            "message": "刷新成功",
             "data": result
         }
     except ValueError as e:
+        _record_auth_audit(
+            actor_id="unknown",
+            actor_role="system",
+            target_type="session",
+            target_id="refresh",
+            result="denied",
+            metadata={"action": "refresh", "reason": str(e)},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
@@ -240,14 +326,25 @@ async def refresh_token(
 async def logout(
     current_user: User = Depends(verify_token_middleware),
 ):
+    """
+    吊销当前访问令牌所属会话。
+    """
     session_id = getattr(current_user, "_auth_session_id", None)
     result = AuthService.logout_session(
         session_id,
         user_id=str(current_user.id),
     )
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="session",
+        target_id=str(session_id or current_user.id),
+        result="success",
+        metadata={"action": "logout", "revoked_session_count": result.get("revoked_session_count", 0)},
+    )
     return {
         "code": 200,
-        "message": "Logout successful",
+        "message": "登出成功",
         "data": result,
     }
 
@@ -256,10 +353,21 @@ async def logout(
 async def logout_all(
     current_user: User = Depends(verify_token_middleware),
 ):
+    """
+    吊销当前用户的全部服务端会话。
+    """
     result = AuthService.logout_all_sessions(str(current_user.id))
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="user_sessions",
+        target_id=str(current_user.id),
+        result="success",
+        metadata={"action": "logout_all", "revoked_session_count": result.get("revoked_session_count", 0)},
+    )
     return {
         "code": 200,
-        "message": "All sessions logged out",
+        "message": "已退出全部设备",
         "data": result,
     }
 
@@ -270,6 +378,9 @@ async def logout_all(
     response_model=AuthSessionContract,
 )
 async def get_auth_session_contract_mock(user_type: str = "teacher"):
+    """
+    提供给 D 的冻结登录态示例，不依赖真实会话改造。
+    """
     return AuthService.build_auth_session_contract_preview(user_type=user_type)
 
 
@@ -279,6 +390,9 @@ async def get_auth_session_contract_mock(user_type: str = "teacher"):
     response_model=WsTicketContract,
 )
 async def get_ws_ticket_contract_mock(room_id: str = "room_demo_001"):
+    """
+    提供给 D 的 WebSocket ticket 示例，不暴露 access token query。
+    """
     return AuthService.build_ws_ticket_contract_preview(room_id=room_id)
 
 
@@ -291,13 +405,67 @@ async def issue_ws_ticket(
     room_id: str,
     current_user: User = Depends(verify_token_middleware),
 ):
+    """
+    使用当前登录态签发短时单次可用的 WebSocket ticket。
+    """
     token_payload = getattr(current_user, "_auth_token_payload", {}) or {}
-    return AuthService.issue_ws_ticket(
+    ticket_payload = AuthService.issue_ws_ticket(
         user=current_user,
         room_id=room_id,
         session_id=getattr(current_user, "_auth_session_id", None),
         auth_iat=token_payload.get("iat"),
     )
+    _record_auth_audit(
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="room",
+        target_id=str(room_id),
+        result="success",
+        metadata={
+            "action": "issue_ws_ticket",
+            "session_id": getattr(current_user, "_auth_session_id", None),
+            "ticket": ticket_payload.get("ticket"),
+        },
+    )
+    return ticket_payload
+
+
+@router.get(
+    "/contracts/upload-error/mock",
+    summary="获取 UploadGuardErrorContract mock",
+    response_model=UploadGuardErrorContract,
+)
+async def get_upload_guard_error_contract_mock():
+    """
+    提供统一上传错误结构示例，供前端错误映射先接入。
+    """
+    return build_upload_guard_error_contract(
+        code="mime_invalid",
+        message="Only PDF and DOCX uploads are allowed for this object.",
+        request_id="req_contract_upload_demo",
+    )
+
+
+@router.get(
+    "/contracts/audit-event/mock",
+    summary="获取 AuditLogEventContract mock",
+    response_model=AuditLogEventContract,
+)
+async def get_audit_log_event_contract_mock():
+    """
+    提供统一审计事件结构示例，供后续联调对齐字段。
+    """
+    return build_audit_log_event_contract(
+        event_type="auth",
+        actor_id="teacher_demo_id",
+        actor_role="teacher",
+        target_type="session",
+        target_id="session_demo_id",
+        result="success",
+        metadata={"action": "login"},
+        event_id="audit_contract_demo",
+    )
+
 
 @router.post("/change-password", summary="修改密码")
 async def change_password(
@@ -306,9 +474,11 @@ async def change_password(
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    淇敼瀵嗙爜锛堥渶瑕佺櫥褰曪級
+    修改密码（需要登录）
     
-    - **old_password**: 鏃у瘑鐮?    - **new_password**: 鏂板瘑鐮?    """
+    - **old_password**: 旧密码
+    - **new_password**: 新密码
+    """
     try:
         AuthService.change_password(
             db=db,
@@ -318,7 +488,7 @@ async def change_password(
         )
         return {
             "code": 200,
-            "message": "瀵嗙爜淇敼鎴愬姛"
+            "message": "密码修改成功"
         }
     except ValueError as e:
         raise HTTPException(
@@ -327,13 +497,13 @@ async def change_password(
         )
 
 
-@router.get("/profile", summary="鑾峰彇涓汉淇℃伅")
+@router.get("/profile", summary="获取个人信息")
 async def get_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    鑾峰彇褰撳墠鐢ㄦ埛鐨勪釜浜轰俊鎭紙闇€瑕佺櫥褰曪級
+    获取当前用户的个人信息（需要登录）
     """
     from services.profile_service import ProfileService
     
@@ -341,7 +511,7 @@ async def get_profile(
         profile = ProfileService.get_profile(db=db, user_id=str(current_user.id))
         return {
             "code": 200,
-            "message": "鑾峰彇鎴愬姛",
+            "message": "获取成功",
             "data": profile
         }
     except ValueError as e:
@@ -351,20 +521,20 @@ async def get_profile(
         )
 
 
-@router.put("/profile", summary="鏇存柊涓汉淇℃伅")
+@router.put("/profile", summary="更新个人信息")
 async def update_profile(
     request: UpdateProfileRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware)
 ):
     """
-    鏇存柊涓汉淇℃伅锛堥渶瑕佺櫥褰曪級
+    更新个人信息（需要登录）
     
-    - **name**: 濮撳悕锛堝彲閫夛級
-    - **email**: 閭锛堝彲閫夛級
-    - **phone**: 鎵嬫満鍙凤紙鍙€夛級
-    - **student_id**: 瀛﹀彿锛堝彲閫夛紝浠呭鐢燂級
-    - **class_id**: 鐝骇ID锛堝彲閫夛紝浠呭鐢燂級
+    - **name**: 姓名（可选）
+    - **email**: 邮箱（可选）
+    - **phone**: 手机号（可选）
+    - **student_id**: 学号（可选，仅学生）
+    - **class_id**: 班级ID（可选，仅学生）
     """
     from services.profile_service import ProfileService
     
@@ -380,7 +550,7 @@ async def update_profile(
         )
         return {
             "code": 200,
-            "message": "鏇存柊鎴愬姛",
+            "message": "更新成功",
             "data": result
         }
     except ValueError as e:
@@ -390,11 +560,11 @@ async def update_profile(
         )
 
 
-@router.get("/avatars/defaults", summary="鑾峰彇榛樿澶村儚鍒楄〃")
+@router.get("/avatars/defaults", summary="获取默认头像列表")
 async def get_default_avatars():
     return {
         "code": 200,
-        "message": "鑾峰彇鎴愬姛",
+        "message": "获取成功",
         "data": AvatarService.list_default_avatars(),
     }
 
@@ -415,7 +585,7 @@ async def upload_profile_avatar(
         )
         return {
             "code": 200,
-            "message": "澶村儚涓婁紶鎴愬姛",
+            "message": "头像上传成功",
             "data": avatar_payload,
         }
     except ValueError as e:
@@ -425,7 +595,7 @@ async def upload_profile_avatar(
         )
 
 
-@router.put("/profile/avatar/default", summary="鍒囨崲榛樿澶村儚")
+@router.put("/profile/avatar/default", summary="切换默认头像")
 async def select_default_avatar(
     request: SelectDefaultAvatarRequest,
     db: Session = Depends(get_db),
@@ -449,7 +619,7 @@ async def select_default_avatar(
         )
 
 
-@router.delete("/profile/avatar", summary="娓呴櫎澶村儚")
+@router.delete("/profile/avatar", summary="清除头像")
 async def clear_profile_avatar(
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware),
@@ -467,18 +637,21 @@ class DeleteAccountRequest(BaseModel):
     password: str
 
 
-@router.post("/delete-account", summary="娉ㄩ攢璐︽埛")
+@router.post("/delete-account", summary="注销账户")
 async def delete_account(
     request: DeleteAccountRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(verify_token_middleware),
 ):
     """
-    娉ㄩ攢璐︽埛
+    注销账户
     
-    - **password**: 瀵嗙爜锛堢敤浜庣‘璁わ級
+    - **password**: 密码（用于确认）
     
-    娉ㄦ剰锛?    - 瀛︾敓璐︽埛锛氳蒋鍒犻櫎锛屼繚鐣欏尶鍚嶅寲鐨勫巻鍙叉暟鎹?    - 鏁欏笀璐︽埛锛氶渶瑕佸厛鍒犻櫎鎴栬浆绉绘墍鏈夌彮绾?    """
+    注意：
+    - 学生账户：软删除，保留匿名化的历史数据
+    - 教师账户：需要先删除或转移所有班级
+    """
     
     try:
         result = AuthService.delete_account(

@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from database import Base
 from models.kb_document import KBDocument, KBDocumentChunk
 from models.user import User
+from services.config_service import ConfigService
 from services.document_service import DocumentService
 from testing_db import (
     create_test_engine,
@@ -78,6 +79,7 @@ def assert_invalid_top_k_message(message):
 @pytest.fixture
 def db_session(request):
     """创建测试数据库会话"""
+    ConfigService.invalidate_cache()
     database_url = resolve_test_database_url(
         TEST_DATABASE_URL,
         use_pgvector=bool(request.node.get_closest_marker("pgvector")),
@@ -106,6 +108,7 @@ def db_session(request):
     finally:
         session.close()
         drop_test_schema(engine)
+        ConfigService.invalidate_cache()
 
 
 @pytest.fixture

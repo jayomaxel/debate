@@ -123,12 +123,91 @@ class WsTicketContract(BaseModel):
         }
 
 
+class MaskedConfigResponse(BaseModel):
+    """Frozen masked-secret response for admin config pages."""
+
+    configured: bool
+    masked: str
+    updated_at: datetime
+    updated_by: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "configured": True,
+                "masked": "sk-****demo",
+                "updated_at": "2026-06-20T08:30:00Z",
+                "updated_by": "system",
+            }
+        }
+
+
+class UploadGuardErrorContract(BaseModel):
+    """Frozen upload security error payload."""
+
+    code: Literal[
+        "upload_blocked",
+        "mime_invalid",
+        "extension_invalid",
+        "magic_number_invalid",
+        "file_too_large",
+        "scan_failed",
+    ]
+    message: str
+    request_id: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "code": "mime_invalid",
+                "message": "Only PDF and DOCX uploads are allowed for this object.",
+                "request_id": "req_5b6618dce4c2440f92117c929bf052e3",
+            }
+        }
+
+
+class AuditLogEventContract(BaseModel):
+    """Frozen security audit event payload."""
+
+    event_id: str
+    event_type: Literal[
+        "auth",
+        "config",
+        "upload",
+        "admin_action",
+        "report_regeneration",
+    ]
+    actor_id: str
+    actor_role: Literal["student", "teacher", "admin", "system"]
+    target_type: str
+    target_id: str
+    result: Literal["success", "denied", "failed"]
+    created_at: datetime
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "event_id": "audit_0e5da8c3a8fd469d89f9b75958c24796",
+                "event_type": "auth",
+                "actor_id": "8e137f6f-15f6-4554-91fa-ef46563d9807",
+                "actor_role": "teacher",
+                "target_type": "session",
+                "target_id": "0f97bc37-5396-438c-98ae-64b4b1b5f5c8",
+                "result": "success",
+                "created_at": "2026-06-20T08:30:00Z",
+                "metadata": {"action": "login"},
+            }
+        }
+
+
 class ModelConfigResponse(BaseModel):
     """Model configuration response schema"""
     id: str
     model_name: str
     api_endpoint: str
     api_key: str
+    secret: MaskedConfigResponse
     api_key_configured: bool = False
     api_key_masked: Optional[str] = None
     temperature: float = Field(ge=0.0, le=2.0, description="Temperature for model sampling")
@@ -144,7 +223,13 @@ class ModelConfigResponse(BaseModel):
                 "id": "123e4567-e89b-12d3-a456-426614174000",
                 "model_name": "gpt-3.5-turbo",
                 "api_endpoint": "https://api.openai.com/v1/chat/completions",
-                "api_key": "sk-...",
+                "api_key": "sk-****1234",
+                "secret": {
+                    "configured": True,
+                    "masked": "sk-****1234",
+                    "updated_at": "2024-01-15T10:30:00",
+                    "updated_by": "system",
+                },
                 "temperature": 0.7,
                 "max_tokens": 2000,
                 "parameters": {},
@@ -188,6 +273,7 @@ class CozeConfigResponse(BaseModel):
     mentor_bot_id: str
     # API Token
     api_token: str
+    secret: MaskedConfigResponse
     api_token_configured: bool = False
     api_token_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
@@ -205,7 +291,13 @@ class CozeConfigResponse(BaseModel):
                 "debater_4_bot_id": "7428xxxxxx",
                 "judge_bot_id": "7428xxxxxx",
                 "mentor_bot_id": "7428xxxxxx",
-                "api_token": "pat_...",
+                "api_token": "pat****1234",
+                "secret": {
+                    "configured": True,
+                    "masked": "pat****1234",
+                    "updated_at": "2024-01-15T10:30:00",
+                    "updated_by": "system",
+                },
                 "parameters": {
                     "timeout": 30,
                     "retry_count": 3,
@@ -290,6 +382,7 @@ class AsrConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    secret: MaskedConfigResponse
     api_key_configured: bool = False
     api_key_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
@@ -312,6 +405,7 @@ class TtsConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    secret: MaskedConfigResponse
     api_key_configured: bool = False
     api_key_masked: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
@@ -353,6 +447,7 @@ class VectorConfigResponse(BaseModel):
     model_name: str
     api_endpoint: str
     api_key: str
+    secret: MaskedConfigResponse
     api_key_configured: bool = False
     api_key_masked: Optional[str] = None
     embedding_dimension: int = Field(gt=0, description="向量维度")
@@ -367,7 +462,13 @@ class VectorConfigResponse(BaseModel):
                 "id": "123e4567-e89b-12d3-a456-426614174003",
                 "model_name": "text-embedding-ada-002",
                 "api_endpoint": "https://api.openai.com/v1/embeddings",
-                "api_key": "sk-...",
+                "api_key": "sk-****1234",
+                "secret": {
+                    "configured": True,
+                    "masked": "sk-****1234",
+                    "updated_at": "2024-01-15T10:30:00",
+                    "updated_by": "system",
+                },
                 "embedding_dimension": 1536,
                 "parameters": {},
                 "created_at": "2024-01-15T10:30:00",
@@ -403,6 +504,7 @@ class EmailConfigResponse(BaseModel):
     smtp_user: str
     smtp_password_configured: bool
     smtp_password_masked: Optional[str] = None
+    secret: MaskedConfigResponse
     from_email: str
     auto_send_enabled: bool
     created_at: datetime

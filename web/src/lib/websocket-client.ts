@@ -1,3 +1,4 @@
+import api from './api';
 import { getWebSocketBaseUrl as getRuntimeWebSocketBaseUrl } from './runtime-url';
 
 export type MessageType =
@@ -55,6 +56,13 @@ export const getWebSocketBaseUrl = getRuntimeWebSocketBaseUrl;
 
 const replayableMessageTypes = new Set<MessageType>(['room_joined', 'state_update']);
 
+interface WsTicketContract {
+  ticket: string;
+  room_id: string;
+  expires_at: string;
+  connection_url: string;
+}
+
 interface WebSocketClientOptions {
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -74,6 +82,11 @@ export const buildDebateWebSocketUrl = (roomId: string, ticket?: string) => {
   return `${baseUrl}${roomPath}?ticket=${encodeURIComponent(ticket)}`;
 };
 
+const issueDebateWebSocketTicket = async (roomId: string) =>
+  api.get<WsTicketContract>('/api/auth/ws-ticket', {
+    params: { room_id: roomId },
+  });
+
 export default class WebSocketClient {
   private socket: WebSocket | null = null;
   private handlers = new Map<MessageType, Set<EventHandler>>();
@@ -84,7 +97,6 @@ export default class WebSocketClient {
   private closedByUser = false;
   private hasConnected = false;
   private currentRoomId: string | null = null;
-  private currentTicket: string | null = null;
   private readonly reconnectInterval: number;
   private readonly maxReconnectAttempts: number;
   private readonly heartbeatInterval: number;
@@ -110,17 +122,22 @@ export default class WebSocketClient {
     this.currentRoomId = roomId;
     this.lastReplayableMessages.clear();
 
-    const resolvedTicket = ticket ?? (await this.ticketProvider?.(roomId));
+    const ticketPayload: Partial<WsTicketContract> = ticket
+      ? { ticket, room_id: roomId }
+      : this.ticketProvider
+        ? { ticket: await this.ticketProvider(roomId), room_id: roomId }
+        : await issueDebateWebSocketTicket(roomId);
+    const resolvedTicket = ticketPayload.ticket;
     if (!resolvedTicket) {
       throw new Error('No WebSocket ticket available');
     }
-    this.currentTicket = resolvedTicket;
 
     const url = buildDebateWebSocketUrl(roomId, resolvedTicket);
     const debugUrl = buildDebateWebSocketUrl(roomId);
     console.debug('[WebSocketClient] Connecting to debate websocket', {
       roomId,
       url: debugUrl,
+      ticketExpiresAt: ticketPayload.expires_at,
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -134,6 +151,7 @@ export default class WebSocketClient {
         console.debug('[WebSocketClient] Debate websocket connected', {
           roomId,
           url: debugUrl,
+          ticketRoomId: ticketPayload.room_id,
         });
         this.onOpen?.();
         resolve();
@@ -252,7 +270,6 @@ export default class WebSocketClient {
   private scheduleReconnect(): void {
     if (
       !this.currentRoomId ||
-      (!this.ticketProvider && !this.currentTicket) ||
       this.reconnectAttempts >= this.maxReconnectAttempts
     ) {
       return;
@@ -260,8 +277,7 @@ export default class WebSocketClient {
 
     this.reconnectAttempts += 1;
     this.reconnectTimer = window.setTimeout(() => {
-      const reusableTicket = this.ticketProvider ? undefined : this.currentTicket!;
-      void this.connect(this.currentRoomId!, reusableTicket).catch((error) => {
+      void this.connect(this.currentRoomId!).catch((error) => {
         console.error('[WebSocketClient] Reconnect failed:', error);
       });
     }, this.reconnectInterval);

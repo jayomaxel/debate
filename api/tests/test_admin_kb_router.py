@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 import uuid
 import io
+import zipfile
 
 from main import app
 from database import Base, get_db
@@ -20,6 +21,18 @@ from utils.security import hash_password, create_token
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_admin_kb_router.db"
 engine = create_test_engine(SQLALCHEMY_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def _valid_pdf_bytes() -> bytes:
+    return b"%PDF-1.7\n% test pdf\n" + (b"PDF content here" * 100)
+
+
+def _valid_docx_bytes() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types></Types>")
+        archive.writestr("word/document.xml", "<w:document></w:document>")
+    return buffer.getvalue()
 
 
 def override_get_db():
@@ -122,7 +135,7 @@ class TestDocumentUpload:
     def test_upload_pdf_as_admin(self, admin_user):
         """测试管理员上传PDF文档"""
         # 创建模拟PDF文件
-        file_content = b"PDF content here" * 100
+        file_content = _valid_pdf_bytes()
         files = {
             "file": ("test_document.pdf", io.BytesIO(file_content), "application/pdf")
         }
@@ -145,7 +158,7 @@ class TestDocumentUpload:
     def test_upload_docx_as_admin(self, admin_user):
         """测试管理员上传DOCX文档"""
         # 创建模拟DOCX文件
-        file_content = b"DOCX content here" * 100
+        file_content = _valid_docx_bytes()
         files = {
             "file": ("test_document.docx", io.BytesIO(file_content), 
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -177,7 +190,7 @@ class TestDocumentUpload:
         )
         
         assert response.status_code == 400
-        assert "不支持的文件类型" in response.json()["detail"]
+        assert response.json()["code"] == "extension_invalid"
     
     def test_upload_file_too_large(self, admin_user):
         """测试上传超过大小限制的文件"""
@@ -194,11 +207,11 @@ class TestDocumentUpload:
         )
         
         assert response.status_code == 400
-        assert "文件大小超过限制" in response.json()["detail"]
+        assert response.json()["code"] == "file_too_large"
     
     def test_upload_without_authentication(self):
         """测试未认证用户上传文档"""
-        file_content = b"PDF content here"
+        file_content = _valid_pdf_bytes()
         files = {
             "file": ("test_document.pdf", io.BytesIO(file_content), "application/pdf")
         }
@@ -213,7 +226,7 @@ class TestDocumentUpload:
     
     def test_upload_as_teacher(self, teacher_user):
         """测试教师用户上传文档（应该被拒绝）"""
-        file_content = b"PDF content here"
+        file_content = _valid_pdf_bytes()
         files = {
             "file": ("test_document.pdf", io.BytesIO(file_content), "application/pdf")
         }
@@ -229,7 +242,7 @@ class TestDocumentUpload:
     
     def test_upload_as_student(self, student_user):
         """测试学生用户上传文档（应该被拒绝）"""
-        file_content = b"PDF content here"
+        file_content = _valid_pdf_bytes()
         files = {
             "file": ("test_document.pdf", io.BytesIO(file_content), "application/pdf")
         }

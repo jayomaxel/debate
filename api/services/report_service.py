@@ -1056,13 +1056,18 @@ class ReportGenerator:
             if not markdown_text:
                 return None
 
-            return await ReportGenerator.render_markdown_to_pdf_async(
+            pdf_bytes = await ReportGenerator.render_markdown_to_pdf_async(
                 markdown_text=markdown_text,
                 debate_topic=debate_topic,
                 start_time=start_time,
                 end_time=end_time,
                 duration=duration,
             )
+            if pdf_bytes:
+                cache_path = ReportGenerator._get_report_pdf_cache_path(debate_id)
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(pdf_bytes)
+            return pdf_bytes
 
         except Exception as e:
             logger.error(f"导出PDF失败: {e}", exc_info=True)

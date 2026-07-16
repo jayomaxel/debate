@@ -1,43 +1,29 @@
-# 前端Web Dockerfile
-# 构建阶段
-FROM node:18-alpine AS builder
+# Frontend Web Dockerfile
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# 先复制依赖清单，便于利用Docker缓存并固定pnpm版本
 COPY web/package.json ./
 COPY web/pnpm-lock.yaml ./
 
-# 固定pnpm版本，避免因为镜像内拉取最新版本导致锁文件兼容性问题
 RUN npm install -g pnpm@10.11.0
-
-# 安装依赖
 RUN pnpm install --frozen-lockfile
 
-# 再复制前端源码，避免源码改动导致依赖层缓存失效
 COPY web/ .
 
-# 构建应用（执行 TypeScript 检查和 Vite 构建）
 RUN pnpm run build
 
-# 生产阶段
 FROM nginx:alpine
 
-# 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# 默认代理到 compose 内部的 api 服务；需要时可在运行时覆盖
 ENV API_UPSTREAM=api:7860
 
-# 复制 nginx 模板，交给官方入口脚本做 envsubst
 COPY web/nginx.conf /etc/nginx/templates/default.conf.template
 
-# 暴露端口
 EXPOSE 80
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1/ || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1/healthz || exit 1
 
-# 启动nginx
 CMD ["nginx", "-g", "daemon off;"]

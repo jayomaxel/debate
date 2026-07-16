@@ -1,37 +1,33 @@
 import pytest
 
-from services.report_service import Report, ReportGenerator
 from config import settings
+from services.report_service import Report, ReportGenerator
 
 
 @pytest.mark.asyncio
 async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
 
-    async def fake_generate_markdown_report_async(
-        db,
-        debate_topic,
-        content_str="",
-    ):
-        return f"# 测试报告\n\n辩题：{debate_topic}\n\n{content_str}"
+    async def fake_generate_markdown_via_coze(db, report):
+        return f"# Test Report\n\nTopic: {report.topic}\n\nThis is a test speech."
 
     monkeypatch.setattr(
         ReportGenerator,
-        "generate_markdown_report_async",
-        fake_generate_markdown_report_async,
+        "_generate_markdown_via_coze",
+        fake_generate_markdown_via_coze,
         raising=True,
     )
 
     report = Report(
         debate_id="debate-1",
-        topic="测试辩题",
+        topic="Test debate topic",
         start_time=None,
         end_time=None,
         duration=0,
         participants=[
             {
                 "user_id": "u1",
-                "name": "张三",
+                "name": "Student One",
                 "role": "debater_1",
                 "stance": "positive",
                 "is_ai": False,
@@ -52,11 +48,11 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
                 "id": "s1",
                 "speaker_type": "human",
                 "speaker_role": "debater_1",
-                "speaker_name": "张三",
+                "speaker_name": "Student One",
                 "stance": "positive",
                 "role": "debater_1",
                 "phase": "opening",
-                "content": "这是一次测试发言。",
+                "content": "This is a test speech.",
                 "duration": 10,
                 "timestamp": "2026-02-04T00:00:00",
                 "score": {
@@ -66,7 +62,7 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
                     "persuasion_score": 80,
                     "teamwork_score": 80,
                     "overall_score": 80,
-                    "feedback": "测试评语",
+                    "feedback": "Test feedback",
                 },
             }
         ],
