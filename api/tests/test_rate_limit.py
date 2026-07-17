@@ -50,6 +50,14 @@ def rate_limit_client(monkeypatch):
     async def generate_topics():
         return {"topics": ["topic-a"]}
 
+    @app.post("/api/teacher/classes/{class_id}/topic-recommendations")
+    async def generate_class_topic_recommendations(class_id: str):
+        return {"class_id": class_id, "topics": ["topic-a"]}
+
+    @app.post("/api/teacher/debates/{debate_id}/report/recalculate")
+    async def recalculate_teacher_report(debate_id: str):
+        return {"debate_id": debate_id, "ok": True}
+
     with TestClient(app) as client:
         yield client
 
@@ -134,6 +142,19 @@ def test_report_fetch_generation_is_rate_limited(rate_limit_client):
 
 def test_candidate_topic_generation_is_rate_limited(rate_limit_client):
     for _ in range(8):
+        response = rate_limit_client.post("/api/teacher/classes/class-1/topic-recommendations")
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.post("/api/teacher/classes/class-1/topic-recommendations")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "candidate_topic_generation"
+    events = AuditService.list_events(event_type="topic_generation", result="denied")
+    assert events[0]["target_type"] == "candidate_topic"
+
+
+def test_legacy_candidate_topic_generation_route_remains_rate_limited(rate_limit_client):
+    for _ in range(8):
         response = rate_limit_client.post("/api/teacher/topics/generate")
         assert response.status_code == 200
 
@@ -141,5 +162,14 @@ def test_candidate_topic_generation_is_rate_limited(rate_limit_client):
 
     assert blocked.status_code == 429
     assert blocked.json()["data"]["bucket"] == "candidate_topic_generation"
-    events = AuditService.list_events(event_type="topic_generation", result="denied")
-    assert events[0]["target_type"] == "candidate_topic"
+
+
+def test_teacher_report_recalculation_route_is_rate_limited(rate_limit_client):
+    for _ in range(6):
+        response = rate_limit_client.post("/api/teacher/debates/debate-1/report/recalculate")
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.post("/api/teacher/debates/debate-1/report/recalculate")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "report_regeneration"

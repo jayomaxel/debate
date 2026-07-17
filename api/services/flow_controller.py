@@ -21,6 +21,7 @@ from models.config import CozeConfig
 from models.speech import Speech
 from agents.debater_agent import AIDebaterAgent
 from services.config_service import ConfigService
+from services.debate_service import DebateService
 from utils.voice_processor import voice_processor
 from utils.speech_payload import build_speech_payload
 from logging_config import get_logger
@@ -1712,8 +1713,37 @@ class DebateFlowController:
             if str(getattr(speech, "content", "") or "").strip()
         ]
 
-    def _build_llm_context(self, recent_speeches: List[Speech]) -> List[Dict[str, str]]:
-        context: List[Dict[str, str]] = []
+    def _build_prompt_context_meta(self, debate: Optional[Debate]) -> Optional[Dict[str, Any]]:
+        if debate is None:
+            return None
+        try:
+            config_meta = DebateService._deserialize_debate_config_meta(debate)
+        except Exception:
+            config_meta = {}
+        if not config_meta:
+            return None
+        return {
+            "role": "system",
+            "content": "debate prompt context metadata",
+            "config_meta": config_meta,
+            "mode": config_meta.get("mode"),
+            "domain_pack_id": config_meta.get("domain_pack_id"),
+            "role_assignment_summary": {
+                "assignment_mode": config_meta.get("role_assignment_mode"),
+                "assignment_policy": config_meta.get("assignment_policy"),
+                "role_rotation_policy": config_meta.get("role_rotation_policy"),
+            },
+        }
+
+    def _build_llm_context(
+        self,
+        recent_speeches: List[Speech],
+        debate: Optional[Debate] = None,
+    ) -> List[Dict[str, Any]]:
+        context: List[Dict[str, Any]] = []
+        meta_context = self._build_prompt_context_meta(debate)
+        if meta_context:
+            context.append(meta_context)
         for speech in self._filter_prompt_context_speeches(recent_speeches)[-20:]:
             content = str(getattr(speech, "content", "") or "").strip()
             if not content:
@@ -3310,14 +3340,7 @@ class DebateFlowController:
                     .scalars()
                     .all()
                 )
-                context = []
-                for s in recent_speeches[-20:]:
-                    context.append(
-                        {
-                            "role": "assistant" if s.speaker_type == "ai" else "user",
-                            "content": s.content,
-                        }
-                    )
+                context = self._build_llm_context(recent_speeches, debate)
 
                 agent = AIDebaterAgent(position=position, db=db)
 
@@ -3967,7 +3990,7 @@ class DebateFlowController:
                     speech_type=str(turn_plan.get("speech_type") or "free_debate"),
                     topic=str(debate.topic or ""),
                     stance=self._resolve_ai_stance(room_state, speaker_role),
-                    context=self._build_llm_context(recent_speeches),
+                    context=self._build_llm_context(recent_speeches, debate),
                     include_audio=False,
                     **generation_kwargs,
                 ),

@@ -260,6 +260,40 @@ class PromptPackService:
         return chr(10).join(sections).strip()
 
     @classmethod
+    def render_agent_task_prompt(
+        cls,
+        context: PromptBuildContext | Mapping[str, Any],
+        *,
+        task_type: str,
+        task_data: Mapping[str, Any] | None = None,
+        extra_sections: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Render an agent task from structured data through the Prompt Pack."""
+        task_payload = {
+            "task_type": str(task_type or "").strip() or "general",
+            "task_data": cls._normalize_task_data(task_data or {}),
+        }
+        return cls.render_agent_prompt(
+            context,
+            task_prompt=PromptPack._render_value(task_payload),
+            extra_sections=extra_sections,
+        )
+
+    @classmethod
+    def _normalize_task_data(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._normalize_task_data(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [cls._normalize_task_data(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    @classmethod
     def resolve_mode_from_context(cls, history=None, mode=None):
         if mode:
             return ModePolicyService.normalize_mode(mode)
@@ -317,6 +351,7 @@ class PromptPackService:
 
     @classmethod
     def _build_context_block(cls, context: PromptBuildContext) -> Dict[str, Any]:
+        history_meta = cls._extract_history_meta(context.history)
         return {
             "topic": context.topic,
             "role": context.role,
@@ -324,7 +359,9 @@ class PromptPackService:
             "stance": context.stance,
             "history": cls._trim_history(context.history),
             "assessment_summary": dict(context.assessment_summary),
-            "role_assignment_summary": dict(context.role_assignment_summary),
+            "config_meta": history_meta.get("config_meta", {}),
+            "role_assignment_summary": dict(context.role_assignment_summary)
+            or history_meta.get("role_assignment_summary", {}),
             "knowledge_snippet_count": len(context.knowledge_snippets),
         }
 
@@ -353,6 +390,22 @@ class PromptPackService:
                 }
             )
         return trimmed
+
+    @staticmethod
+    def _extract_history_meta(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+        for item in reversed(list(history or [])):
+            if not isinstance(item, Mapping):
+                continue
+            result: Dict[str, Any] = {}
+            config_meta = item.get("config_meta")
+            if isinstance(config_meta, Mapping):
+                result["config_meta"] = dict(config_meta)
+            role_assignment_summary = item.get("role_assignment_summary")
+            if isinstance(role_assignment_summary, Mapping):
+                result["role_assignment_summary"] = dict(role_assignment_summary)
+            if result:
+                return result
+        return {}
 
     @classmethod
     def build_mock_report(

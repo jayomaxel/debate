@@ -31,23 +31,37 @@ class MentorAgent:
         self.base_url = None
         self._coze_context: Optional[List[Dict]] = None
 
-    def _build_prompt_pack_prompt(self, topic, stance, student_role, phase, task_prompt, context=None):
+    def _build_prompt_pack_prompt(
+        self,
+        topic,
+        stance,
+        student_role,
+        phase,
+        task_prompt=None,
+        context=None,
+        task_type=None,
+        task_data=None,
+    ):
         normalized_stance = "pro" if stance == "positive" else "con"
         role = "affirmative" if stance == "positive" else "negative"
         mode = PromptPackService.resolve_mode_from_context(context)
-        return PromptPackService.render_agent_prompt(
-            PromptBuildContext(
-                agent="mentor",
-                mode=mode,
-                phase=phase,
-                topic=topic,
-                role=role,
-                speaker_role=student_role or "mentor",
-                stance=normalized_stance,
-                history=list(context or []),
-            ),
-            task_prompt=task_prompt,
+        build_context = PromptBuildContext(
+            agent="mentor",
+            mode=mode,
+            phase=phase,
+            topic=topic,
+            role=role,
+            speaker_role=student_role or "mentor",
+            stance=normalized_stance,
+            history=list(context or []),
         )
+        if task_type:
+            return PromptPackService.render_agent_task_prompt(
+                build_context,
+                task_type=task_type,
+                task_data=task_data or {},
+            )
+        return PromptPackService.render_agent_prompt(build_context, task_prompt=task_prompt)
     
     async def _get_config(self):
         """获取Coze配置"""
@@ -123,55 +137,31 @@ class MentorAgent:
         context: List[Dict],
         opponent_recent_speech: Optional[str] = None
     ) -> str:
-        """
-        生成辅助建议
-        
-        Args:
-            topic: 辩题
-            stance: 立场（positive/negative）
-            student_role: 学生角色（debater_1-4）
-            current_phase: 当前环节
-            context: 辩论上下文
-            opponent_recent_speech: 对方最近的发言（可选）
-            
-        Returns:
-            辅助建议
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        phase_text = {
-            "opening": "立论",
-            "questioning": "盘问",
-            "free_debate": "自由辩论",
-            "closing": "总结陈词"
-        }.get(current_phase, current_phase)
-        
-        prompt = f"""
-你是一位经验丰富的辩论教练，正在为{stance_text}的{student_role}辩手提供实时指导。
-
-辩题：{topic}
-当前环节：{phase_text}
-"""
-        
-        if opponent_recent_speech:
-            prompt += f"\n对方刚刚说：{opponent_recent_speech}\n"
-        
-        prompt += """
-请给出简短的建议（50字以内），帮助学生：
-1. 如何更好地表达观点
-2. 可以使用哪些论据
-3. 如何回应对方
-4. 注意事项
-
-建议要具体、实用、易于理解。
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, student_role, current_phase, prompt, context)
+        """Generate a real-time coaching suggestion through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            student_role,
+            current_phase,
+            context=context,
+            task_type="real_time_suggestion",
+            task_data={
+                "opponent_recent_speech": opponent_recent_speech,
+                "requirements": [
+                    "give one concise actionable suggestion",
+                    "help the student express a clearer claim",
+                    "suggest usable reasoning or evidence",
+                    "point out how to respond to the opponent when relevant",
+                ],
+                "max_chars": 80,
+            },
+        )
         self._coze_context = context
         try:
             suggestion = await self._call_coze_bot(prompt)
         finally:
             self._coze_context = None
-        return suggestion if suggestion else "继续保持，注意逻辑清晰。"
+        return suggestion if suggestion else "Keep the next point clear and logically connected."
     
     async def analyze_weakness(
         self,
@@ -180,42 +170,7 @@ class MentorAgent:
         student_speeches: List[str],
         opponent_speeches: List[str]
     ) -> Dict[str, str]:
-        """
-        分析学生的弱点
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            student_speeches: 学生的发言列表
-            opponent_speeches: 对方的发言列表
-            
-        Returns:
-            分析结果（包含弱点和改进建议）
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        student_text = "\n".join([f"- {speech}" for speech in student_speeches])
-        opponent_text = "\n".join([f"- {speech}" for speech in opponent_speeches])
-        
-        prompt = f"""
-作为辩论教练，请分析{stance_text}学生在辩论中的表现：
-
-辩题：{topic}
-
-学生的发言：
-{student_text}
-
-对方的发言：
-{opponent_text}
-
-请分析：
-1. 学生的主要弱点（逻辑、论据、表达等方面）
-2. 对方的攻击点
-3. 具体的改进建议
-
-请简洁明了地给出分析（200字以内）。
-"""
-        
+        """Analyze student weakness through Prompt Pack."""
         context = [
             {"speaker_role": "mentor", "content": speech, "phase": "report"}
             for speech in student_speeches
@@ -228,17 +183,26 @@ class MentorAgent:
             stance,
             "mentor",
             "report",
-            prompt,
-            context,
+            context=context,
+            task_type="weakness_analysis",
+            task_data={
+                "student_speeches": list(student_speeches or []),
+                "opponent_speeches": list(opponent_speeches or []),
+                "requirements": [
+                    "identify the student's main weaknesses",
+                    "summarize the opponent's pressure points",
+                    "provide concrete improvement advice",
+                ],
+                "max_chars": 200,
+            },
         )
         self._coze_context = context
         try:
             analysis = await self._call_coze_bot(prompt)
         finally:
             self._coze_context = None
-        
         return {
-            "analysis": analysis if analysis else "继续保持当前表现",
+            "analysis": analysis if analysis else "Keep the current strengths and improve claim-evidence linkage.",
             "timestamp": ""
         }
     
@@ -249,47 +213,30 @@ class MentorAgent:
         opponent_argument: str,
         context: List[Dict]
     ) -> str:
-        """
-        建议反驳论点
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            opponent_argument: 对方论点
-            context: 辩论上下文
-            
-        Returns:
-            反驳建议
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        prompt = f"""
-你是{stance_text}的辩论教练，对方刚刚提出了以下论点：
-
-对方论点：{opponent_argument}
-
-请建议如何反驳（80字以内）：
-1. 指出对方论点的漏洞
-2. 提供反驳的角度
-3. 建议使用的论据
-
-建议要具体、可操作。
-"""
-        
+        """Suggest a counter argument through Prompt Pack."""
         prompt = self._build_prompt_pack_prompt(
             topic,
             stance,
             "mentor",
             "free_debate",
-            prompt,
-            context,
+            context=context,
+            task_type="counter_argument_suggestion",
+            task_data={
+                "opponent_argument": opponent_argument,
+                "requirements": [
+                    "identify a flaw or missing premise",
+                    "offer a rebuttal angle",
+                    "suggest supporting reasoning or evidence",
+                ],
+                "max_chars": 80,
+            },
         )
         self._coze_context = context
         try:
             suggestion = await self._call_coze_bot(prompt)
         finally:
             self._coze_context = None
-        return suggestion if suggestion else "可以从逻辑和事实两方面进行反驳。"
+        return suggestion if suggestion else "Rebut from both logic and factual support."
     
     async def suggest_closing_points(
         self,
@@ -298,40 +245,7 @@ class MentorAgent:
         key_arguments: List[str],
         debate_summary: str
     ) -> str:
-        """
-        建议总结要点
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            key_arguments: 己方关键论点
-            debate_summary: 辩论摘要
-            
-        Returns:
-            总结建议
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        arguments_text = "\n".join([f"- {arg}" for arg in key_arguments])
-        
-        prompt = f"""
-你是{stance_text}的辩论教练，现在是总结陈词环节。
-
-辩题：{topic}
-
-己方关键论点：
-{arguments_text}
-
-辩论情况：{debate_summary}
-
-请建议总结陈词应该包含哪些要点（100字以内）：
-1. 需要强调的核心论点
-2. 辩论中的优势
-3. 如何升华主题
-
-建议要有感染力和说服力。
-"""
-        
+        """Suggest closing points through Prompt Pack."""
         context = [
             {"speaker_role": "mentor", "content": argument, "phase": "closing"}
             for argument in key_arguments
@@ -349,12 +263,22 @@ class MentorAgent:
             stance,
             "mentor",
             "closing",
-            prompt,
-            context,
+            context=context,
+            task_type="closing_points_suggestion",
+            task_data={
+                "key_arguments": list(key_arguments or []),
+                "debate_summary": debate_summary,
+                "requirements": [
+                    "highlight the core claims to repeat",
+                    "summarize advantages gained during debate",
+                    "suggest a persuasive final lift",
+                ],
+                "max_chars": 100,
+            },
         )
         self._coze_context = context
         try:
             suggestion = await self._call_coze_bot(prompt)
         finally:
             self._coze_context = None
-        return suggestion if suggestion else "回顾核心论点，强调己方优势，升华主题。"
+        return suggestion if suggestion else "Review core claims, emphasize advantages, and close with the theme."

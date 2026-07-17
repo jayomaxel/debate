@@ -108,6 +108,14 @@ UPLOAD_POLICIES = (
         max_bytes=settings.MAX_UPLOAD_SIZE,
         allowed_mime_types=DOCUMENT_MIME_TYPES,
     ),
+    UploadPolicy(
+        name="teacher_teaching_design",
+        target_type="teaching_design",
+        path_pattern=re.compile(r"^/api/teacher/classes/[^/]+/teaching-design/upload$"),
+        methods=frozenset({"POST"}),
+        max_bytes=settings.MAX_UPLOAD_SIZE,
+        allowed_mime_types=DOCUMENT_MIME_TYPES,
+    ),
 )
 
 
@@ -254,7 +262,7 @@ def _is_docx(data: bytes) -> bool:
 
 
 def _build_extension_message(policy: UploadPolicy) -> str:
-    if policy.target_type in {"knowledge_document", "support_document"}:
+    if policy.target_type in {"knowledge_document", "support_document", "teaching_design"}:
         return "Only PDF and DOCX uploads are allowed for this object."
     if policy.target_type == "profile_avatar":
         return "Only PNG, JPEG, and WEBP avatar uploads are allowed."
@@ -264,7 +272,7 @@ def _build_extension_message(policy: UploadPolicy) -> str:
 
 
 def _build_mime_message(policy: UploadPolicy) -> str:
-    if policy.target_type in {"knowledge_document", "support_document"}:
+    if policy.target_type in {"knowledge_document", "support_document", "teaching_design"}:
         return "The uploaded document MIME type is not allowed."
     if policy.target_type == "profile_avatar":
         return "The uploaded avatar MIME type is not allowed."
@@ -274,7 +282,7 @@ def _build_mime_message(policy: UploadPolicy) -> str:
 
 
 def _build_magic_message(policy: UploadPolicy) -> str:
-    if policy.target_type in {"knowledge_document", "support_document"}:
+    if policy.target_type in {"knowledge_document", "support_document", "teaching_design"}:
         return "The uploaded document content does not match its file type."
     if policy.target_type == "profile_avatar":
         return "The uploaded avatar content does not match its file type."

@@ -47,6 +47,11 @@ def upload_client(quarantine_dir):
         content = await file.read()
         return {"debate_id": debate_id, "filename": file.filename, "size": len(content)}
 
+    @app.post("/api/teacher/classes/{class_id}/teaching-design/upload")
+    async def upload_teaching_design(class_id: str, file: UploadFile = File(...)):
+        content = await file.read()
+        return {"class_id": class_id, "filename": file.filename, "size": len(content)}
+
     with TestClient(app) as client:
         yield client
 
@@ -157,3 +162,27 @@ def test_teacher_support_document_route_is_guarded(upload_client):
 
     assert response.status_code == 400
     assert response.json()["code"] == "extension_invalid"
+
+
+def test_teacher_teaching_design_upload_route_accepts_valid_pdf(upload_client):
+    response = upload_client.post(
+        "/api/teacher/classes/class-001/teaching-design/upload",
+        files={"file": ("design.pdf", b"%PDF-1.7\nmock-pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"class_id": "class-001", "filename": "design.pdf", "size": 17}
+    events = AuditService.list_events(event_type="upload", result="success")
+    assert events[0]["target_type"] == "teaching_design"
+
+
+def test_teacher_teaching_design_upload_route_rejects_spoofed_document(upload_client):
+    response = upload_client.post(
+        "/api/teacher/classes/class-001/teaching-design/upload",
+        files={"file": ("design.pdf", b"not-a-real-pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "magic_number_invalid"
+    events = AuditService.list_events(event_type="upload", result="denied")
+    assert events[0]["target_type"] == "teaching_design"

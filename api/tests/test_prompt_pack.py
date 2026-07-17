@@ -65,11 +65,52 @@ def test_render_agent_prompt_keeps_pack_and_task_detail():
     assert '"field": "value"' in prompt
 
 
+def test_render_agent_task_prompt_uses_structured_task_detail():
+    prompt = PromptPackService.render_agent_task_prompt(
+        PromptBuildContext(agent="debater", phase="opening", topic="AI in class"),
+        task_type="opening_statement",
+        task_data={
+            "stance_text": "positive",
+            "max_chars": 300,
+            "ignored_none": None,
+            "points": ["claim", "evidence"],
+        },
+    )
+
+    assert prompt.startswith("prompt_pack_version: a.prompt_pack.v1")
+    assert "task_detail:" in prompt
+    assert '"task_type": "opening_statement"' in prompt
+    assert '"stance_text": "positive"' in prompt
+    assert '"max_chars": 300' in prompt
+    assert "ignored_none" not in prompt
+
+
 def test_resolve_mode_from_context_reads_frozen_meta_without_agent_logic():
     history = [{"content": "hello"}, {"config_meta": {"mode": "teaching"}}]
 
     assert PromptPackService.resolve_mode_from_context(history) == "teaching"
     assert PromptPackService.resolve_mode_from_context(history, mode="competition") == "competition"
+
+
+def test_context_block_preserves_flow_controller_meta():
+    pack = PromptPackService.build_prompt(
+        PromptBuildContext(
+            agent="debater",
+            mode="teaching",
+            history=[
+                {
+                    "role": "system",
+                    "content": "debate prompt context metadata",
+                    "config_meta": {"mode": "teaching", "domain_pack_id": "default"},
+                    "role_assignment_summary": {"assignment_mode": "strength_first"},
+                }
+            ],
+        )
+    )
+
+    context_block = pack.layers["context_block"]
+    assert context_block["config_meta"]["mode"] == "teaching"
+    assert context_block["role_assignment_summary"]["assignment_mode"] == "strength_first"
 
 
 def test_default_domain_pack_does_not_inject_stablecoin_content():

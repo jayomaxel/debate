@@ -19,6 +19,7 @@ from services.analytics_service import AnalyticsService
 from services.knowledge_base import KnowledgeBase
 from services.teaching_design_service import TeachingDesignService
 from services.topic_recommendation_service import TopicRecommendationService
+from services.audit_service import AuditService
 from middleware.auth_middleware import require_teacher, PermissionChecker
 
 logger = get_logger(__name__)
@@ -1021,10 +1022,34 @@ async def recalculate_teacher_report(
             debate_id=debate_id,
         )
     except ValueError as exc:
+        AuditService.record_event(
+            event_type="report_regeneration",
+            actor_id=str(current_user.id),
+            actor_role=getattr(current_user, "user_type", None) or "teacher",
+            target_type="report",
+            target_id=debate_id,
+            result="failure",
+            metadata={
+                "action": "teacher_report_recalculate",
+                "reason": str(exc),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         )
+
+    AuditService.record_event(
+        event_type="report_regeneration",
+        actor_id=str(current_user.id),
+        actor_role=getattr(current_user, "user_type", None) or "teacher",
+        target_type="report",
+        target_id=debate_id,
+        result="success",
+        metadata={
+            "action": "teacher_report_recalculate",
+        },
+    )
 
     return {
         "code": 200,

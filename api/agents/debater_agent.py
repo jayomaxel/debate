@@ -107,24 +107,38 @@ class AIDebaterAgent:
         }
         return voice_map.get(self.position, "Cherry")
 
-    def _build_prompt_pack_prompt(self, topic, stance, phase, task_prompt, context=None, knowledge_snippets=None):
+    def _build_prompt_pack_prompt(
+        self,
+        topic,
+        stance,
+        phase,
+        task_prompt=None,
+        context=None,
+        knowledge_snippets=None,
+        task_type=None,
+        task_data=None,
+    ):
         normalized_stance = "pro" if stance == "positive" else "con"
         role = "affirmative" if stance == "positive" else "negative"
         mode = PromptPackService.resolve_mode_from_context(context)
-        return PromptPackService.render_agent_prompt(
-            PromptBuildContext(
-                agent="debater",
-                mode=mode,
-                phase=phase,
-                topic=topic,
-                role=role,
-                speaker_role=f"debater_{self.position}",
-                stance=normalized_stance,
-                history=list(context or []),
-                knowledge_snippets=list(knowledge_snippets or []),
-            ),
-            task_prompt=task_prompt,
+        build_context = PromptBuildContext(
+            agent="debater",
+            mode=mode,
+            phase=phase,
+            topic=topic,
+            role=role,
+            speaker_role=f"debater_{self.position}",
+            stance=normalized_stance,
+            history=list(context or []),
+            knowledge_snippets=list(knowledge_snippets or []),
         )
+        if task_type:
+            return PromptPackService.render_agent_task_prompt(
+                build_context,
+                task_type=task_type,
+                task_data=task_data or {},
+            )
+        return PromptPackService.render_agent_prompt(build_context, task_prompt=task_prompt)
     
     async def _get_config(self):
         """获取Coze配置"""
@@ -342,36 +356,24 @@ class AIDebaterAgent:
         knowledge_base_content: Optional[str] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成立论陈词
-        
-        Args:
-            topic: 辩题
-            stance: 立场（positive/negative）
-            knowledge_base_content: 知识库内容（可选）
-            
-        Returns:
-            立论陈词
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        prompt = f"""
-你是{stance_text}的{self.position}辩手，请针对以下辩题进行立论陈词：
-
-辩题：{topic}
-
-要求：
-1. 明确表达{stance_text}立场
-2. 提出2-3个核心论点
-3. 每个论点要有充分的论据支持
-4. 语言简洁有力，逻辑清晰
-5. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        if knowledge_base_content:
-            prompt += f"\n\n参考资料：\n{knowledge_base_content}"
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "opening", prompt)
+        """Generate an opening statement through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "opening",
+            task_type="opening_statement",
+            task_data={
+                "speaker_position": self.position,
+                "knowledge_base_content": knowledge_base_content,
+                "requirements": [
+                    "state the assigned stance clearly",
+                    "provide two to three core claims",
+                    "support each claim with reasoning or evidence",
+                    "keep language concise and logically clear",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, stream_callback=stream_callback)
     
     async def generate_question(
@@ -386,22 +388,8 @@ class AIDebaterAgent:
         question_focus: Optional[str] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成盘问问题
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            context: 辩论上下文
-            opponent_arguments: 对方论点列表
-            
-        Returns:
-            盘问问题
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        opponent_stance = "反方" if stance == "positive" else "正方"
+        """Generate a cross-examination question through Prompt Pack."""
         normalized_role = str(speaker_role or "").strip()
-        normalized_segment = str(segment_id or "").strip()
         normalized_focus = str(question_focus or "").strip()
         cleaned_arguments = [
             str(argument or "").strip()
@@ -414,65 +402,28 @@ class AIDebaterAgent:
             if str(question or "").strip()
         ][-3:]
 
-        if normalized_focus == "definition_and_evidence" or normalized_role == "ai_2":
-            focus_instruction = (
-                "本轮你是反方二辩提问，问题角度必须集中在正方立论的定义、事实依据、"
-                "核心前提或证据可靠性上。不要追问执行后果或价值收束，那是后续三辩的任务。"
-            )
-        elif normalized_focus == "logic_followup_and_boundary" or normalized_role == "ai_3":
-            focus_instruction = (
-                "本轮你是反方三辩提问，必须基于前一轮交锋继续追问。问题角度应集中在"
-                "逻辑后果、适用边界、执行代价、例外情形或对方未回答点上。"
-                "不得复述二辩已经问过的定义、证据或核心前提问题。"
-            )
-        else:
-            focus_instruction = "问题要有清晰切入点，避免和前面已经出现的问题重复。"
-
-        previous_question_block = ""
-        if cleaned_previous_questions:
-            previous_question_block = (
-                "\n\n前面已经出现过的问题或追问，禁止重复这些问法：\n"
-                + "\n".join(f"- {question}" for question in cleaned_previous_questions)
-            )
-
-        if cleaned_arguments:
-            prompt = f"""
-你是{stance_text}的{self.position}辩手，现在是盘问环节。
-
-辩题：{topic}
-阶段：{normalized_segment or "盘问提问"}
-
-对方（{opponent_stance}）的主要论点：
-{chr(10).join(f"- {arg}" for arg in cleaned_arguments)}
-{previous_question_block}
-
-请提出一个尖锐的问题，要求：
-1. {focus_instruction}
-2. 问题要具体、明确
-3. 能够揭示对方逻辑漏洞或事实错误
-4. 只提出一个问题，不要展开成长篇论述
-5. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        else:
-            prompt = f"""
-你是{stance_text}的{self.position}辩手，现在是盘问环节。这个阶段由你主动提问，不需要等待对方先发言。
-
-辩题：{topic}
-阶段：{normalized_segment or "盘问提问"}
-{previous_question_block}
-
-请基于{stance_text}立场，预判{opponent_stance}在本辩题中最可能依赖的核心前提、价值判断或事实假设，提出一个尖锐的问题。
-
-要求：
-1. {focus_instruction}
-2. 不要说“对方刚才说过”或引用不存在的上一轮发言
-3. 问题要围绕辩题本身和双方立场冲突
-4. 问题必须具体、明确，能逼迫对方解释关键前提
-5. 只提出一个问题，不要展开成长篇论述
-6. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "questioning", prompt, context)
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "questioning",
+            context=context,
+            task_type="cross_examination_question",
+            task_data={
+                "speaker_position": self.position,
+                "segment_id": str(segment_id or "").strip() or "questioning",
+                "speaker_role": normalized_role,
+                "question_focus": normalized_focus,
+                "opponent_arguments": cleaned_arguments,
+                "previous_questions": cleaned_previous_questions,
+                "requirements": [
+                    "ask exactly one specific question",
+                    "avoid repeating previous questions",
+                    "press definition, evidence, logic, boundary, or unanswered points according to role focus",
+                    "do not invent a previous opponent speech when no opponent argument is supplied",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_response(
@@ -483,34 +434,24 @@ class AIDebaterAgent:
         context: List[Dict],
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成回答
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            question: 对方的问题
-            context: 辩论上下文
-            
-        Returns:
-            回答
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        prompt = f"""
-你是{stance_text}的{self.position}辩手，对方刚刚提出了以下问题：
-
-问题：{question}
-
-请给出有力的回答，要求：
-1. 直接回应问题核心
-2. 维护己方立场
-3. 提供充分的论据
-4. 语言简洁有力
-5. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "questioning", prompt, context)
+        """Generate an answer through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "questioning",
+            context=context,
+            task_type="question_response",
+            task_data={
+                "question": question,
+                "requirements": [
+                    "answer the core question directly",
+                    "defend the assigned stance",
+                    "provide sufficient reasoning",
+                    "keep language concise and forceful",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_rebuttal(
@@ -521,35 +462,24 @@ class AIDebaterAgent:
         context: List[Dict],
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成反驳
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            opponent_argument: 对方论点
-            context: 辩论上下文
-            
-        Returns:
-            反驳内容
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        prompt = f"""
-你是{stance_text}的{self.position}辩手，对方刚刚提出了以下论点：
-
-对方论点：{opponent_argument}
-
-请进行有力的反驳，要求：
-1. 指出对方论点的问题
-2. 提供反驳论据
-3. 强化己方立场
-4. 语言简洁有力
-5. 不要复述对方原文；最多引用对方关键词，不得整句照抄。直接指出漏洞并反驳
-6. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "free_debate", prompt, context)
+        """Generate a rebuttal through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "free_debate",
+            context=context,
+            task_type="rebuttal",
+            task_data={
+                "opponent_argument": opponent_argument,
+                "requirements": [
+                    "identify the issue in the opponent argument",
+                    "provide rebuttal reasoning",
+                    "strengthen the assigned stance",
+                    "avoid copying the opponent wording wholesale",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_closing_statement(
@@ -560,37 +490,24 @@ class AIDebaterAgent:
         key_points: List[str],
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成总结陈词
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            context: 辩论上下文
-            key_points: 己方关键论点
-            
-        Returns:
-            总结陈词
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        prompt = f"""
-你是{stance_text}的{self.position}辩手，现在是总结陈词环节。
-
-辩题：{topic}
-
-己方关键论点：
-{chr(10).join(f"- {point}" for point in key_points)}
-
-请进行总结陈词，要求：
-1. 回顾己方核心论点
-2. 总结辩论中的优势
-3. 强调己方立场的合理性
-4. 语言有感染力和说服力
-5. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "closing", prompt, context)
+        """Generate a closing statement through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "closing",
+            context=context,
+            task_type="closing_statement",
+            task_data={
+                "key_points": list(key_points or []),
+                "requirements": [
+                    "review the side's core claims",
+                    "summarize advantages from the debate",
+                    "reinforce why the stance is reasonable",
+                    "use persuasive but concise language",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
     
     async def generate_free_debate_speech(
@@ -601,43 +518,24 @@ class AIDebaterAgent:
         recent_speeches: List[Dict],
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
-        """
-        生成自由辩论发言
-        
-        Args:
-            topic: 辩题
-            stance: 立场
-            context: 辩论上下文
-            recent_speeches: 最近的发言列表
-            
-        Returns:
-            自由辩论发言
-        """
-        stance_text = "正方" if stance == "positive" else "反方"
-        
-        # 构建最近发言的摘要
-        recent_summary = "\n".join([
-            f"{speech.get('speaker', '未知')}: {speech.get('content', '')}"
-            for speech in recent_speeches[-5:]  # 最近5条发言
-        ])
-        
-        prompt = f"""
-你是{stance_text}的{self.position}辩手，现在是自由辩论环节。
-
-辩题：{topic}
-
-最近的发言：
-{recent_summary}
-
-请发表你的观点，要求：
-1. 可以反驳对方最近的论点
-2. 可以补充己方论据
-3. 可以提出新的角度
-4. 语言简洁有力
-5. 控制在{self.MAX_REPLY_CHARS}字以内
-"""
-        
-        prompt = self._build_prompt_pack_prompt(topic, stance, "free_debate", prompt, context)
+        """Generate a free-debate speech through Prompt Pack."""
+        prompt = self._build_prompt_pack_prompt(
+            topic,
+            stance,
+            "free_debate",
+            context=context,
+            task_type="free_debate_speech",
+            task_data={
+                "recent_speeches": list(recent_speeches or [])[-5:],
+                "requirements": [
+                    "rebut recent opponent points when useful",
+                    "add supporting reasoning for the assigned side",
+                    "introduce a new angle only when it helps the current clash",
+                    "keep language concise and forceful",
+                ],
+                "max_chars": self.MAX_REPLY_CHARS,
+            },
+        )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
 
     async def generate_speech_with_audio(
