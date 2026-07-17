@@ -523,3 +523,58 @@ async def test_multiple_updates_preserve_data(config_service, db_session):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.asyncio
+async def test_runtime_environment_overrides_database_and_cache(
+    config_service, db_session, monkeypatch
+):
+    stored = ModelConfig(
+        id=uuid.uuid4(),
+        model_name="stored-model",
+        api_endpoint="https://stored.example/v1/chat/completions",
+        api_key="stored-secret",
+        temperature=0.7,
+        max_tokens=1000,
+    )
+    db_session.add(stored)
+    db_session.commit()
+
+    first = await config_service.get_model_config()
+    assert first.api_key == "stored-secret"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "runtime-secret-one")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://runtime.example/v1")
+    monkeypatch.setenv("OPENAI_MODEL_NAME", "runtime-model")
+    effective = await config_service.get_model_config()
+
+    assert effective.api_key == "runtime-secret-one"
+    assert effective.api_endpoint == "https://runtime.example/v1/chat/completions"
+    assert effective.model_name == "runtime-model"
+    assert stored.api_key == "stored-secret"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "runtime-secret-two")
+    rotated = await config_service.get_model_config()
+    assert rotated.api_key == "runtime-secret-two"
+
+
+@pytest.mark.asyncio
+async def test_runtime_readiness_does_not_expose_secret_values(
+    config_service, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "never-return-this-secret")
+    monkeypatch.setenv("ASR_API_KEY", "asr-secret")
+    monkeypatch.setenv("TTS_API_KEY", "tts-secret")
+    monkeypatch.setenv("VECTOR_API_KEY", "vector-secret")
+
+    readiness = await config_service.get_runtime_readiness()
+
+    assert readiness["model"]["source"] == "environment"
+    assert readiness["asr"]["source"] == "environment"
+    assert readiness["tts"]["source"] == "environment"
+    assert readiness["vector"]["source"] == "environment"
+    serialized = repr(readiness)
+    assert "never-return-this-secret" not in serialized
+    assert "asr-secret" not in serialized
+    assert "tts-secret" not in serialized
+    assert "vector-secret" not in serialized

@@ -5,6 +5,14 @@
 
 import { api } from '../lib/api';
 import type { DebateReport } from './student.service';
+import type {
+  DebateConfigMeta,
+  RoleAssignmentInput,
+  RoleAssignmentPreviewContract,
+  TeachingDesignPayload,
+  TeachingDesignVersionContract,
+  TopicRecommendationRunContract,
+} from '../lib/frontend-contracts';
 
 export interface DebateGroupingItem {
   user_id: string;
@@ -64,6 +72,9 @@ export interface CreateDebateParams {
   duration: number;
   description?: string;
   student_ids?: string[];
+  config_meta?: DebateConfigMeta;
+  role_assignments?: RoleAssignmentInput[];
+  assignment_run_id?: string;
   status?: 'draft' | 'published';
 }
 
@@ -152,6 +163,9 @@ export interface CreateReservationParams {
   checkin_open_time?: string;
   checkin_close_time?: string;
   student_ids: string[];
+  config_meta?: DebateConfigMeta;
+  role_assignments?: RoleAssignmentInput[];
+  assignment_run_id?: string;
   visibility: ReservationVisibility;
   password?: string;
   host_user_id?: string;
@@ -165,6 +179,9 @@ export interface UpdateReservationParams {
   checkin_open_time?: string;
   checkin_close_time?: string;
   student_ids?: string[];
+  config_meta?: DebateConfigMeta;
+  role_assignments?: RoleAssignmentInput[];
+  assignment_run_id?: string;
   visibility?: ReservationVisibility;
   password?: string;
   host_user_id?: string;
@@ -185,6 +202,18 @@ export interface TeacherDebateSupportDocument {
   file_type: string;
   embedding_status: 'pending' | 'processing' | 'completed' | 'failed';
   uploaded_at: string | null;
+  purpose_tag: 'background' | 'evidence' | 'case' | 'optional';
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed';
+  summary_status: 'pending' | 'processing' | 'completed' | 'failed';
+  summary?: {
+    summary: string;
+    key_points: string[];
+    evidence_candidates: string[];
+    case_candidates: string[];
+    usable_phases: string[];
+    summary_quality: 'validated' | 'fallback';
+  } | null;
+  summary_quality?: 'validated' | 'fallback' | null;
 }
 
 export interface OpenAIConfig {
@@ -462,11 +491,13 @@ class TeacherService {
 
   static async uploadDebateSupportDocument(
     debateId: string,
-    file: File
+    file: File,
+    purposeTag: 'background' | 'evidence' | 'case' | 'optional' = 'optional'
   ): Promise<TeacherDebateSupportDocument> {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('purpose_tag', purposeTag);
       return await api.post<TeacherDebateSupportDocument>(
         `/api/teacher/debates/${debateId}/support-documents`,
         formData,
@@ -494,6 +525,80 @@ class TeacherService {
       console.error('[TeacherService] Delete debate support document failed:', error);
       throw error;
     }
+  }
+
+  static async getCurrentTeachingDesign(
+    classId: string
+  ): Promise<TeachingDesignVersionContract | null> {
+    return await api.get<TeachingDesignVersionContract | null>(
+      '/api/teacher/classes/' + classId + '/teaching-design/current'
+    );
+  }
+
+  static async listTeachingDesignVersions(
+    classId: string
+  ): Promise<TeachingDesignVersionContract[]> {
+    return await api.get<TeachingDesignVersionContract[]>(
+      '/api/teacher/classes/' + classId + '/teaching-design/versions'
+    );
+  }
+
+  static async uploadTeachingDesign(
+    classId: string,
+    file: File,
+    versionName?: string
+  ): Promise<TeachingDesignVersionContract> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (versionName) formData.append('version_name', versionName);
+    return await api.post<TeachingDesignVersionContract>(
+      '/api/teacher/classes/' + classId + '/teaching-design/upload',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+  }
+
+  static async saveTeachingDesign(
+    classId: string,
+    payload: TeachingDesignPayload,
+    versionName?: string
+  ): Promise<TeachingDesignVersionContract> {
+    return await api.put<TeachingDesignVersionContract>(
+      '/api/teacher/classes/' + classId + '/teaching-design/current',
+      {
+        version_name: versionName,
+        title: payload.course_title || versionName,
+        extracted_payload: payload,
+      }
+    );
+  }
+
+  static async generateTopicRecommendations(
+    classId: string,
+    params: {
+      teaching_design_version_id?: string;
+      mode?: 'competition' | 'teaching';
+      activity_focus?: DebateConfigMeta['activity_focus'];
+      preferred_count?: number;
+      regenerate_from_run_id?: string;
+    }
+  ): Promise<TopicRecommendationRunContract> {
+    return await api.post<TopicRecommendationRunContract>(
+      '/api/teacher/classes/' + classId + '/topic-recommendations',
+      params
+    );
+  }
+
+  static async previewRoleAssignment(params: {
+    class_id: string;
+    student_ids: string[];
+    config_meta?: DebateConfigMeta;
+    role_assignments?: RoleAssignmentInput[];
+  }): Promise<RoleAssignmentPreviewContract> {
+    return await api.post<RoleAssignmentPreviewContract>(
+      '/api/teacher/debates/role-assignment-preview',
+      params
+    );
   }
 
   static async getReport(debateId: string): Promise<TeacherReportPayload> {

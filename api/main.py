@@ -78,8 +78,16 @@ app.include_router(admin_kb.router)
 app.include_router(student_kb.router)
 app.include_router(voice.router)
 
-Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+upload_root = Path(settings.UPLOAD_DIR)
+upload_root.mkdir(parents=True, exist_ok=True)
+for public_media_dir in ("audio", "asr"):
+    media_path = upload_root / public_media_dir
+    media_path.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        f"/uploads/{public_media_dir}",
+        StaticFiles(directory=media_path),
+        name=f"uploads-{public_media_dir}",
+    )
 
 
 def _database_health() -> tuple[bool, str | None]:
@@ -120,6 +128,33 @@ def _update_operational_metrics() -> None:
     REDIS_UP.set(1 if redis_status == "connected" else 0)
     REDIS_ENABLED.set(0 if redis_status == "disabled" else 1)
 
+
+async def _ai_runtime_health() -> dict:
+    """Load effective AI configuration without returning any secret values."""
+    if database_module.SessionLocal is None:
+        return {"status": "unavailable", "services": {}}
+
+    from services.config_service import ConfigService
+
+    db = database_module.SessionLocal()
+    try:
+        services = await ConfigService(db).get_runtime_readiness()
+        required_names = {"model", "asr", "tts", "vector"}
+        missing = sorted(
+            name
+            for name in required_names
+            if not services.get(name, {}).get("configured")
+        )
+        return {
+            "status": "ready" if not missing else "degraded",
+            "missing": missing,
+            "services": services,
+        }
+    except Exception as exc:
+        logger.exception("Failed to evaluate AI runtime readiness")
+        return {"status": "error", "error": str(exc), "services": {}}
+    finally:
+        db.close()
 
 @app.on_event("startup")
 async def startup_event():
@@ -175,6 +210,20 @@ async def startup_event():
             db.commit()
             logger.info("Default configuration ready.")
 
+            from services.config_service import ConfigService
+
+            ai_services = await ConfigService(db).get_runtime_readiness()
+            missing_ai_services = sorted(
+                name
+                for name in ("model", "asr", "tts", "vector")
+                if not ai_services.get(name, {}).get("configured")
+            )
+            if missing_ai_services:
+                logger.warning(
+                    "AI runtime configuration is incomplete: %s",
+                    ", ".join(missing_ai_services),
+                )
+
             try:
                 schema_changed = await KBVectorSchemaService.ensure_schema_matches_vector_config(
                     db
@@ -198,6 +247,16 @@ async def startup_event():
                     )
             except Exception:
                 logger.exception("Failed to import repo-root knowledge documents.")
+
+            try:
+                from services.room_manager import room_manager
+
+                recovered_jobs = await room_manager.recover_pending_report_jobs(db)
+                if recovered_jobs:
+                    logger.info("Recovered %s pending report jobs.", recovered_jobs)
+            except Exception:
+                db.rollback()
+                logger.exception("Failed to recover pending report jobs.")
         except Exception:
             db.rollback()
             logger.exception("Failed to initialize default configuration.")
@@ -238,6 +297,11 @@ async def root():
 async def health_check():
     database_connected, database_error = _database_health()
     redis_status, redis_error = _redis_health()
+    ai_runtime = (
+        await _ai_runtime_health()
+        if database_connected
+        else {"status": "unavailable", "services": {}}
+    )
     _update_operational_metrics()
 
     status = "healthy"
@@ -247,6 +311,9 @@ async def health_check():
         status = "unhealthy"
         status_code = 503
     elif redis_status == "disconnected":
+        status = "degraded"
+
+    elif ai_runtime.get("status") != "ready":
         status = "degraded"
 
     payload = {
@@ -260,6 +327,7 @@ async def health_check():
             "host": settings.REDIS_HOST,
             "port": settings.REDIS_PORT,
         },
+        "ai": ai_runtime,
     }
 
     if database_error:

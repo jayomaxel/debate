@@ -911,6 +911,15 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       waiter.resolve({ allowed: !!data.allowed, message: toOptionalString(data.message) || undefined });
     };
 
+    const handleMicGrabResult = (data: WsPayload) => {
+      if (data.allowed) return;
+      toastRef.current({
+        title: '\u62a2\u9ea6\u5931\u8d25',
+        description: toOptionalString(data.message) || '\u5f53\u524d\u65e0\u6cd5\u62a2\u9ea6\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5',
+        variant: 'destructive',
+      });
+    };
+
     // 注册事件监听器
     audioPlaybackDebug('DebateArena', '开始注册房间 websocket 监听', { roomId });
     const handleAudioProcessed = (data: WsPayload) => {
@@ -937,6 +946,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
     on('tts_stream_chunk', handleTtsStreamChunk);
     on('tts_stream_end', handleTtsStreamEnd);
     on('recording_permission', handleRecordingPermission);
+    on('mic_grab_result', handleMicGrabResult);
     on('audio_processed', handleAudioProcessed);
     on('permission_denied', handlePermissionDenied);
     on('mic_grabbed', handleMicGrabbed);
@@ -960,6 +970,7 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
       off('timer_update', handleTimerUpdate);
       off('subtitle', handleSubtitle);
       off('recording_permission', handleRecordingPermission);
+      off('mic_grab_result', handleMicGrabResult);
       off('audio_processed', handleAudioProcessed);
       off('speech', handleSpeech);
       off('tts_stream_start', handleTtsStreamStart);
@@ -1090,7 +1101,17 @@ const DebateArena: React.FC<DebateArenaProps> = ({ roomId = '', onBack, onEndDeb
 
   const handleGrabMic = () => {
     if (isConnected && roomJoined) {
-      send('grab_mic', {});
+      const requestId =
+        typeof globalThis.crypto?.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : 'mic-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      send('grab_mic', { request_id: requestId });
+    } else {
+      toast({
+        title: '\u62a2\u9ea6\u5931\u8d25',
+        description: '\u672a\u8fde\u63a5\u5230\u8fa9\u8bba\u623f\u95f4\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5',
+        variant: 'destructive',
+      });
     }
   };
 

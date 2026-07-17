@@ -1147,6 +1147,105 @@ def test_request_recording_returns_denied_when_room_state_missing():
     assert "辩论房间尚未建立" in sent[-1]["data"]["message"]
 
 
+
+def test_grab_mic_returns_correlated_denial_when_room_missing():
+    from routers import websocket as ws
+
+    room_id = "test_room_missing_for_grab_mic"
+    user_id = str(uuid.uuid4())
+    room_manager.rooms.pop(room_id, None)
+    sent = []
+
+    async def _fake_send_to_user(_user_id, message):
+        sent.append(message)
+
+    original = ws.websocket_manager.send_to_user
+    try:
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        asyncio.run(
+            ws.handle_grab_mic_message(
+                room_id,
+                user_id,
+                {"request_id": "mic-missing"},
+                None,
+            )
+        )
+    finally:
+        ws.websocket_manager.send_to_user = original
+
+    assert sent[-1]["type"] == "mic_grab_result"
+    assert sent[-1]["data"]["request_id"] == "mic-missing"
+    assert sent[-1]["data"]["allowed"] is False
+
+
+def test_concurrent_grab_mic_requests_have_exactly_one_winner():
+    from routers import websocket as ws
+
+    room_id = "test_room_concurrent_grab_mic"
+    user_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    room_state = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.FREE_DEBATE,
+        speaker_mode="free",
+    )
+    room_state.participants = [
+        {
+            "user_id": user_id,
+            "role": f"debater_{index + 1}",
+            "name": f"u{index + 1}",
+            "can_speak": True,
+        }
+        for index, user_id in enumerate(user_ids)
+    ]
+    room_manager.rooms[room_id] = room_state
+    sent = []
+    broadcasted = []
+
+    async def _fake_send_to_user(target_user_id, message):
+        sent.append((target_user_id, message))
+
+    async def _fake_broadcast(_room_id, message, **_kwargs):
+        broadcasted.append(message)
+
+    original_send = ws.websocket_manager.send_to_user
+    original_broadcast = ws.websocket_manager.broadcast_to_room
+
+    async def _run():
+        await asyncio.gather(
+            *[
+                ws.handle_grab_mic_message(
+                    room_id,
+                    user_id,
+                    {"request_id": f"mic-{index}"},
+                    None,
+                )
+                for index, user_id in enumerate(user_ids)
+            ]
+        )
+
+    try:
+        ws.websocket_manager.send_to_user = _fake_send_to_user
+        ws.websocket_manager.broadcast_to_room = _fake_broadcast
+        asyncio.run(_run())
+    finally:
+        ws.websocket_manager.send_to_user = original_send
+        ws.websocket_manager.broadcast_to_room = original_broadcast
+        room_manager.rooms.pop(room_id, None)
+        room_manager._room_locks.pop(room_id, None)
+
+    results = [
+        message["data"]
+        for _, message in sent
+        if message.get("type") == "mic_grab_result"
+    ]
+    assert len(results) == 2
+    assert sum(1 for result in results if result["allowed"]) == 1
+    assert sum(1 for result in results if not result["allowed"]) == 1
+    assert sum(
+        1 for message in broadcasted if message.get("type") == "mic_grabbed"
+    ) == 1
+
 def test_teacher_moderator_can_end_debate_on_last_segment(monkeypatch):
     from routers import websocket as ws
 

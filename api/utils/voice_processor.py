@@ -331,20 +331,41 @@ class VoiceProcessor:
                 or (tts_config.model_name if tts_config else "").startswith("qwen")
                 or ("dashscope" in (tts_config.api_endpoint if tts_config else ""))
             ):
+                model_name = (
+                    tts_config.model_name if tts_config else settings.TTS_MODEL_NAME
+                )
+                api_endpoint = (
+                    tts_config.api_endpoint
+                    if tts_config
+                    else settings.TTS_API_ENDPOINT
+                )
+                parameters = (tts_config.parameters or {}) if tts_config else {}
+
+                # Realtime DashScope models use a WebSocket endpoint. Older
+                # fallback callers still expect a single bytes object, so run
+                # the realtime implementation and return its assembled audio
+                # instead of POSTing JSON to a wss:// URL.
+                if model_name.endswith("-realtime") or api_endpoint.startswith(
+                    ("ws://", "wss://")
+                ):
+                    realtime_result = await self._dashscope_tts_realtime(
+                        text=text,
+                        voice=voice_id,
+                        api_key=api_key,
+                        model_name=model_name,
+                        speed=resolved_speed,
+                        parameters=parameters,
+                    )
+                    return realtime_result.get("audio_data")
+
                 audio_bytes = await self._dashscope_tts(
                     text=text,
                     voice=voice_id,
                     api_key=api_key,
-                    api_endpoint=(
-                        tts_config.api_endpoint
-                        if tts_config
-                        else settings.TTS_API_ENDPOINT
-                    ),
-                    model_name=(
-                        tts_config.model_name if tts_config else settings.TTS_MODEL_NAME
-                    ),
+                    api_endpoint=api_endpoint,
+                    model_name=model_name,
                     speed=resolved_speed,
-                    parameters=(tts_config.parameters or {}) if tts_config else {},
+                    parameters=parameters,
                 )
                 return audio_bytes
 
@@ -1387,7 +1408,8 @@ class VoiceProcessor:
             if status_code == HTTPStatus.OK:
                 text = ""
                 try:
-                    text = result.get_sentence() or ""
+                    sentence_payload = result.get_sentence() or ""
+                    text = self._extract_text_from_transcription(sentence_payload)
                 except Exception:
                     text = ""
                 return {

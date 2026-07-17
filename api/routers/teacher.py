@@ -2,10 +2,13 @@
 教师端API路由
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
+from pathlib import Path
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Literal, Optional, List
 
+from config import settings
 from logging_config import get_logger
 from database import get_db
 from models.user import User
@@ -159,6 +162,9 @@ class TeachingDesignPayloadRequest(BaseModel):
     debate_focuses: Optional[List[str]] = None
     forbidden_boundaries: Optional[List[str]] = None
     source_summary: Optional[str] = None
+    confidence: Optional[dict[str, float]] = None
+    missing_fields: Optional[List[str]] = None
+    source_excerpt_map: Optional[dict[str, str]] = None
 
 
 class UpsertTeachingDesignRequest(BaseModel):
@@ -206,7 +212,34 @@ def _serialize_support_document(document: Document) -> dict:
         "uploaded_at": document.uploaded_at.isoformat()
         if document.uploaded_at
         else None,
+        'purpose_tag': document.purpose_tag,
+        'processing_status': document.processing_status,
+        'summary_status': document.summary_status,
+        'summary': document.summary_payload,
+        'summary_quality': document.summary_quality,
     }
+
+
+def _resolve_private_upload_path(file_path: str) -> Path:
+    upload_root = Path(settings.UPLOAD_DIR).resolve()
+    candidate = Path(file_path)
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    try:
+        candidate.relative_to(upload_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        ) from exc
+    if not candidate.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        )
+    return candidate
 
 
 def _ensure_teacher_can_modify_debate(
@@ -1290,6 +1323,7 @@ async def list_debate_support_documents(
 async def upload_debate_support_document(
     debate_id: str,
     file: UploadFile = File(...),
+    purpose_tag: str = Form('optional'),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
@@ -1304,7 +1338,10 @@ async def upload_debate_support_document(
             filename=file.filename or "support-document",
             file_type=file_type,
             debate_id=debate_id,
+            purpose_tag=purpose_tag,
         )
+        await knowledge_base.process_support_document_summary(str(document.id))
+        db.refresh(document)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1317,6 +1354,32 @@ async def upload_debate_support_document(
     }
 
 
+
+
+@router.get("/debates/{debate_id}/support-documents/{document_id}/download")
+async def download_debate_support_document(
+    debate_id: str,
+    document_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document or str(document.debate_id) != str(debate_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        )
+    file_path = _resolve_private_upload_path(document.file_path)
+    return FileResponse(
+        path=file_path,
+        media_type=document.file_type or "application/octet-stream",
+        filename=document.filename,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 @router.delete(
     "/debates/{debate_id}/support-documents/{document_id}",
     summary="删除辩论支撑材料",

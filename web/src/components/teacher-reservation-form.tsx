@@ -23,6 +23,9 @@ import TeacherService, {
   type Student,
   type TeacherReservation,
 } from '@/services/teacher.service';
+import type { DebateConfigMeta, RoleAssignmentInput } from '@/lib/frontend-contracts';
+import TopicRecommendationPanel from './topic-recommendation-panel';
+import RoleAssignmentPanel from './role-assignment-panel';
 import { AlertCircle, CalendarPlus, Loader2 } from 'lucide-react';
 
 interface TeacherReservationFormProps {
@@ -56,6 +59,15 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
   const [password, setPassword] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [hostUserId, setHostUserId] = useState<string>('teacher');
+  const [configMeta, setConfigMeta] = useState<DebateConfigMeta>({
+    mode: 'teaching',
+    role_assignment_mode: 'growth_first',
+    assignment_policy: 'ai_recommend_then_confirm',
+    role_rotation_policy: 'balanced_rotation',
+    rounds: 3,
+  });
+  const [roleAssignments, setRoleAssignments] = useState<RoleAssignmentInput[]>([]);
+  const [assignmentRunId, setAssignmentRunId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +79,8 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
   useEffect(() => {
     setSelectedStudentIds([]);
     setHostUserId('teacher');
+    setRoleAssignments([]);
+    setAssignmentRunId(undefined);
   }, [selectedClassId]);
 
   const toggleStudent = (studentId: string) => {
@@ -94,6 +108,8 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
     setPassword('');
     setSelectedStudentIds([]);
     setHostUserId('teacher');
+    setRoleAssignments([]);
+    setAssignmentRunId(undefined);
     setError(null);
   };
 
@@ -135,6 +151,9 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
         duration: Number(duration),
         scheduled_start_time: scheduledIso,
         student_ids: selectedStudentIds,
+        config_meta: configMeta,
+        role_assignments: roleAssignments.length ? roleAssignments : undefined,
+        assignment_run_id: assignmentRunId,
         visibility,
         password: visibility === 'private' && password ? password : undefined,
         host_user_id: hostUserId === 'teacher' ? undefined : hostUserId,
@@ -189,6 +208,16 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
               onChange={(event) => setScheduledStartTime(event.target.value)}
             />
           </div>
+        </div>
+
+        <div className='space-y-2'>
+          <TopicRecommendationPanel
+            classId={selectedClassId}
+            onSelect={(selectedTopic, selectedConfig) => {
+              setTopic(selectedTopic);
+              setConfigMeta((previous) => ({ ...previous, ...selectedConfig }));
+            }}
+          />
         </div>
 
         <div className='space-y-2'>
@@ -249,6 +278,30 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
           </div>
         </div>
 
+        <div className='grid gap-4 md:grid-cols-3'>
+          <div className='space-y-2'>
+            <Label>活动模式</Label>
+            <Select value={configMeta.mode || 'teaching'} onValueChange={(value: 'competition' | 'teaching') => setConfigMeta({ ...configMeta, mode: value })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value='teaching'>教学训练</SelectItem><SelectItem value='competition'>正式比赛</SelectItem></SelectContent>
+            </Select>
+          </div>
+          <div className='space-y-2'>
+            <Label>辩位策略</Label>
+            <Select value={configMeta.role_assignment_mode || 'growth_first'} onValueChange={(value: 'strength_first' | 'growth_first') => setConfigMeta({ ...configMeta, role_assignment_mode: value })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value='growth_first'>成长优先</SelectItem><SelectItem value='strength_first'>实力优先</SelectItem></SelectContent>
+            </Select>
+          </div>
+          <div className='space-y-2'>
+            <Label>轮次</Label>
+            <Select value={String(configMeta.rounds || 3)} onValueChange={(value) => setConfigMeta({ ...configMeta, rounds: Number(value) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value='1'>1 轮</SelectItem><SelectItem value='2'>2 轮</SelectItem><SelectItem value='3'>3 轮</SelectItem><SelectItem value='4'>4 轮</SelectItem></SelectContent>
+            </Select>
+          </div>
+        </div>
+
         <div className='space-y-3'>
           <div className='flex items-center justify-between'>
             <Label>邀请学生 ({selectedStudentIds.length}/4)</Label>
@@ -306,6 +359,17 @@ const TeacherReservationForm: React.FC<TeacherReservationFormProps> = ({
             </div>
           )}
         </div>
+
+        <RoleAssignmentPanel
+          classId={selectedClassId}
+          students={students}
+          selectedStudentIds={selectedStudentIds}
+          configMeta={configMeta}
+          onChange={(nextAssignments, nextRunId) => {
+            setRoleAssignments(nextAssignments);
+            setAssignmentRunId(nextRunId);
+          }}
+        />
 
         <div className='flex justify-end'>
           <Button disabled={submitting} onClick={handleSubmit}>

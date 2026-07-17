@@ -153,6 +153,141 @@ class ConfigService:
             payload = self._config_cache.get(cache_key)
         return self._restore_cached_config(model_cls, payload)
 
+    @staticmethod
+    def _first_runtime_env(*names: str) -> Optional[str]:
+        """Return the first explicitly exported, non-empty environment value."""
+        for name in names:
+            value = os.getenv(name)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return None
+
+    @classmethod
+    def _with_runtime_overrides(cls, config: ConfigModelT) -> ConfigModelT:
+        """Overlay explicit runtime secrets without mutating the database row/cache."""
+        effective = cls._restore_cached_config(
+            type(config), cls._build_cache_payload(config)
+        )
+        if effective is None:
+            return config
+
+        if isinstance(effective, ModelConfigModel):
+            api_key = cls._first_runtime_env("OPENAI_API_KEY")
+            base_url = cls._first_runtime_env("OPENAI_BASE_URL")
+            model_name = cls._first_runtime_env("OPENAI_MODEL_NAME")
+            if api_key:
+                effective.api_key = api_key
+            if base_url:
+                normalized = base_url.rstrip("/")
+                effective.api_endpoint = (
+                    normalized
+                    if normalized.endswith("/chat/completions")
+                    else f"{normalized}/chat/completions"
+                )
+            if model_name:
+                effective.model_name = model_name
+
+        elif isinstance(effective, AsrConfigModel):
+            api_key = cls._first_runtime_env(
+                "ASR_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"
+            )
+            if api_key:
+                effective.api_key = api_key
+            endpoint = cls._first_runtime_env("ASR_API_ENDPOINT")
+            model_name = cls._first_runtime_env("ASR_MODEL_NAME")
+            if endpoint:
+                effective.api_endpoint = endpoint
+            if model_name:
+                effective.model_name = model_name
+
+        elif isinstance(effective, TtsConfigModel):
+            api_key = cls._first_runtime_env(
+                "TTS_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"
+            )
+            if api_key:
+                effective.api_key = api_key
+            endpoint = cls._first_runtime_env("TTS_API_ENDPOINT")
+            model_name = cls._first_runtime_env("TTS_MODEL_NAME")
+            if endpoint:
+                effective.api_endpoint = endpoint
+            if model_name:
+                effective.model_name = model_name
+
+        elif isinstance(effective, CozeConfigModel):
+            api_token = cls._first_runtime_env("COZE_API_KEY")
+            if api_token:
+                effective.api_token = api_token
+            base_url = cls._first_runtime_env("COZE_BASE_URL")
+            if base_url:
+                parameters = dict(effective.parameters or {})
+                parameters["base_url"] = base_url.rstrip("/")
+                effective.parameters = parameters
+
+        elif isinstance(effective, VectorConfigModel):
+            api_key = cls._first_runtime_env(
+                "VECTOR_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_API_KEY"
+            )
+            if api_key:
+                effective.api_key = api_key
+            endpoint = cls._first_runtime_env("VECTOR_API_ENDPOINT")
+            base_url = cls._first_runtime_env("VECTOR_BASE_URL", "OPENAI_BASE_URL")
+            model_name = cls._first_runtime_env(
+                "VECTOR_MODEL_NAME", "OPENAI_EMBEDDING_MODEL"
+            )
+            dimension = cls._first_runtime_env("VECTOR_EMBEDDING_DIMENSION")
+            if endpoint:
+                effective.api_endpoint = endpoint
+            elif base_url:
+                effective.api_endpoint = f"{base_url.rstrip('/')}/embeddings"
+            if model_name:
+                effective.model_name = model_name
+            if dimension:
+                try:
+                    effective.embedding_dimension = int(dimension)
+                except ValueError:
+                    logger.warning("Ignoring invalid VECTOR_EMBEDDING_DIMENSION")
+
+        return effective
+
+    @classmethod
+    def _runtime_source(cls, *env_names: str) -> str:
+        return "environment" if cls._first_runtime_env(*env_names) else "database"
+
+    async def get_runtime_readiness(self) -> dict:
+        """Return secret-safe AI readiness details for health checks."""
+        model = await self.get_model_config()
+        asr = await self.get_asr_config()
+        tts = await self.get_tts_config()
+        vector = await self.get_vector_config()
+        coze = await self.get_coze_config()
+        return {
+            "model": {
+                "configured": bool(model.api_key and model.api_endpoint and model.model_name),
+                "source": self._runtime_source("OPENAI_API_KEY"),
+                "model": model.model_name,
+            },
+            "asr": {
+                "configured": bool(asr.api_key and asr.api_endpoint and asr.model_name),
+                "source": self._runtime_source("ASR_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"),
+                "model": asr.model_name,
+            },
+            "tts": {
+                "configured": bool(tts.api_key and tts.api_endpoint and tts.model_name),
+                "source": self._runtime_source("TTS_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"),
+                "model": tts.model_name,
+            },
+            "vector": {
+                "configured": bool(vector.api_key and vector.api_endpoint and vector.model_name),
+                "source": self._runtime_source("VECTOR_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_API_KEY"),
+                "model": vector.model_name,
+                "dimension": int(vector.embedding_dimension or 0),
+            },
+            "coze": {
+                "configured": bool(coze.api_token),
+                "source": self._runtime_source("COZE_API_KEY"),
+            },
+        }
+
     def _set_cached_config(self, config: ConfigModelT) -> None:
         """
         用最新配置覆盖缓存。管理端保存成功后会立即调用，保证缓存同步。
@@ -289,7 +424,7 @@ class ConfigService:
             cached_config = self._get_cached_config(ModelConfigModel)
             if cached_config is not None:
                 logger.debug("命中模型配置缓存")
-                return cached_config
+                return self._with_runtime_overrides(cached_config)
 
             config = self.db.execute(
                 select(ModelConfigModel).limit(1)
@@ -298,7 +433,7 @@ class ConfigService:
             if config:
                 self._set_cached_config(config)
                 logger.info(f"获取模型配置成功: {config.model_name}")
-                return config
+                return self._with_runtime_overrides(config)
 
             logger.info("数据库中无模型配置，使用环境变量创建默认配置")
             default_config = ModelConfigModel(
@@ -314,7 +449,7 @@ class ConfigService:
             self.db.refresh(default_config)
             self._set_cached_config(default_config)
             logger.info(f"默认模型配置已创建: {default_config.model_name}")
-            return default_config
+            return self._with_runtime_overrides(default_config)
 
         except Exception as e:
             logger.error(f"获取模型配置失败: {e}", exc_info=True)
@@ -383,7 +518,7 @@ class ConfigService:
             cached_config = self._get_cached_config(AsrConfigModel)
             if cached_config is not None:
                 logger.debug("命中ASR配置缓存")
-                return cached_config
+                return self._with_runtime_overrides(cached_config)
 
             config = self.db.execute(
                 select(AsrConfigModel).limit(1)
@@ -426,7 +561,7 @@ class ConfigService:
 
                 self._set_cached_config(config)
                 logger.info(f"获取ASR配置成功: {config.model_name}")
-                return config
+                return self._with_runtime_overrides(config)
 
             logger.info("数据库中无ASR配置，使用环境变量创建默认配置")
             public_base_url = self._get_public_base_url()
@@ -457,7 +592,7 @@ class ConfigService:
             self.db.commit()
             self.db.refresh(default_config)
             self._set_cached_config(default_config)
-            return default_config
+            return self._with_runtime_overrides(default_config)
         except Exception as e:
             logger.error(f"获取ASR配置失败: {e}", exc_info=True)
             self.db.rollback()
@@ -572,7 +707,7 @@ class ConfigService:
             cached_config = self._get_cached_config(TtsConfigModel)
             if cached_config is not None:
                 logger.debug("命中TTS配置缓存")
-                return cached_config
+                return self._with_runtime_overrides(cached_config)
 
             config = self.db.execute(
                 select(TtsConfigModel).limit(1)
@@ -588,7 +723,7 @@ class ConfigService:
                     self.db.refresh(config)
                 self._set_cached_config(config)
                 logger.info(f"获取TTS配置成功: {config.model_name}")
-                return config
+                return self._with_runtime_overrides(config)
 
             logger.info("数据库中无TTS配置，使用环境变量创建默认配置")
             default_config = TtsConfigModel(
@@ -606,7 +741,7 @@ class ConfigService:
             self.db.commit()
             self.db.refresh(default_config)
             self._set_cached_config(default_config)
-            return default_config
+            return self._with_runtime_overrides(default_config)
         except Exception as e:
             logger.error(f"获取TTS配置失败: {e}", exc_info=True)
             self.db.rollback()
@@ -682,7 +817,7 @@ class ConfigService:
                     cached_config.parameters = normalized_parameters
                     self._set_cached_config(cached_config)
                 logger.debug("命中Coze配置缓存")
-                return cached_config
+                return self._with_runtime_overrides(cached_config)
 
             config = self.db.execute(
                 select(CozeConfigModel).limit(1)
@@ -698,7 +833,7 @@ class ConfigService:
                     self.db.refresh(config)
                 self._set_cached_config(config)
                 logger.info("获取Coze配置成功")
-                return config
+                return self._with_runtime_overrides(config)
 
             logger.info("数据库中无Coze配置，使用环境变量创建默认配置")
             default_config = CozeConfigModel(
@@ -712,7 +847,7 @@ class ConfigService:
             self.db.refresh(default_config)
             self._set_cached_config(default_config)
             logger.info("默认Coze配置已创建")
-            return default_config
+            return self._with_runtime_overrides(default_config)
 
         except Exception as e:
             logger.error(f"获取Coze配置失败: {e}", exc_info=True)
@@ -798,7 +933,7 @@ class ConfigService:
             cached_config = self._get_cached_config(VectorConfigModel)
             if cached_config is not None:
                 logger.debug("命中向量配置缓存")
-                return cached_config
+                return self._with_runtime_overrides(cached_config)
 
             config = self.db.execute(
                 select(VectorConfigModel).limit(1)
@@ -807,7 +942,7 @@ class ConfigService:
             if config:
                 self._set_cached_config(config)
                 logger.info(f"获取向量配置成功: {config.model_name}")
-                return config
+                return self._with_runtime_overrides(config)
 
             logger.info("数据库中无向量配置，使用环境变量创建默认配置")
             embedding_model = os.getenv(
@@ -828,7 +963,7 @@ class ConfigService:
             self.db.refresh(default_config)
             self._set_cached_config(default_config)
             logger.info(f"默认向量配置已创建: {default_config.model_name}")
-            return default_config
+            return self._with_runtime_overrides(default_config)
 
         except Exception as e:
             logger.error(f"获取向量配置失败: {e}", exc_info=True)

@@ -1,0 +1,14 @@
+{
+  "name": "knowledge-snippet",
+  "owner": "E",
+  "contract": "KnowledgeSnippetSchema",
+  "example": {
+    "snippet_id": "document-demo:questioning:0",
+    "document_id": "document-demo",
+    "source_type": "evidence",
+    "content": "Survey coverage reached 82 percent.",
+    "usage_goal": "Challenge assumptions with verifiable evidence.",
+    "source_location": "survey.pdf"
+  },
+  "updated_at": "2026-07-17T00:00:00Z"
+}

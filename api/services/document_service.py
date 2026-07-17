@@ -3,6 +3,7 @@
 负责知识库文档的上传、验证、解析、分块和向量。
 """
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -38,6 +39,58 @@ class DocumentService:
     处理知识库文档的上传、验证、存储和处理
     """
     
+    SUPPORT_PURPOSE_TAGS = {'background', 'evidence', 'case', 'optional'}
+    PHASES_BY_TAG = {
+        'background': ['opening', 'closing'],
+        'evidence': ['opening', 'questioning', 'free_debate', 'closing'],
+        'case': ['questioning', 'free_debate', 'closing'],
+        'optional': ['opening', 'questioning', 'free_debate', 'closing'],
+    }
+
+    @staticmethod
+    def normalize_support_purpose_tag(value: Optional[str]) -> str:
+        tag = (value or 'optional').strip().lower()
+        if tag not in DocumentService.SUPPORT_PURPOSE_TAGS:
+            raise ValueError('Unsupported support document purpose tag')
+        return tag
+
+    @staticmethod
+    def build_support_document_summary(
+        content: Optional[str],
+        purpose_tag: Optional[str] = 'optional',
+    ) -> Dict[str, Any]:
+        tag = DocumentService.normalize_support_purpose_tag(purpose_tag)
+        normalized = re.sub(r'\s+', ' ', (content or '')).strip()
+        sentences = [
+            item.strip()
+            for item in re.split(r'(?<=[。！？.!?])\s*', normalized)
+            if item.strip()
+        ]
+        if not sentences and normalized:
+            sentences = [normalized]
+        key_points = [item[:240] for item in sentences[:5]]
+        evidence_candidates = [
+            item[:240] for item in sentences
+            if re.search(r'\d|%|数据|研究|调查|统计|evidence|study', item, re.IGNORECASE)
+        ][:5]
+        case_candidates = [
+            item[:240] for item in sentences
+            if re.search(r'案例|例如|比如|事件|case|example', item, re.IGNORECASE)
+        ][:5]
+        quality = 'validated' if len(normalized) >= 120 and len(sentences) >= 2 else 'fallback'
+        summary = ' '.join(sentences[:3])[:600]
+        if not summary:
+            summary = 'No extractable summary is available for this document.'
+        return {
+            'label': tag,
+            'summary': summary,
+            'key_points': key_points,
+            'evidence_candidates': evidence_candidates,
+            'case_candidates': case_candidates,
+            'usable_phases': DocumentService.PHASES_BY_TAG[tag],
+            'summary_quality': quality,
+        }
+
     def __init__(self, db: Session):
         """
         初始化文档服。

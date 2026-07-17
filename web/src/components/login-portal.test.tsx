@@ -146,4 +146,46 @@ describe('LoginPortal', () => {
 
     expect(AuthService.registerStudent).not.toHaveBeenCalled();
   });
+
+  it('automatically logs a teacher in and opens the teacher workspace after registration', async () => {
+    const onLogin = vi.fn();
+    render(<LoginPortal onLogin={onLogin} />);
+
+    await activateRoleTab('我是老师');
+    await switchToRegisterMode();
+
+    fireEvent.change(screen.getByLabelText(/教工号/), {
+      target: { value: 'teacher-flow-001' },
+    });
+    fireEvent.change(screen.getByLabelText(/^密码/), {
+      target: { value: 'FlowTest@2026' },
+    });
+    fireEvent.change(screen.getByLabelText(/确认密码/), {
+      target: { value: 'FlowTest@2026' },
+    });
+    fireEvent.change(screen.getByLabelText('姓名'), {
+      target: { value: '流程测试老师' },
+    });
+    fireEvent.change(screen.getByLabelText(/邮箱地址/), {
+      target: { value: 'teacher-flow@example.com' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '注册账号' }));
+
+    await waitFor(() => {
+      expect(AuthService.registerTeacher).toHaveBeenCalledWith({
+        account: 'teacher-flow-001',
+        email: 'teacher-flow@example.com',
+        phone: '',
+        password: 'FlowTest@2026',
+        name: '流程测试老师',
+      });
+      expect(loginMock).toHaveBeenCalledWith({
+        account: 'teacher-flow-001',
+        password: 'FlowTest@2026',
+        user_type: 'teacher',
+      });
+      expect(onLogin).toHaveBeenCalledWith('teacher');
+    });
+  });
 });

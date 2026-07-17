@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 pytestmark = pytest.mark.integration
 
 
-async def test_scoring_for_debate(debate_id: str):
+async def run_scoring_for_debate(debate_id: str):
     """
     测试指定辩论的评分逻辑
     
@@ -167,7 +167,7 @@ async def main():
         return
     
     debate_id = sys.argv[1]
-    await test_scoring_for_debate(debate_id)
+    await run_scoring_for_debate(debate_id)
 
 
 if __name__ == "__main__":

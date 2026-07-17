@@ -35,6 +35,9 @@ import {
 import { debateDebug } from '@/lib/utils';
 import UserProfile from './user-profile';
 import TeacherReservationManagement from './teacher-reservation-management';
+import TeachingDesignManager from './teaching-design-manager';
+import TopicRecommendationPanel from './topic-recommendation-panel';
+import RoleAssignmentPanel from './role-assignment-panel';
 import { useAuth } from '@/store/auth.context';
 import TeacherService from '@/services/teacher.service';
 import type {
@@ -46,6 +49,7 @@ import type {
   DebateGroupingItem,
   TeacherDashboardStats,
 } from '@/services/teacher.service';
+import type { DebateConfigMeta, RoleAssignmentInput } from '@/lib/frontend-contracts';
 import {
   Plus,
   Upload,
@@ -65,6 +69,7 @@ import {
   ChevronDown,
   ChevronUp,
   CalendarClock,
+  BookOpen,
 } from 'lucide-react';
 
 interface DebateConfig {
@@ -119,6 +124,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   >([]);
   const [supportDocumentsLoading, setSupportDocumentsLoading] = useState(false);
   const [supportUploading, setSupportUploading] = useState(false);
+  const [supportPurposeTag, setSupportPurposeTag] = useState<'background' | 'evidence' | 'case' | 'optional'>('optional');
   const [deletingSupportDocumentId, setDeletingSupportDocumentId] = useState<
     string | null
   >(null);
@@ -134,11 +140,22 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     class_id: '',
     knowledgePoints: '',
   });
+  const [structuredConfig, setStructuredConfig] = useState<DebateConfigMeta>({
+    mode: 'teaching',
+    role_assignment_mode: 'growth_first',
+    assignment_policy: 'ai_recommend_then_confirm',
+    role_rotation_policy: 'balanced_rotation',
+    rounds: 3,
+  });
+  const [roleAssignments, setRoleAssignments] = useState<RoleAssignmentInput[]>([]);
+  const [assignmentRunId, setAssignmentRunId] = useState<string | undefined>();
 
   const handleDebateClassChange = (value: string) => {
     setDebateConfig(prev => ({ ...prev, class_id: value }));
     setSelectedClass(value);
     setSelectedStudentIds([]);
+    setRoleAssignments([]);
+    setAssignmentRunId(undefined);
     setStudents([]);
     setError(null);
   };
@@ -288,6 +305,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const menuItems = [
     { id: 'new', label: '新建辩论', icon: Plus },
+    { id: 'teaching-design', label: '教学设计', icon: BookOpen },
     { id: 'reservations', label: '预约辩论赛', icon: CalendarClock },
     { id: 'history', label: '历史记录', icon: History },
     { id: 'students', label: '学生管理', icon: Users },
@@ -354,7 +372,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       setError(null);
       const document = await TeacherService.uploadDebateSupportDocument(
         editingDebateId,
-        file
+        file,
+        supportPurposeTag
       );
       setSupportDocuments(prev => [document, ...prev]);
       toast({
@@ -774,6 +793,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         duration: parseInt(debateConfig.duration, 10),
         description: buildDebateDescription(debateConfig.rounds, debateConfig.knowledgePoints),
         student_ids: selectedStudentIds,
+        config_meta: {
+          ...structuredConfig,
+          rounds: parseInt(debateConfig.rounds, 10),
+          knowledge_points: debateConfig.knowledgePoints.split(/[、,，\n]/).map((item) => item.trim()).filter(Boolean),
+        },
+        role_assignments: roleAssignments.length ? roleAssignments : undefined,
+        assignment_run_id: assignmentRunId,
         status: targetStatus,
       };
 
@@ -880,6 +906,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           debateConfig.knowledgePoints
         ),
         student_ids: selectedStudentIds,
+        config_meta: {
+          ...structuredConfig,
+          rounds: parseInt(debateConfig.rounds, 10),
+          knowledge_points: debateConfig.knowledgePoints.split(/[、,，\n]/).map((item) => item.trim()).filter(Boolean),
+        },
+        role_assignments: roleAssignments.length ? roleAssignments : undefined,
+        assignment_run_id: assignmentRunId,
         status: targetStatus,
       };
 
@@ -1139,6 +1172,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </Select>
                     </div>
 
+                    <TopicRecommendationPanel
+                      classId={debateConfig.class_id}
+                      onSelect={(selectedTopic, selectedConfig) => {
+                        setDebateConfig((previous) => ({ ...previous, topic: selectedTopic }));
+                        setStructuredConfig((previous) => ({ ...previous, ...selectedConfig }));
+                      }}
+                    />
+
                     {/* 辩论主题 */}
                     <div className='space-y-2'>
                       <Label
@@ -1151,10 +1192,18 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         id='topic'
                         value={debateConfig.topic}
                         onChange={e =>
-                          setDebateConfig({
-                            ...debateConfig,
-                            topic: e.target.value,
-                          })
+                          {
+                            setDebateConfig({
+                              ...debateConfig,
+                              topic: e.target.value,
+                            });
+                            setStructuredConfig((previous) => ({
+                              ...previous,
+                              topic_source: previous.topic_source === 'ai_recommended'
+                                ? 'ai_recommended_edited'
+                                : previous.topic_source || 'manual',
+                            }));
+                          }
                         }
                         className='min-h-[80px] border-slate-300 focus:border-blue-500 focus:ring-blue-500'
                         placeholder='输入辩论主题...'
@@ -1203,6 +1252,15 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                           </div>
                           {editingDebateId ? (
                             <div className='flex gap-2'>
+                              <Select value={supportPurposeTag} onValueChange={(value: 'background' | 'evidence' | 'case' | 'optional') => setSupportPurposeTag(value)}>
+                                <SelectTrigger className='w-[130px]'><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value='background'>背景资料</SelectItem>
+                                  <SelectItem value='evidence'>证据材料</SelectItem>
+                                  <SelectItem value='case'>案例材料</SelectItem>
+                                  <SelectItem value='optional'>补充材料</SelectItem>
+                                </SelectContent>
+                              </Select>
                               <Button
                                 type='button'
                                 variant='outline'
@@ -1278,6 +1336,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                     <span className='truncate text-sm font-medium text-slate-800'>
                                       {document.filename}
                                     </span>
+                                    <Badge variant='secondary'>{document.purpose_tag}</Badge>
                                   </div>
                                   <div className='mt-1 flex items-center gap-2 text-xs text-slate-500'>
                                     <Badge
@@ -1302,6 +1361,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                       </span>
                                     )}
                                   </div>
+                                  {document.summary?.summary && <p className='mt-2 line-clamp-2 text-xs text-slate-600'>{document.summary.summary}</p>}
                                 </div>
                                 <Button
                                   type='button'
@@ -1444,6 +1504,20 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       )}
                     </div>
 
+                    <RoleAssignmentPanel
+                      classId={debateConfig.class_id}
+                      students={students}
+                      selectedStudentIds={selectedStudentIds}
+                      configMeta={{
+                        ...structuredConfig,
+                        rounds: parseInt(debateConfig.rounds, 10),
+                      }}
+                      onChange={(nextAssignments, nextRunId) => {
+                        setRoleAssignments(nextAssignments);
+                        setAssignmentRunId(nextRunId);
+                      }}
+                    />
+
                     {/* 发布按钮 */}
                     <div className='flex flex-col-reverse gap-3 pt-4 sm:flex-row sm:justify-end'>
                       {isDraftEditMode ? (
@@ -1552,6 +1626,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   classes={classes}
                   initialClassId={selectedClass}
                 />
+              </TabsContent>
+
+              <TabsContent value='teaching-design' className='space-y-6'>
+                <TeachingDesignManager classes={classes} initialClassId={selectedClass} />
               </TabsContent>
 
               <TabsContent value='history'>

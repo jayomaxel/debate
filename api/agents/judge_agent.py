@@ -341,7 +341,8 @@ class JudgeAgent:
                 scoring_quality="validated",
                 retry_count=0,
             )
-        except Exception as first_error:
+        except Exception as exc:
+            first_error = exc
             repair_prompt = ScoreValidationService.build_repair_prompt(
                 reply,
                 expected_contract=output_contract,

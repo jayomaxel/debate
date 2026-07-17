@@ -82,26 +82,6 @@ class ComparisonService:
                     "sample_size": 0
                 }
 
-            class_avg_row = self.db.query(
-                func.avg(Score.overall_score).label("avg_overall"),
-                func.avg(Score.logic_score).label("avg_logic"),
-                func.avg(Score.argument_score).label("avg_argument"),
-                func.avg(Score.response_score).label("avg_response"),
-                func.avg(Score.persuasion_score).label("avg_persuasion"),
-                func.avg(Score.teamwork_score).label("avg_teamwork"),
-            ).join(
-                DebateParticipation, Score.participation_id == DebateParticipation.id
-            ).join(
-                User, DebateParticipation.user_id == User.id
-            ).join(
-                Debate, DebateParticipation.debate_id == Debate.id
-            ).filter(
-                and_(
-                    User.user_type == "student",
-                    User.class_id == student.class_id,
-                    Debate.status == "completed"
-                )
-            ).first()
 
             metric_field = metric_field_map[metric]
             sorted_scores = sorted(
@@ -155,19 +135,23 @@ class ComparisonService:
                     "ability_scores": normalize_ability(my_row),
                 }
 
-            class_avg = None
-            if class_avg_row is not None:
-                class_avg = {
-                    "score": round(float(getattr(class_avg_row, metric_field) or 0), 2),
-                    "overall_score": round(float(class_avg_row.avg_overall or 0), 2),
-                    "ability_scores": {
-                        "logic": round(float(class_avg_row.avg_logic or 0), 2),
-                        "argument": round(float(class_avg_row.avg_argument or 0), 2),
-                        "response": round(float(class_avg_row.avg_response or 0), 2),
-                        "persuasion": round(float(class_avg_row.avg_persuasion or 0), 2),
-                        "teamwork": round(float(class_avg_row.avg_teamwork or 0), 2),
-                    }
+            def class_mean(field: str) -> float:
+                values = [float(getattr(row, field) or 0) for row in sorted_scores]
+                return sum(values) / len(values)
+
+            # Average the per-student aggregates so students with more debates do
+            # not receive disproportionate weight in the class comparison.
+            class_avg = {
+                "score": round(class_mean(metric_field), 2),
+                "overall_score": round(class_mean("avg_overall"), 2),
+                "ability_scores": {
+                    "logic": round(class_mean("avg_logic"), 2),
+                    "argument": round(class_mean("avg_argument"), 2),
+                    "response": round(class_mean("avg_response"), 2),
+                    "persuasion": round(class_mean("avg_persuasion"), 2),
+                    "teamwork": round(class_mean("avg_teamwork"), 2),
                 }
+            }
 
             return {
                 "class_id": str(student.class_id),

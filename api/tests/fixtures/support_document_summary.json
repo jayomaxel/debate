@@ -1,0 +1,16 @@
+{
+  "name": "support-document-summary",
+  "owner": "E",
+  "contract": "SupportDocumentSummarySchema",
+  "example": {
+    "document_id": "document-demo",
+    "label": "evidence",
+    "summary": "A compact summary for classroom debate.",
+    "key_points": ["The source contains a comparable statistic."],
+    "evidence_candidates": ["Survey coverage reached 82 percent."],
+    "case_candidates": [],
+    "usable_phases": ["opening", "questioning", "free_debate", "closing"],
+    "summary_quality": "validated"
+  },
+  "updated_at": "2026-07-17T00:00:00Z"
+}

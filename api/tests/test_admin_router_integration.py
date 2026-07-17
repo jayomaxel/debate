@@ -150,7 +150,7 @@ def test_admin_create_class():
         return False
 
 
-def test_admin_update_class(class_data):
+def run_admin_update_class(class_data):
     """测试管理员更新班级"""
     print("\n=== 测试：管理员更新班级 ===")
     
@@ -187,7 +187,7 @@ def test_admin_update_class(class_data):
         return False
 
 
-def test_admin_delete_class(class_data):
+def run_admin_delete_class(class_data):
     """测试管理员删除班级"""
     print("\n=== 测试：管理员删除班级 ===")
     
@@ -271,11 +271,11 @@ def run_all_tests():
     
     # 测试5: 管理员更新班级
     if created_class:
-        updated_class = test_admin_update_class(created_class)
+        updated_class = run_admin_update_class(created_class)
         results.append(("管理员更新班级", bool(updated_class)))
         
         # 测试6: 管理员删除班级
-        results.append(("管理员删除班级", test_admin_delete_class(updated_class or created_class)))
+        results.append(("管理员删除班级", run_admin_delete_class(updated_class or created_class)))
     
     # 打印测试结果摘要
     print("\n" + "=" * 60)

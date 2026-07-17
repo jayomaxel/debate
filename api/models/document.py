@@ -3,7 +3,7 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped
 from typing import TYPE_CHECKING
@@ -25,6 +25,11 @@ class Document(Base):
         Enum('pending', 'processing', 'completed', 'failed', name='embedding_status_enum'),
         default='pending'
     )
+    purpose_tag = Column(String(32), nullable=False, default='optional')
+    processing_status = Column(String(32), nullable=False, default='pending')
+    summary_status = Column(String(32), nullable=False, default='pending')
+    summary_payload = Column(JSON, nullable=True)
+    summary_quality = Column(String(32), nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     
     # 关系

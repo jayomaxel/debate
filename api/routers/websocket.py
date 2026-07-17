@@ -170,6 +170,34 @@ async def _send_recording_permission_denied(
     )
 
 
+
+async def _send_mic_grab_result(
+    user_id: str,
+    *,
+    request_id,
+    allowed: bool,
+    message: str,
+    mic_owner_user_id: str | None = None,
+    mic_owner_role: str | None = None,
+    expires_at: datetime | None = None,
+) -> None:
+    """Send one correlated terminal response for every microphone claim."""
+    await websocket_manager.send_to_user(
+        user_id,
+        {
+            "type": "mic_grab_result",
+            "data": {
+                "request_id": request_id,
+                "allowed": allowed,
+                "message": message,
+                "mic_owner_user_id": mic_owner_user_id,
+                "mic_owner_role": mic_owner_role,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+            },
+        },
+    )
+
 def _extract_transcription_text_and_duration(transcription_result) -> tuple[str, int]:
     """
     统一解析不同ASR返回格式，提取文本与时长。
@@ -693,9 +721,25 @@ async def handle_grab_mic_message(
         data: 消息数据
         db: 数据库会话
     """
+    request_id = data.get("request_id")
+    if not request_id:
+        await _send_mic_grab_result(
+            user_id,
+            request_id=None,
+            allowed=False,
+            message="\u62a2\u9ea6\u8bf7\u6c42\u7f3a\u5c11 request_id\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5",
+        )
+        return
+
     # 获取用户角色
     room_state = room_manager.get_room_state(room_id)
     if not room_state:
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="\u62a2\u9ea6\u5931\u8d25\uff1a\u8fa9\u8bba\u623f\u95f4\u5c1a\u672a\u5efa\u7acb\uff0c\u8bf7\u9000\u51fa\u540e\u91cd\u65b0\u8fdb\u5165",
+        )
         return
 
     user_role = None
@@ -707,9 +751,21 @@ async def handle_grab_mic_message(
             break
 
     if not user_role:
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="\u62a2\u9ea6\u5931\u8d25\uff1a\u60a8\u4e0d\u5728\u8be5\u8fa9\u8bba\u623f\u95f4\u4e2d",
+        )
         return
 
     if not _can_participant_speak(participant_info):
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="\u6559\u5e08\u4e3b\u6301\u6a21\u5f0f\u4e0b\u4e0d\u53ef\u62a2\u9ea6",
+        )
         await _send_permission_denied(user_id, "教师主持模式下不可抢麦")
         return
 
@@ -717,6 +773,12 @@ async def handle_grab_mic_message(
         room_state.current_phase != DebatePhase.FREE_DEBATE
         or room_state.speaker_mode != "free"
     ):
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="\u5f53\u524d\u9636\u6bb5\u4e0d\u53ef\u62a2\u9ea6",
+        )
         await websocket_manager.send_to_user(
             user_id,
             {
@@ -741,6 +803,15 @@ async def handle_grab_mic_message(
             None,
         )
         holder_label = (holder.get("name") if holder else None) or str(room_state.mic_owner_role or room_state.mic_owner_user_id)
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message=f"\u62a2\u9ea6\u5931\u8d25\uff1a\u9ea6\u514b\u98ce\u5df2\u88ab\u3010{holder_label}\u3011\u5360\u7528\uff0c\u5269\u4f59 {remaining} \u79d2",
+            mic_owner_user_id=room_state.mic_owner_user_id,
+            mic_owner_role=room_state.mic_owner_role,
+            expires_at=room_state.mic_expires_at,
+        )
         await websocket_manager.send_to_user(
             user_id,
             {
@@ -753,15 +824,34 @@ async def handle_grab_mic_message(
         )
         return
 
-    mic_expires_at = now + timedelta(seconds=30)
-    await room_manager.update_room_state(
+    claim = await room_manager.claim_mic(
         room_id,
+        user_id=user_id,
+        user_role=str(user_role),
+        now=now,
+        db=db,
+    )
+    if not claim.get("allowed"):
+        await _send_mic_grab_result(
+            user_id,
+            request_id=request_id,
+            allowed=False,
+            message="\u62a2\u9ea6\u5931\u8d25\uff1a\u9ea6\u514b\u98ce\u5df2\u88ab\u5176\u4ed6\u8fa9\u624b\u5360\u7528",
+            mic_owner_user_id=claim.get("mic_owner_user_id"),
+            mic_owner_role=claim.get("mic_owner_role"),
+            expires_at=claim.get("expires_at"),
+        )
+        return
+
+    mic_expires_at = claim["expires_at"]
+    await _send_mic_grab_result(
+        user_id,
+        request_id=request_id,
+        allowed=True,
+        message="\u62a2\u9ea6\u6210\u529f\uff0c\u8bf7\u5728 30 \u79d2\u5185\u5f00\u59cb\u53d1\u8a00",
         mic_owner_user_id=user_id,
-        mic_owner_role=user_role,
-        mic_expires_at=mic_expires_at,
-        current_speaker=user_role,
-        free_debate_last_side="human",
-        free_debate_next_side="human",
+        mic_owner_role=str(user_role),
+        expires_at=mic_expires_at,
     )
 
     # 广播抢麦成功

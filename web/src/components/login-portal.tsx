@@ -133,18 +133,45 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
     }
   };
 
-  const handleRegisterSuccess = (description: string) => {
+  const handleRegisterSuccess = async ({
+    account,
+    password,
+    role,
+  }: {
+    account: string;
+    password: string;
+    role: Exclude<UserRole, 'administrator'>;
+  }) => {
     toast({
       variant: 'success',
       title: '注册成功',
-      description,
+      description: '账号已创建，正在进入工作台',
     });
-    setIsLogin(true);
-    setFormData(prev => ({
-      ...prev,
-      password: '',
-      confirmPassword: '',
-    }));
+
+    try {
+      await login({
+        account,
+        password,
+        user_type: role,
+      });
+      await onLogin(role);
+    } catch (error) {
+      console.error('Automatic login after registration failed:', error);
+      toast({
+        variant: 'destructive',
+        title: '自动登录失败',
+        description: '账号已创建，请使用刚才填写的账号和密码登录',
+      });
+      setIsLogin(true);
+      setActiveRole(role);
+      setFormData(prev => ({
+        ...prev,
+        account: role === 'student' ? account : prev.account,
+        teacherId: role === 'teacher' ? account : prev.teacherId,
+        password: '',
+        confirmPassword: '',
+      }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -236,7 +263,11 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
           });
 
           markAssessmentOnboardingPendingForAccount(formData.account);
-          handleRegisterSuccess('请使用您的账号密码登录');
+          await handleRegisterSuccess({
+            account: formData.account,
+            password,
+            role: 'student',
+          });
         } else {
           if (!formData.email || !formData.name || !formData.teacherId) {
             toast({
@@ -255,7 +286,11 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
             name: formData.name,
           });
 
-          handleRegisterSuccess('请使用您的教工号和密码登录');
+          await handleRegisterSuccess({
+            account: formData.teacherId,
+            password,
+            role: 'teacher',
+          });
         }
       }
     } catch (err: any) {
@@ -759,4 +794,3 @@ const LoginPortal: React.FC<LoginPortalProps> = ({ onLogin }) => {
 };
 
 export default LoginPortal;
-

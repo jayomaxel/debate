@@ -5,6 +5,7 @@
 
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
+import inspect
 from enum import Enum
 import asyncio
 import uuid
@@ -19,7 +20,9 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 TEACHER_MODERATOR_ROLE = "teacher_moderator"
+RUNTIME_STATE_META_KEY = "runtime_state"
 ROOM_META_KEY = "__room_meta"
+REPORT_JOB_META_KEY = "report_job"
 ROOM_ROLE_ORDER = ("debater_1", "debater_2", "debater_3", "debater_4")
 WAITING_CHECKLIST_ITEM_COUNT = 4
 WAITING_CHECKLIST_META_KEY = "waiting_checklists"
@@ -509,6 +512,191 @@ class DebateRoomManager:
     def __init__(self):
         # 存储房间状态: {room_id: RoomState}
         self.rooms: Dict[str, RoomState] = {}
+        # Serialize critical read-modify-write operations inside one worker.
+        # Database persistence handles recovery; database locks handle workers.
+        self._room_locks: Dict[str, asyncio.Lock] = {}
+        self._runtime_persist_tasks: Dict[str, asyncio.Task] = {}
+        self._runtime_persist_dirty: set[str] = set()
+
+    def get_room_lock(self, room_id: str) -> asyncio.Lock:
+        """Return the per-room lock used by realtime state transitions."""
+        lock = self._room_locks.get(room_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._room_locks[room_id] = lock
+        return lock
+
+
+    @staticmethod
+    def _serialize_runtime_state(room_state: RoomState) -> dict:
+        payload = dict(room_state.to_dict())
+        for transient_key in ("room_id", "debate_id", "participants", "waiting_status", "waiting_checklists"):
+            payload.pop(transient_key, None)
+        return payload
+
+    @staticmethod
+    def _runtime_state_kwargs(meta: dict) -> dict:
+        raw_state = meta.get(RUNTIME_STATE_META_KEY)
+        if not isinstance(raw_state, dict):
+            return {}
+        allowed = set(inspect.signature(RoomState.__init__).parameters)
+        allowed.difference_update({"self", "room_id", "debate_id", "participants", "waiting_checklists"})
+        restored = {key: value for key, value in raw_state.items() if key in allowed}
+        phase = restored.get("current_phase")
+        if phase:
+            try:
+                restored["current_phase"] = DebatePhase(str(phase))
+            except ValueError:
+                restored.pop("current_phase", None)
+        for key in (
+            "phase_start_time",
+            "segment_start_time",
+            "mic_expires_at",
+            "turn_speech_timestamp",
+            "playback_gate_started_at",
+            "playback_gate_deadline_at",
+            "timer_paused_at",
+            "sub_timer_started_at",
+        ):
+            value = restored.get(key)
+            if isinstance(value, str) and value:
+                try:
+                    restored[key] = datetime.fromisoformat(value)
+                except ValueError:
+                    restored[key] = None
+        return restored
+
+    def _persist_runtime_state(
+        self,
+        room_state: RoomState,
+        db: Session,
+        *,
+        debate: Optional[Debate] = None,
+        commit: bool = True,
+    ) -> bool:
+        try:
+            debate_uuid = uuid.UUID(str(room_state.debate_id))
+        except ValueError:
+            return False
+        try:
+            if debate is None:
+                debate = db.execute(
+                    select(Debate).where(Debate.id == debate_uuid)
+                ).scalar_one_or_none()
+            if debate is None:
+                return False
+            report = dict(debate.report) if isinstance(debate.report, dict) else {}
+            meta = self.get_room_meta(debate)
+            meta[RUNTIME_STATE_META_KEY] = self._serialize_runtime_state(room_state)
+            report[ROOM_META_KEY] = meta
+            debate.report = report
+            if commit:
+                db.commit()
+            return True
+        except Exception as exc:
+            if commit:
+                db.rollback()
+            logger.warning("Failed to persist realtime room state: %s", exc)
+            return False
+
+    def _schedule_runtime_persistence(self, room_id: str) -> None:
+        room_state = self.get_room_state(room_id)
+        if room_state is None or not getattr(room_state, "_persistence_enabled", False):
+            return
+        self._runtime_persist_dirty.add(room_id)
+        task = self._runtime_persist_tasks.get(room_id)
+        if task is None or task.done():
+            self._runtime_persist_tasks[room_id] = asyncio.create_task(
+                self._flush_runtime_state(room_id)
+            )
+
+    async def _flush_runtime_state(self, room_id: str) -> None:
+        import database as db_module
+
+        try:
+            while room_id in self._runtime_persist_dirty:
+                self._runtime_persist_dirty.discard(room_id)
+                await asyncio.sleep(0.15)
+                room_state = self.get_room_state(room_id)
+                if room_state is None or db_module.SessionLocal is None:
+                    continue
+                db = db_module.SessionLocal()
+                try:
+                    self._persist_runtime_state(room_state, db)
+                finally:
+                    db.close()
+        finally:
+            self._runtime_persist_tasks.pop(room_id, None)
+            if room_id in self._runtime_persist_dirty and room_id in self.rooms:
+                self._schedule_runtime_persistence(room_id)
+    async def claim_mic(
+        self,
+        room_id: str,
+        *,
+        user_id: str,
+        user_role: str,
+        now: datetime,
+        ttl_seconds: int = 30,
+        db: Optional[Session] = None,
+    ) -> dict:
+        """Atomically claim a microphone across coroutines and database workers."""
+        async with self.get_room_lock(room_id):
+            room_state = self.get_room_state(room_id)
+            if room_state is None:
+                return {"allowed": False, "reason": "room_missing"}
+
+            locked_debate = None
+            if db is not None:
+                try:
+                    debate_uuid = uuid.UUID(str(room_state.debate_id))
+                    locked_debate = db.execute(
+                        select(Debate)
+                        .where(Debate.id == debate_uuid)
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                except (ValueError, TypeError):
+                    locked_debate = None
+                if locked_debate is not None:
+                    persisted = self._runtime_state_kwargs(
+                        self.get_room_meta(locked_debate)
+                    )
+                    for field_name in (
+                        "mic_owner_user_id",
+                        "mic_owner_role",
+                        "mic_expires_at",
+                    ):
+                        if field_name in persisted:
+                            setattr(room_state, field_name, persisted[field_name])
+
+            if (
+                room_state.mic_expires_at
+                and now < room_state.mic_expires_at
+                and (room_state.mic_owner_user_id or room_state.mic_owner_role)
+            ):
+                if db is not None:
+                    db.rollback()
+                return {
+                    "allowed": False,
+                    "reason": "occupied",
+                    "mic_owner_user_id": room_state.mic_owner_user_id,
+                    "mic_owner_role": room_state.mic_owner_role,
+                    "expires_at": room_state.mic_expires_at,
+                }
+
+            expires_at = now + timedelta(seconds=ttl_seconds)
+            room_state.mic_owner_user_id = user_id
+            room_state.mic_owner_role = user_role
+            room_state.mic_expires_at = expires_at
+            room_state.current_speaker = user_role
+            room_state.free_debate_last_side = "human"
+            room_state.free_debate_next_side = "human"
+            if db is not None and locked_debate is not None:
+                if not self._persist_runtime_state(
+                    room_state, db, debate=locked_debate
+                ):
+                    return {"allowed": False, "reason": "persistence_failed"}
+            await self.broadcast_state_update(room_id)
+            return {"allowed": True, "expires_at": expires_at}
 
     @staticmethod
     def get_room_meta(debate: Debate) -> dict:
@@ -842,22 +1030,28 @@ class DebateRoomManager:
         # 创建房间状态
         meta = self.get_room_meta(debate)
         room_capacity = self.get_room_capacity(debate, meta)
+        runtime_kwargs = self._runtime_state_kwargs(meta)
+        runtime_kwargs.update(
+            {
+                "room_capacity": room_capacity,
+                "required_roles": list(ROOM_ROLE_ORDER[:room_capacity]),
+                "waiting_checklists": self.get_persisted_waiting_checklists(meta),
+                "room_mode": self.get_room_mode(debate),
+                "visibility": self.get_room_visibility(debate),
+                "host_user_id": self.get_room_host_user_id(debate),
+                "host_role": meta.get("host_role"),
+                "scheduled_start_time": self.room_datetime_iso(debate, "scheduled_start_time", meta),
+                "checkin_open_time": self.room_datetime_iso(debate, "checkin_open_time", meta),
+                "checkin_close_time": self.room_datetime_iso(debate, "checkin_close_time", meta),
+                "room_status": self.get_room_status(debate, meta),
+            }
+        )
         room_state = RoomState(
             room_id=room_id,
             debate_id=str(debate_uuid),
-            current_phase=DebatePhase.WAITING,
-            room_capacity=room_capacity,
-            required_roles=list(ROOM_ROLE_ORDER[:room_capacity]),
-            waiting_checklists=self.get_persisted_waiting_checklists(meta),
-            room_mode=self.get_room_mode(debate),
-            visibility=self.get_room_visibility(debate),
-            host_user_id=self.get_room_host_user_id(debate),
-            host_role=meta.get("host_role"),
-            scheduled_start_time=self.room_datetime_iso(debate, "scheduled_start_time", meta),
-            checkin_open_time=self.room_datetime_iso(debate, "checkin_open_time", meta),
-            checkin_close_time=self.room_datetime_iso(debate, "checkin_close_time", meta),
-            room_status=self.get_room_status(debate, meta),
+            **runtime_kwargs,
         )
+        room_state._persistence_enabled = True
 
         self._sync_waiting_checklists_with_participants(room_state)
         self.rooms[room_id] = room_state
@@ -1138,6 +1332,11 @@ class DebateRoomManager:
         # 如果房间为空，删除房间
         if not room_state.participants:
             del self.rooms[room_id]
+            self._room_locks.pop(room_id, None)
+            self._runtime_persist_dirty.discard(room_id)
+            persist_task = self._runtime_persist_tasks.pop(room_id, None)
+            if persist_task is not None and not persist_task.done():
+                persist_task.cancel()
             logger.info(f"Room {room_id} deleted (empty)")
 
         return True
@@ -1202,6 +1401,7 @@ class DebateRoomManager:
 
         # 广播状态更新
         await self.broadcast_state_update(room_id)
+        self._schedule_runtime_persistence(room_id)
 
         return True
 
@@ -1279,6 +1479,7 @@ class DebateRoomManager:
         room_state.sub_timer_limit_sec = None
         room_state.sub_timer_remaining = None
 
+        self._persist_runtime_state(room_state, db, debate=debate)
         logger.info(f"Debate started in room {room_id}")
 
         # 初始化流程控制器（避免循环导入，在这里动态导入）
@@ -1385,6 +1586,7 @@ class DebateRoomManager:
         room_state.timer_warning_30_fired = False
         room_state.timer_warning_10_fired = False
 
+        self._persist_runtime_state(room_state, db, debate=debate)
         logger.info(f"Debate ended in room {room_id}")
 
         try:
@@ -1421,14 +1623,156 @@ class DebateRoomManager:
         )
 
         if debate_uuid:
-            asyncio.create_task(
-                self._auto_score_and_generate_report_background(room_id, debate_uuid)
-            )
+            queued = self.enqueue_report_job(db, debate_uuid, room_id)
+            if queued:
+                asyncio.create_task(
+                    self._auto_score_and_generate_report_background(room_id, debate_uuid)
+                )
+            else:
+                await self._broadcast_debate_ended(room_id)
         else:
             await self._broadcast_debate_ended(room_id)
 
         return True
 
+
+    @staticmethod
+    def _report_job_payload(debate: Debate) -> dict:
+        meta = DebateRoomManager.get_room_meta(debate)
+        job = meta.get(REPORT_JOB_META_KEY)
+        return dict(job) if isinstance(job, dict) else {}
+
+    @staticmethod
+    def _write_report_job(debate: Debate, job: dict) -> None:
+        report = dict(debate.report) if isinstance(debate.report, dict) else {}
+        meta = DebateRoomManager.get_room_meta(debate)
+        meta[REPORT_JOB_META_KEY] = dict(job)
+        report[ROOM_META_KEY] = meta
+        debate.report = report
+
+    def enqueue_report_job(
+        self, db: Session, debate_id: uuid.UUID, room_id: str
+    ) -> bool:
+        debate = db.execute(
+            select(Debate).where(Debate.id == debate_id).with_for_update()
+        ).scalar_one_or_none()
+        if debate is None:
+            return False
+        existing = self._report_job_payload(debate)
+        if existing.get("status") in {"queued", "running", "completed"}:
+            db.rollback()
+            return False
+        attempts = int(existing.get("attempts") or 0)
+        if attempts >= 3:
+            db.rollback()
+            return False
+        now = datetime.utcnow().isoformat()
+        self._write_report_job(
+            debate,
+            {
+                **existing,
+                "status": "queued",
+                "room_id": str(room_id),
+                "attempts": attempts,
+                "queued_at": now,
+                "updated_at": now,
+                "error": None,
+            },
+        )
+        db.commit()
+        return True
+
+    def _claim_report_job(
+        self, db: Session, debate_id: uuid.UUID, room_id: str
+    ) -> bool:
+        debate = db.execute(
+            select(Debate).where(Debate.id == debate_id).with_for_update()
+        ).scalar_one_or_none()
+        if debate is None:
+            return False
+        existing = self._report_job_payload(debate)
+        if existing.get("status") not in {"queued", "failed"}:
+            db.rollback()
+            return False
+        attempts = int(existing.get("attempts") or 0)
+        if attempts >= 3:
+            db.rollback()
+            return False
+        now = datetime.utcnow().isoformat()
+        self._write_report_job(
+            debate,
+            {
+                **existing,
+                "status": "running",
+                "room_id": str(room_id),
+                "attempts": attempts + 1,
+                "started_at": now,
+                "updated_at": now,
+                "error": None,
+            },
+        )
+        db.commit()
+        return True
+
+    def _finish_report_job(
+        self,
+        db: Session,
+        debate_id: uuid.UUID,
+        *,
+        succeeded: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        debate = db.execute(
+            select(Debate).where(Debate.id == debate_id).with_for_update()
+        ).scalar_one_or_none()
+        if debate is None:
+            db.rollback()
+            return
+        existing = self._report_job_payload(debate)
+        now = datetime.utcnow().isoformat()
+        self._write_report_job(
+            debate,
+            {
+                **existing,
+                "status": "completed" if succeeded else "failed",
+                "updated_at": now,
+                "completed_at": now if succeeded else existing.get("completed_at"),
+                "error": None if succeeded else str(error or "report generation failed")[:1000],
+            },
+        )
+        db.commit()
+
+    async def recover_pending_report_jobs(self, db: Session) -> int:
+        debates = db.execute(
+            select(Debate).where(Debate.status == "completed")
+        ).scalars().all()
+        recovered = 0
+        for debate in debates:
+            job = self._report_job_payload(debate)
+            status_value = str(job.get("status") or "")
+            attempts = int(job.get("attempts") or 0)
+            if attempts >= 3:
+                continue
+            should_recover = status_value in {"queued", "failed"}
+            if status_value == "running":
+                updated_at = job.get("updated_at")
+                try:
+                    updated = datetime.fromisoformat(str(updated_at))
+                except (TypeError, ValueError):
+                    updated = datetime.min
+                should_recover = datetime.utcnow() - updated > timedelta(minutes=5)
+            if not should_recover:
+                continue
+            job["status"] = "queued"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            self._write_report_job(debate, job)
+            db.commit()
+            room_id = str(job.get("room_id") or debate.id)
+            asyncio.create_task(
+                self._auto_score_and_generate_report_background(room_id, debate.id)
+            )
+            recovered += 1
+        return recovered
     async def _broadcast_debate_ended(self, room_id: str) -> None:
         await websocket_manager.broadcast_to_room(
             room_id,
@@ -1453,8 +1797,16 @@ class DebateRoomManager:
             if db_module.SessionLocal is None:
                 db_module.init_engine()
             db = db_module.SessionLocal()
+            if db is None or not self._claim_report_job(db, debate_id, room_id):
+                return
             await self._auto_score_and_generate_report(db, debate_id)
+            self._finish_report_job(db, debate_id, succeeded=True)
         except Exception as e:
+            if db is not None:
+                db.rollback()
+                self._finish_report_job(
+                    db, debate_id, succeeded=False, error=str(e)
+                )
             logger.error(f"自动评分和报告生成失败: {e}", exc_info=True)
         finally:
             if db is not None:

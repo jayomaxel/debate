@@ -124,6 +124,53 @@ def test_openai_tts_uses_backend_configured_speed(monkeypatch):
     assert captured_payloads[0]["speed"] == 1.35
 
 
+def test_dashscope_realtime_config_uses_realtime_fallback(monkeypatch):
+    captured = {}
+
+    class DummyTtsConfig:
+        api_key = "test-key"
+        model_name = "qwen3-tts-flash-realtime"
+        api_endpoint = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+        parameters = {
+            "provider": "dashscope",
+            "voice": "Cherry",
+            "speed": 1.25,
+        }
+
+    async def _fake_get_tts_config(_db):
+        return DummyTtsConfig()
+
+    async def _fake_realtime(**kwargs):
+        captured.update(kwargs)
+        return {
+            "audio_data": b"realtime-audio",
+            "audio_format": "pcm",
+            "chunk_count": 1,
+            "used_streaming": True,
+            "error": None,
+        }
+
+    async def _unexpected_http_tts(**_kwargs):
+        raise AssertionError("realtime configuration must not use HTTP TTS")
+
+    monkeypatch.setattr(voice_processor, "_get_tts_config", _fake_get_tts_config)
+    monkeypatch.setattr(voice_processor, "_dashscope_tts_realtime", _fake_realtime)
+    monkeypatch.setattr(voice_processor, "_dashscope_tts", _unexpected_http_tts)
+
+    audio = asyncio.run(
+        voice_processor.synthesize_speech(
+            text="测试实时语音回退",
+            voice_id="Cherry",
+            speed=None,
+            db=object(),
+        )
+    )
+
+    assert audio == b"realtime-audio"
+    assert captured["model_name"] == "qwen3-tts-flash-realtime"
+    assert captured["speed"] == 1.25
+
+
 def test_dashscope_asr_polls_and_extracts_text(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
     responses = [
@@ -224,3 +271,14 @@ def test_fun_asr_realtime_falls_back_to_filetrans_when_ffmpeg_missing(
         captured["api_endpoint"]
         == "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
     )
+
+
+def test_extract_text_from_dashscope_sentence_list():
+    payload = [
+        {"sentence_id": 1, "text": "人工智能可以帮助学生"},
+        {"sentence_id": 2, "text": "提升学习效率。"},
+    ]
+
+    text = voice_processor._extract_text_from_transcription(payload)
+
+    assert text == "人工智能可以帮助学生 提升学习效率。"

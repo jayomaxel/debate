@@ -176,10 +176,16 @@ class TeachingDesignService:
     @staticmethod
     def normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = payload or {}
+        confidence = payload.get('confidence') if isinstance(payload, dict) else {}
+        confidence = confidence if isinstance(confidence, dict) else {}
+        source_excerpt_map = payload.get('source_excerpt_map') if isinstance(payload, dict) else {}
+        source_excerpt_map = source_excerpt_map if isinstance(source_excerpt_map, dict) else {}
+        missing_fields = payload.get('missing_fields') if isinstance(payload, dict) else []
+        missing_fields = missing_fields if isinstance(missing_fields, list) else []
         if not isinstance(payload, dict):
             raise ValueError("教学设计提取结果必须是对象")
 
-        return {
+        normalized = {
             "course_title": TeachingDesignService._clean_optional_string(payload.get("course_title")),
             "chapter_theme": TeachingDesignService._clean_optional_string(payload.get("chapter_theme")),
             "learning_objectives": TeachingDesignService._clean_string_list(payload.get("learning_objectives")),
@@ -191,7 +197,19 @@ class TeachingDesignService:
             "debate_focuses": TeachingDesignService._clean_string_list(payload.get("debate_focuses")),
             "forbidden_boundaries": TeachingDesignService._clean_string_list(payload.get("forbidden_boundaries")),
             "source_summary": TeachingDesignService._clean_optional_string(payload.get("source_summary")),
+            'confidence': {
+                str(key): max(0.0, min(1.0, float(value)))
+                for key, value in confidence.items()
+                if isinstance(value, (int, float))
+            },
+            'missing_fields': [str(item) for item in missing_fields if str(item).strip()],
+            'source_excerpt_map': {
+                str(key): str(value).strip()
+                for key, value in source_excerpt_map.items()
+                if str(value).strip()
+            },
         }
+        return normalized
 
     @staticmethod
     def extract_text_from_bytes(*, file_data: bytes, file_type: str) -> str:
@@ -250,6 +268,37 @@ class TeachingDesignService:
             "debate_focuses": debate_focuses,
             "forbidden_boundaries": forbidden_boundaries,
             "source_summary": normalized_text[:240] + ("..." if len(normalized_text) > 240 else ""),
+        }
+        field_names = (
+            'course_title',
+            'chapter_theme',
+            'learning_objectives',
+            'knowledge_points',
+            'key_difficulties',
+            'capability_targets',
+            'grade_level',
+            'time_constraints',
+            'debate_focuses',
+            'forbidden_boundaries',
+        )
+        payload['missing_fields'] = [key for key in field_names if not payload.get(key)]
+        payload['confidence'] = {
+            key: (0.9 if payload.get(key) else 0.0) for key in field_names
+        }
+        payload['source_excerpt_map'] = {
+            key: next(
+                (
+                    line[:240]
+                    for line in lines
+                    if any(
+                        label.replace(' ', '').lower() in line.replace(' ', '').lower()
+                        for label in TeachingDesignService.FIELD_LABELS.get(key, [])
+                    )
+                ),
+                (lines[0][:240] if lines and payload.get(key) else ''),
+            )
+            for key in field_names
+            if payload.get(key)
         }
         return TeachingDesignService.normalize_payload(payload)
 

@@ -49,6 +49,9 @@ class RAGService:
         self.openai_client = None
         self.llm_client = None
         self.embedding_model = None
+        # Keep the historical default for direct/unit callers. Normal request paths
+        # replace this value from VectorConfig in _get_openai_client().
+        self.embedding_dimension: Optional[int] = 1536
         self._embedding_column_is_vector: Optional[bool] = None
 
     @staticmethod
@@ -219,6 +222,7 @@ class RAGService:
                 base_url=base_url
             )
             self.embedding_model = vector_config.model_name
+            self.embedding_dimension = int(vector_config.embedding_dimension or 0)
             
             logger.info(
                 f"OpenAI客户端初始化成功: model={self.embedding_model}, "
@@ -273,9 +277,10 @@ class RAGService:
             if not query_embedding:
                 raise ValueError("查询嵌入向量为空")
             
-            if len(query_embedding) != 1536:
+            expected_dimension = int(self.embedding_dimension or len(query_embedding))
+            if len(query_embedding) != expected_dimension:
                 raise ValueError(
-                    f"查询嵌入向量维度错误: 期望1536，实际{len(query_embedding)}"
+                    f"查询嵌入向量维度错误: 期望{expected_dimension}，实际{len(query_embedding)}"
                 )
             
             if top_k <= 0:

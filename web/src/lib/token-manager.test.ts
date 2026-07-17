@@ -18,18 +18,19 @@ describe('TokenManager', () => {
     sessionStorage.clear();
   });
 
-  it('stores access tokens in localStorage and refresh tokens in sessionStorage', () => {
+  it('stores both tokens only in sessionStorage', () => {
     TokenManager.setTokens({
       access_token: 'access-1',
       refresh_token: 'refresh-1',
       expires_in: 3600,
     });
 
-    expect(localStorage.getItem('access_token')).toBe('access-1');
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(sessionStorage.getItem('access_token')).toBe('access-1');
     expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(sessionStorage.getItem('refresh_token')).toBe('refresh-1');
-    expect(localStorage.getItem('token_type')).toBe('bearer');
-    expect(Number(localStorage.getItem('token_expires_at'))).toBe(Date.now() + 3600 * 1000);
+    expect(sessionStorage.getItem('token_type')).toBe('bearer');
+    expect(Number(sessionStorage.getItem('token_expires_at'))).toBe(Date.now() + 3600 * 1000);
   });
 
   it('refreshes tokens using the refresh token and updates local state', async () => {
@@ -65,7 +66,8 @@ describe('TokenManager', () => {
     const result = await TokenManager.refreshToken();
 
     expect(axios.post).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem('access_token')).toBe('access-2');
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(sessionStorage.getItem('access_token')).toBe('access-2');
     expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(sessionStorage.getItem('refresh_token')).toBe('refresh-2');
     expect(TokenManager.getUserInfo()?.name).toBe('Student Updated');

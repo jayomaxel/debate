@@ -17,11 +17,11 @@ from utils.security import is_token_session_valid, verify_token
 logger = get_logger(__name__)
 
 # HTTP Bearer认证方案
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 async def verify_token_middleware(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """
@@ -33,6 +33,13 @@ async def verify_token_middleware(
         
     Returns:
         当前用户对象
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication credentials were not provided",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
         
     Raises:
         HTTPException: 令牌无效或用户不存在

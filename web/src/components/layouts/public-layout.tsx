@@ -120,8 +120,12 @@ export default function PublicLayout({
         </div>
 
         <main>{children}</main>
+        <footer className='student-container flex flex-wrap justify-center gap-5 py-8 text-sm text-slate-500'>
+          <button type='button' onClick={() => navigate('/privacy')} className='hover:text-slate-900'>隐私政策</button>
+          <button type='button' onClick={() => navigate('/terms')} className='hover:text-slate-900'>服务条款</button>
+          <button type='button' onClick={() => navigate('/contact')} className='hover:text-slate-900'>联系我们</button>
+        </footer>
       </div>
     </div>
   );
 }
-

@@ -63,20 +63,23 @@ class TokenManager {
   private static refreshPromise: Promise<RefreshTokenResult> | null = null;
 
   static setTokens(tokenData: TokenData): void {
-    if (!storageAvailable()) {
+    if (!sessionStorageAvailable()) {
       return;
     }
 
-    localStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    localStorage.setItem(TOKEN_TYPE_KEY, tokenData.token_type || 'bearer');
-    if (sessionStorageAvailable()) {
-      sessionStorage.setItem(REFRESH_TOKEN_KEY, tokenData.refresh_token);
+    sessionStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
+    sessionStorage.setItem(REFRESH_TOKEN_KEY, tokenData.refresh_token);
+    sessionStorage.setItem(TOKEN_TYPE_KEY, tokenData.token_type || 'bearer');
+    if (storageAvailable()) {
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
+      localStorage.removeItem(TOKEN_TYPE_KEY);
+      localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
     }
 
     if (tokenData.expires_in) {
       const expiresAt = Date.now() + tokenData.expires_in * 1000;
-      localStorage.setItem(TOKEN_EXPIRES_AT_KEY, String(expiresAt));
+      sessionStorage.setItem(TOKEN_EXPIRES_AT_KEY, String(expiresAt));
     }
 
     if (tokenData.user) {
@@ -85,40 +88,34 @@ class TokenManager {
   }
 
   static getAccessToken(): string | null {
-    if (!storageAvailable()) {
-      return null;
-    }
-
-    return localStorage.getItem(ACCESS_TOKEN_KEY);
-  }
-
-  static getRefreshToken(): string | null {
-    if (!storageAvailable()) {
-      return null;
-    }
-
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
     if (!sessionStorageAvailable()) {
       return null;
     }
+    if (storageAvailable()) localStorage.removeItem(ACCESS_TOKEN_KEY);
+    return sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  }
 
+  static getRefreshToken(): string | null {
+    if (!sessionStorageAvailable()) {
+      return null;
+    }
+    if (storageAvailable()) localStorage.removeItem(REFRESH_TOKEN_KEY);
     return sessionStorage.getItem(REFRESH_TOKEN_KEY);
   }
 
   static getTokenType(): string {
-    if (!storageAvailable()) {
+    if (!sessionStorageAvailable()) {
       return 'bearer';
     }
-
-    return localStorage.getItem(TOKEN_TYPE_KEY) || 'bearer';
+    return sessionStorage.getItem(TOKEN_TYPE_KEY) || 'bearer';
   }
 
   static isTokenExpired(): boolean {
-    if (!storageAvailable()) {
+    if (!sessionStorageAvailable()) {
       return true;
     }
 
-    const expiresAt = Number(localStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
+    const expiresAt = Number(sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
     if (!expiresAt) {
       return false;
     }
@@ -127,11 +124,11 @@ class TokenManager {
   }
 
   static isTokenExpiringSoon(windowMs = 90_000): boolean {
-    if (!storageAvailable()) {
+    if (!sessionStorageAvailable()) {
       return true;
     }
 
-    const expiresAt = Number(localStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
+    const expiresAt = Number(sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY) || '0');
     if (!expiresAt) {
       return false;
     }
@@ -176,7 +173,10 @@ class TokenManager {
     localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
     localStorage.removeItem(USER_INFO_KEY);
     if (sessionStorageAvailable()) {
+      sessionStorage.removeItem(ACCESS_TOKEN_KEY);
       sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_TYPE_KEY);
+      sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
     }
   }
 

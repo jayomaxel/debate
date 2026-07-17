@@ -16,6 +16,7 @@ import httpx
 
 from models.document import Document
 from services.config_service import ConfigService
+from services.document_service import DocumentService
 
 logger = get_logger(__name__)
 
@@ -80,7 +81,8 @@ class KnowledgeBase:
         file_data: bytes,
         filename: str,
         file_type: str,
-        debate_id: str
+        debate_id: str,
+        purpose_tag: str = 'optional',
     ) -> Document:
         """
         上传文档
@@ -120,12 +122,16 @@ class KnowledgeBase:
             logger.info(f"Document saved: {file_path}")
             
             # 创建文档记录
+            normalized_purpose_tag = DocumentService.normalize_support_purpose_tag(purpose_tag)
             document = Document(
                 debate_id=debate_id,
                 filename=filename,
                 file_path=file_path,
                 file_type=file_type,
                 content=None,
+                purpose_tag=normalized_purpose_tag,
+                processing_status='pending',
+                summary_status='pending',
                 embedding_status="pending"
             )
             
@@ -138,11 +144,42 @@ class KnowledgeBase:
             logger.error(f"Failed to upload document: {e}", exc_info=True)
             raise
 
+    async def process_support_document_summary(self, document_id: str) -> None:
+        document = self.db.query(Document).filter(Document.id == document_id).first()
+        if not document:
+            return
+        try:
+            document.processing_status = 'processing'
+            document.summary_status = 'processing'
+            self.db.commit()
+            content = await self.extract_text(document.file_path, document.file_type)
+            summary_payload = DocumentService.build_support_document_summary(
+                content,
+                document.purpose_tag,
+            )
+            document.content = content
+            document.summary_payload = summary_payload
+            document.summary_quality = summary_payload['summary_quality']
+            document.summary_status = 'completed'
+            document.processing_status = 'completed'
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            latest = self.db.query(Document).filter(Document.id == document_id).first()
+            if latest:
+                latest.summary_status = 'failed'
+                latest.processing_status = 'failed'
+                self.db.commit()
+            raise
+
     async def process_document(self, document_id: str) -> None:
         """
         Extract text and generate embeddings for an uploaded support document.
         """
         document = self.db.query(Document).filter(Document.id == document_id).first()
+        if document:
+            document.processing_status = 'processing'
+            document.summary_status = 'processing'
         if not document:
             logger.warning(f"Document {document_id} not found for processing")
             return
@@ -153,9 +190,17 @@ class KnowledgeBase:
 
             content = await self.extract_text(document.file_path, document.file_type)
             document.content = content
+            summary_payload = DocumentService.build_support_document_summary(
+                content,
+                document.purpose_tag,
+            )
+            document.summary_payload = summary_payload
+            document.summary_quality = summary_payload['summary_quality']
+            document.summary_status = 'completed'
             self.db.commit()
 
             await self.generate_and_store_embeddings(document)
+            document.processing_status = 'completed'
             document.embedding_status = "completed"
             self.db.commit()
         except Exception as e:
@@ -243,10 +288,10 @@ class KnowledgeBase:
         try:
             # 获取OpenAI配置
             config_service = ConfigService(self.db)
-            model_config = await config_service.get_model_config()
+            vector_config = await config_service.get_vector_config()
             
-            if not model_config or not model_config.api_key:
-                raise ValueError("OpenAI API key not configured")
+            if not vector_config or not vector_config.api_key:
+                raise ValueError("Vector API key not configured")
             
             # 分块处理长文本（OpenAI embeddings API限制8191 tokens）
             chunks = self._split_text_into_chunks(text, max_length=8000)
@@ -256,13 +301,13 @@ class KnowledgeBase:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 for chunk in chunks:
                     response = await client.post(
-                        f"{model_config.api_endpoint.rsplit('/', 1)[0]}/embeddings",
+                        vector_config.api_endpoint,
                         headers={
-                            "Authorization": f"Bearer {model_config.api_key}",
+                            "Authorization": f"Bearer {vector_config.api_key}",
                             "Content-Type": "application/json"
                         },
                         json={
-                            "model": "text-embedding-ada-002",
+                            "model": vector_config.model_name,
                             "input": chunk
                         }
                     )
@@ -270,6 +315,14 @@ class KnowledgeBase:
                     if response.status_code == 200:
                         data = response.json()
                         embedding = data["data"][0]["embedding"]
+                        expected_dimension = int(
+                            vector_config.embedding_dimension or 0
+                        )
+                        if expected_dimension and len(embedding) != expected_dimension:
+                            raise ValueError(
+                                f"Embedding dimension mismatch: expected "
+                                f"{expected_dimension}, got {len(embedding)}"
+                            )
                         all_embeddings.append(embedding)
                     else:
                         error_msg = f"Embeddings API error: {response.status_code} - {response.text}"
@@ -528,6 +581,55 @@ class KnowledgeBase:
             logger.error(f"Failed to get documents: {e}", exc_info=True)
             return []
     
+    def get_knowledge_snippets(
+        self,
+        debate_id: str,
+        phase: str,
+        purpose_tags: Optional[List[str]] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        allowed_phases = {'opening', 'questioning', 'free_debate', 'closing'}
+        if phase not in allowed_phases:
+            raise ValueError('Unsupported debate phase')
+        normalized_tags = None
+        if purpose_tags:
+            normalized_tags = [
+                DocumentService.normalize_support_purpose_tag(tag)
+                for tag in purpose_tags
+            ]
+
+        query = self.db.query(Document).filter(Document.debate_id == debate_id)
+        if normalized_tags:
+            query = query.filter(Document.purpose_tag.in_(normalized_tags))
+        documents = query.order_by(Document.uploaded_at.desc()).all()
+        usage_goals = {
+            'opening': 'Establish definitions, context, and the main claim.',
+            'questioning': 'Challenge assumptions with verifiable evidence.',
+            'free_debate': 'Support rebuttals with concise evidence or cases.',
+            'closing': 'Synthesize the strongest evidence into a conclusion.',
+        }
+        snippets: List[Dict[str, Any]] = []
+        for document in documents:
+            summary = document.summary_payload or DocumentService.build_support_document_summary(
+                document.content,
+                document.purpose_tag,
+            )
+            if phase not in (summary.get('usable_phases') or []):
+                continue
+            parts = [summary.get('summary')] + list(summary.get('key_points') or [])
+            for index, content in enumerate(item for item in parts if item):
+                snippets.append({
+                    'snippet_id': f'{document.id}:{phase}:{index}',
+                    'document_id': str(document.id),
+                    'source_type': document.purpose_tag or 'optional',
+                    'content': str(content)[:600],
+                    'usage_goal': usage_goals[phase],
+                    'source_location': document.filename,
+                })
+                if len(snippets) >= max(1, min(limit, 50)):
+                    return snippets
+        return snippets
+
     def get_document_by_id(self, document_id: str) -> Optional[Document]:
         """
         根据ID获取文档

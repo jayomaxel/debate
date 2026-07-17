@@ -15,6 +15,8 @@ import DebateReplayPage from './debate-replay-page';
 import PreparationAssistantPage from './student/preparation-assistant-page';
 import UserProfile from './user-profile';
 import PublicEntry from './public-entry';
+import LegalPage from './legal-page';
+import NotFoundPage from './not-found-page';
 import {
   RequireAuth,
   RequireGuest,
@@ -419,7 +421,19 @@ const AppRouter: React.FC = () => {
     return renderPublicPage('home');
   }
 
-  return renderPublicPage('home');
+  if (matchPath('/privacy', pathname)) {
+    return <LegalPage kind='privacy' />;
+  }
+
+  if (matchPath('/terms', pathname)) {
+    return <LegalPage kind='terms' />;
+  }
+
+  if (matchPath('/contact', pathname)) {
+    return <LegalPage kind='contact' />;
+  }
+
+  return <NotFoundPage onHome={() => navigate('/')} />;
 };
 
 export default AppRouter;

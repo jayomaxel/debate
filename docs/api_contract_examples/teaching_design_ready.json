@@ -1,0 +1,18 @@
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "id": "version-demo",
+    "class_id": "class-demo",
+    "source_filename": "teaching-design.pdf",
+    "extraction_status": "completed",
+    "extracted_payload": {
+      "course_title": "Evidence and Argument",
+      "learning_objectives": ["Evaluate evidence quality"],
+      "knowledge_points": ["Source credibility"],
+      "confidence": {"knowledge_points": 0.92},
+      "missing_fields": [],
+      "source_excerpt_map": {"knowledge_points": "Evidence must be traceable."}
+    }
+  }
+}

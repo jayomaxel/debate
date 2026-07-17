@@ -36,6 +36,18 @@ def test_dashboard_contract_example_contains_expected_sections():
     assert "recent_runs" in data
 
 
+def test_work_package_e_contract_examples_exist_and_parse():
+    expected = [
+        'teaching_design_ready.json',
+        'support_document_summary.json',
+        'knowledge_snippet.json',
+    ]
+    for filename in expected:
+        payload = _load_json(filename)
+        assert payload['code'] == 200
+        assert payload['data']
+
+
 def test_version_comparison_contract_example_contains_expected_sections():
     payload = _load_json("topic_recommendation_version_comparison.json")
     data = payload["data"]

@@ -1,0 +1,27 @@
+{
+  "name": "teaching-design-ready",
+  "owner": "E",
+  "contract": "TeachingDesignSchema",
+  "example": {
+    "design_id": "design-demo",
+    "class_id": "class-demo",
+    "current_version_id": "version-demo",
+    "versions": [
+      {
+        "version_id": "version-demo",
+        "source_file_type": "pdf",
+        "source_file_name": "teaching-design.pdf",
+        "extraction_result": {
+          "course_objectives": ["Evaluate evidence quality"],
+          "knowledge_points": ["Source credibility"],
+          "chapter_topics": ["Evidence and argument"]
+        },
+        "confidence": {"knowledge_points": 0.92},
+        "missing_fields": [],
+        "source_excerpt_map": {"knowledge_points": "Evidence must be traceable."},
+        "status": "ready"
+      }
+    ]
+  },
+  "updated_at": "2026-07-17T00:00:00Z"
+}
