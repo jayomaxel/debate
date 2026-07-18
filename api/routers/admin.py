@@ -3,6 +3,7 @@
 提供系统级管理功能，包括班级管理、配置管理、用户管理等
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload, selectinload
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -512,11 +513,23 @@ async def update_model_config(
             target_id=str(config.id),
             metadata={"action": "update_model_config"},
         )
-        return {
-            "code": 200,
-            "message": "更新成功",
-            "data": response_data
-        }
+        rebuild_job_id = getattr(config, "_vector_rebuild_job_id", None)
+        if rebuild_job_id:
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "code": 202,
+                    "message": "配置已更新，向量重建任务已入队",
+                    "data": {
+                        **response_data.model_dump(mode="json"),
+                        "rebuild_job_id": rebuild_job_id,
+                        "rebuild_job_created": bool(
+                            getattr(config, "_vector_rebuild_created", False)
+                        ),
+                    },
+                },
+            )
+        return {"code": 200, "message": "更新成功", "data": response_data}
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

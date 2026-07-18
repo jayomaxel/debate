@@ -3,7 +3,7 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey, Float
+from sqlalchemy import Boolean, Column, String, Text, Integer, DateTime, Enum, ForeignKey, Float
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship, Mapped
 from typing import List, TYPE_CHECKING
@@ -29,6 +29,7 @@ class KBDocument(Base):
         server_default='pending'
     )
     error_message = Column(Text, nullable=True)
+    is_published = Column(Boolean, nullable=False, default=False, server_default='false')
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     uploaded_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
