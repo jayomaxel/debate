@@ -27,6 +27,7 @@ from services.e2e_health_probe_service import (
     e2e_health_probe_service,
     get_last_probe_state,
 )
+from utils.error_contract import install_error_contract
 from utils.http_client_pool import async_http_client_pool
 
 
@@ -73,6 +74,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+install_error_contract(app)
 
 app.include_router(auth.router)
 app.include_router(teacher.router)

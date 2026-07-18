@@ -119,9 +119,29 @@ class ComparisonService:
                     "ability_scores": normalize_ability(row),
                 })
 
-            percentile = None
+            leading_percentile = None
+            rank_position_percentile = None
+            percentile_basis = None
             if my_rank is not None and sample_size > 0:
-                percentile = round(((sample_size - my_rank + 1) / sample_size) * 100, 2)
+                leading_peer_count = max(sample_size - my_rank, 0)
+                comparable_peer_count = max(sample_size - 1, 0)
+                rank_position_percentile = round(
+                    ((sample_size - my_rank + 1) / sample_size) * 100,
+                    2,
+                )
+                if comparable_peer_count > 0:
+                    leading_percentile = round(
+                        (leading_peer_count / comparable_peer_count) * 100,
+                        2,
+                    )
+                percentile_basis = {
+                    "label": "超过同班比例",
+                    "formula": "超过的同班可比学生数 / 其他同班可比学生数 * 100",
+                    "leading_peer_count": leading_peer_count,
+                    "comparable_peer_count": comparable_peer_count,
+                    "sample_size": sample_size,
+                    "rank_position_percentile": rank_position_percentile,
+                }
 
             my_payload = None
             if my_row is not None:
@@ -129,7 +149,12 @@ class ComparisonService:
                     "student_id": str(my_row.student_id),
                     "student_name": my_row.student_name,
                     "rank": my_rank,
-                    "percentile": percentile,
+                    "percentile": leading_percentile,
+                    "leading_percentile": leading_percentile,
+                    "rank_position_percentile": rank_position_percentile,
+                    "percentile_label": "超过同班比例",
+                    "percentile_description": "表示当前指标超过多少同班可比学生；不是统计分位阈值。",
+                    "percentile_basis": percentile_basis,
                     "score": round(float(getattr(my_row, metric_field) or 0), 2),
                     "overall_score": round(float(my_row.avg_overall or 0), 2),
                     "ability_scores": normalize_ability(my_row),

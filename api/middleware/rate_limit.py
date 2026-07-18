@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from database import get_redis
 from services.audit_service import AuditService
+from utils.error_contract import build_error_contract, resolve_request_id
 from utils.security import is_token_session_valid, verify_token
 
 RATE_LIMIT_TOTAL = Counter(
@@ -155,7 +156,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     "path": request.url.path,
                 },
             )
-            return _rate_limit_response(policy, decision)
+            return _rate_limit_response(request, policy, decision)
 
         RATE_LIMIT_TOTAL.labels(bucket=policy.bucket, result="allowed").inc()
         response = await call_next(request)
@@ -217,18 +218,25 @@ def _check_rate_limit(policy: RateLimitPolicy, identity: str) -> RateLimitDecisi
     )
 
 
-def _rate_limit_response(policy: RateLimitPolicy, decision: RateLimitDecision) -> JSONResponse:
+def _rate_limit_response(
+    request: Request,
+    policy: RateLimitPolicy,
+    decision: RateLimitDecision,
+) -> JSONResponse:
+    request_id = resolve_request_id(request)
     response = JSONResponse(
         status_code=429,
-        content={
-            "code": 429,
-            "message": "Too many requests",
-            "data": {
+        content=build_error_contract(
+            code=429,
+            message="Too many requests",
+            request_id=request_id,
+            data={
                 "bucket": policy.bucket,
                 "retry_after_seconds": decision.retry_after_seconds,
             },
-        },
+        ),
     )
+    response.headers["X-Request-Id"] = request_id
     _apply_rate_limit_headers(response, decision)
     return response
 

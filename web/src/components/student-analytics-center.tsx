@@ -65,6 +65,13 @@ const comparisonMetricOptions = [
   { value: 'teamwork', label: 'AI 伦理与科技素养' },
 ];
 
+const formatPercent = (value?: number | null) => {
+  if (value === null || value === undefined) {
+    return '-';
+  }
+  return `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
+};
+
 const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
   onBack,
   onViewReport,
@@ -455,13 +462,14 @@ const StudentAnalyticsCenter: React.FC<StudentAnalyticsCenterProps> = ({
             />
             <SummaryCard
               icon={<Star className="h-6 w-6 text-slate-700" />}
-              value={
-                comparison.my?.percentile === null ||
-                comparison.my?.percentile === undefined
-                  ? '-'
-                  : `${comparison.my.percentile}%`
+              value={formatPercent(
+                comparison.my?.leading_percentile ?? comparison.my?.percentile
+              )}
+              label={comparison.my?.percentile_label || '超过同班比例'}
+              description={
+                comparison.my?.percentile_description ||
+                '按当前指标排名计算，表示超过多少同班可比学生。'
               }
-              label="领先百分位"
               tone="student-card-soft-peach"
             />
             <SummaryCard
@@ -792,11 +800,13 @@ function SummaryCard({
   icon,
   value,
   label,
+  description,
   tone,
 }: {
   icon: React.ReactNode;
   value: string;
   label: string;
+  description?: string;
   tone: string;
 }) {
   return (
@@ -806,6 +816,9 @@ function SummaryCard({
         {value}
       </div>
       <div className="mt-2 text-sm text-slate-600">{label}</div>
+      {description ? (
+        <div className="mt-1 text-xs leading-5 text-slate-500">{description}</div>
+      ) : null}
     </div>
   );
 }
