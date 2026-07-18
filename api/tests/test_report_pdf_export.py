@@ -1,8 +1,10 @@
 from pathlib import Path
+import uuid
 
 import pytest
 
 from config import settings
+from models.debate import Debate
 from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import Report, ReportGenerator
 
@@ -105,3 +107,28 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
     cached_files = list(storage_root.rglob("*.pdf"))
     assert cached_files
     assert cached_files[0].read_bytes().startswith(b"%PDF")
+
+
+def test_private_report_pdf_rejects_tampered_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "REPORT_FILE_STORAGE_DIR",
+        str(tmp_path / "private-report-storage"),
+        raising=False,
+    )
+    debate = Debate(id=uuid.uuid4(), topic="Integrity check")
+
+    storage_meta, stored_path = ReportFileStorageService.persist_pdf_bytes_for_debate(
+        debate,
+        b"%PDF-1.4\noriginal\n%%EOF",
+    )
+    assert storage_meta["sha256"]
+    stored_path.write_bytes(b"%PDF-1.4\ntampered\n%%EOF")
+
+    _, resolved_path, is_legacy = ReportFileStorageService.locate_pdf_artifact(
+        debate,
+        str(debate.id),
+    )
+
+    assert resolved_path is None
+    assert is_legacy is False

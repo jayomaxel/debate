@@ -10,7 +10,7 @@ ROOT_STR = str(ROOT)
 if ROOT_STR not in sys.path:
     sys.path.insert(0, ROOT_STR)
 
-from utils.error_contract import install_error_contract
+from utils.error_contract import install_error_contract, public_exception_detail
 
 
 class DemoPayload(BaseModel):
@@ -125,3 +125,11 @@ def test_raw_http_500_message_is_sanitized():
         "request_id": "req-contract-raw-500",
         "detail": "服务器内部错误，请稍后重试",
     }
+
+
+def test_router_exception_detail_never_exposes_sensitive_runtime_text():
+    assert public_exception_detail(ValueError("邮箱已存在")) == "邮箱已存在"
+    assert (
+        public_exception_detail(RuntimeError("postgres://user:secret@db"))
+        == "请求处理失败，请稍后重试"
+    )

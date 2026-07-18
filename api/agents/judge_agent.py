@@ -395,12 +395,28 @@ class JudgeAgent:
             raise ValueError("batch judge JSON missing speech_scores or global_report")
 
         normalized_scores = []
+        expected_speech_ids = {
+            str(item.get("speech_id") or "").strip()
+            for item in context
+            if isinstance(item, dict)
+            and str(item.get("speech_id") or "").strip()
+            and str(item.get("content") or "").strip()
+        }
+        seen_speech_ids = set()
         partial = False
         for item in speech_scores:
             if not isinstance(item, dict):
                 partial = True
                 continue
             speech_id = str(item.get("speech_id") or "").strip()
+            if (
+                not speech_id
+                or speech_id not in expected_speech_ids
+                or speech_id in seen_speech_ids
+            ):
+                partial = True
+                continue
+            seen_speech_ids.add(speech_id)
             scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
             validation = ScoreValidationService.validate_speech_score(scores)
             if validation.errors:
@@ -433,6 +449,30 @@ class JudgeAgent:
                     "violations": violations,
                 }
             )
+
+        missing_speech_ids = expected_speech_ids - seen_speech_ids
+        if missing_speech_ids:
+            partial = True
+            fallback_meta = ScoreValidationService.build_report_meta(
+                scoring_source="fallback",
+                scoring_quality="fallback",
+                provider=provider,
+                mode=mode,
+                retry_count=retry_count,
+            ).to_dict()
+            for missing_speech_id in sorted(missing_speech_ids):
+                normalized_scores.append(
+                    {
+                        "speech_id": missing_speech_id,
+                        "scores": {
+                            **ScoreValidationService.build_fallback_score(
+                                "judge batch output omitted this speech"
+                            ),
+                            "report_meta": fallback_meta,
+                        },
+                        "violations": [],
+                    }
+                )
 
         report_quality = "partial" if partial else scoring_quality
         report_meta = ScoreValidationService.build_report_meta(

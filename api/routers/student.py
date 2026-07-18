@@ -22,6 +22,7 @@ from services.report_file_storage_service import ReportFileStorageService
 from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
 from middleware.auth_middleware import require_student, PermissionChecker, require_role
+from utils.error_contract import public_exception_detail
 
 from models import Debate,Speech
 
@@ -93,7 +94,7 @@ async def get_profile(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -128,7 +129,7 @@ async def update_profile(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -167,7 +168,7 @@ async def submit_assessment(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -219,7 +220,7 @@ async def list_lobby_rooms(
         )
         return {"code": 200, "message": "获取成功", "data": result}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=public_exception_detail(e))
 
 
 @router.post("/lobby/rooms", summary="创建自发组队房间")
@@ -342,7 +343,7 @@ async def list_my_reservations(
         )
         return {"code": 200, "message": "获取成功", "data": result}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=public_exception_detail(e))
 
 
 @router.post("/reservations/{reservation_id}/respond", summary="接受或拒绝预约邀请")
@@ -401,7 +402,7 @@ async def list_reservation_reminders(
         )
         return {"code": 200, "message": "获取成功", "data": result}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=public_exception_detail(e))
 
 
 @router.get("/debates", summary="获取可参与的辩论")
@@ -425,7 +426,7 @@ async def get_available_debates(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -492,7 +493,7 @@ async def join_debate(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -1198,7 +1199,7 @@ async def get_student_analytics(
         }
         
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=public_exception_detail(e))
     except Exception as e:
         logger.error(f"Failed to get student analytics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="获取数据分析失败")
@@ -1258,7 +1259,7 @@ async def get_class_comparison(
             "data": data
         }
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=public_exception_detail(e))
     except Exception as e:
         logger.error(f"Failed to get class comparison: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="获取对比数据失败")

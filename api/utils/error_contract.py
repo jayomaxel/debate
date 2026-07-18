@@ -20,6 +20,7 @@ _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _PUBLIC_SERVER_ERROR_PATTERN = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9，。！？、（）()《》：: -]{1,48}$")
 _SERVER_ERROR_MESSAGE = "服务器内部错误，请稍后重试"
 _VALIDATION_ERROR_MESSAGE = "请求参数校验失败"
+_GENERIC_OPERATION_ERROR_MESSAGE = "请求处理失败，请稍后重试"
 
 
 def install_error_contract(app: FastAPI) -> None:
@@ -80,6 +81,20 @@ def build_error_contract(
         payload["errors"] = errors
 
     return payload
+
+
+def public_exception_detail(exc: BaseException | object) -> str:
+    """Return a client-safe message for values caught by broad ``except`` blocks.
+
+    Router-level ``detail=str(exc)`` leaked driver, provider and filesystem
+    diagnostics before the global exception handler could sanitize them. Keep a
+    short, human-readable business message only when it passes the same public
+    message policy; otherwise use a stable generic message that the frontend can
+    render together with its request id.
+    """
+
+    message = str(exc or "").strip()
+    return message if _is_public_server_error_message(message) else _GENERIC_OPERATION_ERROR_MESSAGE
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -202,6 +217,10 @@ def _is_public_server_error_message(detail: Any) -> bool:
         "secret",
         "api_key",
         "token",
+        "config",
+        "connection",
+        "timeout",
+        "permission denied",
         "://",
     )
     lowered = message.lower()

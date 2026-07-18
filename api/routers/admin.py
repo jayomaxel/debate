@@ -36,6 +36,7 @@ from schemas.config import (
 )
 from schemas.auth import PasswordChangeRequest
 from utils.email_service import EmailService
+from utils.error_contract import public_exception_detail
 
 logger = get_logger(__name__)
 
@@ -135,7 +136,7 @@ async def create_class(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to create class: {e}", exc_info=True)
@@ -181,7 +182,7 @@ async def update_class(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to update class {class_id}: {e}", exc_info=True)
@@ -223,7 +224,7 @@ async def delete_class(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to delete class {class_id}: {e}", exc_info=True)
@@ -520,7 +521,7 @@ async def update_model_config(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to update model config: {e}", exc_info=True)
@@ -753,7 +754,7 @@ async def update_coze_config(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to update Coze config: {e}", exc_info=True)
@@ -855,7 +856,7 @@ async def update_vector_config(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         logger.error(f"Failed to update vector config: {e}", exc_info=True)

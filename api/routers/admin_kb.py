@@ -12,6 +12,7 @@ from models.user import User
 from services.document_service import DocumentService
 from middleware.auth_middleware import require_role
 from logging_config import get_logger
+from utils.error_contract import public_exception_detail
 
 logger = get_logger(__name__)
 
@@ -112,7 +113,7 @@ async def upload_document(
         logger.warning(f"文档上传验证失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     
     except IOError as e:
@@ -287,7 +288,7 @@ async def delete_document(
         logger.warning(f"文档删除失败（文档不存在）: {document_id}, 错误: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     
     except Exception as e:

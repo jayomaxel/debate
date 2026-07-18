@@ -161,3 +161,47 @@ def test_judge_agent_batch_evaluate_uses_prompt_pack_repair_and_meta(monkeypatch
     assert result["speech_scores"][0]["scores"]["report_meta"]["retry_count"] == 1
     assert result["global_report"]["report_meta"]["scoring_quality"] == "repaired"
     assert result["calibration_summary"]["calibration_version"] == "a.calibration.v1"
+
+
+def test_judge_batch_marks_omitted_speech_as_partial(monkeypatch):
+    async def fake_call_agent(self, prompt):
+        return """
+        {
+          "speech_scores": [
+            {
+              "speech_id": "s1",
+              "scores": {
+                "logic_score": 80,
+                "argument_score": 80,
+                "response_score": 80,
+                "persuasion_score": 80,
+                "teamwork_score": 80,
+                "overall_score": 80,
+                "feedback": "first speech"
+              },
+              "violations": []
+            }
+          ],
+          "global_report": {
+            "winner": "positive",
+            "winning_reason": "ok",
+            "scores": {"positive": {}, "negative": {}},
+            "overall_comment": "ok",
+            "suggestions": []
+          }
+        }
+        """
+
+    monkeypatch.setattr(JudgeAgent, "_call_agent", fake_call_agent)
+    result = asyncio.run(
+        JudgeAgent(SimpleNamespace()).batch_evaluate_debate(
+            [
+                {"speech_id": "s1", "content": "first", "speaker_role": "debater_1"},
+                {"speech_id": "s2", "content": "second", "speaker_role": "debater_2"},
+            ]
+        )
+    )
+
+    scores_by_speech = {item["speech_id"]: item["scores"] for item in result["speech_scores"]}
+    assert result["report_meta"]["scoring_quality"] == "partial"
+    assert scores_by_speech["s2"]["report_meta"]["scoring_source"] == "fallback"

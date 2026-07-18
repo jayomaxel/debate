@@ -70,7 +70,8 @@ async def test_report_readiness_scores_missing_valid_speeches(db_session):
 
     assert status["generated"] is True
     assert status["ready"] is True
-    assert debate.report["report_meta"]["provider"] == "local"
+    assert debate.report["report_meta"]["provider"] == "llm"
+    assert debate.report["report_meta"]["scoring_source"] == "fallback"
     assert debate.report["participant_scores"][0]["rubric_version"] == "a.rubric.v1"
     assert debate.report["evidence_anchors"][0]["turn_id"] == str(speech.id)
     assert debate.report["calibration_summary"]["calibration_version"] == "a.calibration.v1"
@@ -86,8 +87,8 @@ async def test_report_readiness_scores_missing_valid_speeches(db_session):
     assert report_data["winner"] == report.winner
     assert report_data["mode"] == "competition"
     assert report_data["domain_pack_id"] == "default"
-    assert report_data["report_meta"]["scoring_quality"] == "validated"
-    assert report_data["report_meta"]["provider"] == "local"
+    assert report_data["report_meta"]["scoring_quality"] == "partial"
+    assert report_data["report_meta"]["provider"] == "llm"
     assert report_data["report_meta"]["rubric_version"] == "a.rubric.v1"
     assert report_data["participant_scores"][0]["overall_score"] > 0
     assert report_data["evidence_anchors"][0]["turn_id"] == str(speech.id)
@@ -98,7 +99,7 @@ async def test_report_readiness_scores_missing_valid_speeches(db_session):
     assert "anomaly_samples" in report_data["statistics"]
 
     meta = ReportOrchestrationService.build_report_meta(db_session, debate)
-    assert meta["scoring_source"] == "judge_model"
+    assert meta["scoring_source"] == "fallback"
     assert meta["rubric_version"] == "a.rubric.v1"
     assert meta["evidence_anchor_count"] == 1
     assert meta["evidence_sources"][0]["source_type"] == "debate_speech"
