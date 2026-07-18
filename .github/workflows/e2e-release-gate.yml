@@ -1,0 +1,35 @@
+name: E2E Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      health_url:
+        description: "部署环境 API 根地址或 /health/e2e 地址"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      health_url:
+        description: "部署环境 API 根地址或 /health/e2e 地址"
+        required: true
+        type: string
+    secrets:
+      probe_token:
+        description: "E2E_HEALTH_PROBE_TOKEN"
+        required: false
+
+jobs:
+  e2e-release-gate:
+    name: Speech to transcript to AI response
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run production E2E release gate
+        env:
+          E2E_HEALTH_URL: ${{ inputs.health_url }}
+          E2E_HEALTH_PROBE_TOKEN: ${{ secrets.probe_token }}
+        run: python scripts/check_e2e_release_gate.py
+

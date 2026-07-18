@@ -31,6 +31,27 @@ class TeachingDesignService:
         "capability_targets",
         "debate_focuses",
     )
+    CONTRACT_EXTRACTION_FIELDS = (
+        "course_objectives",
+        "knowledge_points",
+        "chapter_topics",
+        "key_and_difficult_points",
+        "competency_goals",
+        "applicable_grade",
+        "class_hour_constraints",
+        "teacher_notes",
+    )
+    CONTRACT_STATUSES = {"extracting", "ready", "needs_review", "failed"}
+    LEGACY_TO_CONTRACT_FIELDS = {
+        "learning_objectives": "course_objectives",
+        "knowledge_points": "knowledge_points",
+        "chapter_theme": "chapter_topics",
+        "key_difficulties": "key_and_difficult_points",
+        "capability_targets": "competency_goals",
+        "grade_level": "applicable_grade",
+        "time_constraints": "class_hour_constraints",
+        "teacher_notes": "teacher_notes",
+    }
     FIELD_LABELS = {
         "course_title": ["课程名称", "课程名", "course title", "course"],
         "chapter_theme": ["章节主题", "章节", "单元主题", "chapter theme", "theme"],
@@ -174,18 +195,117 @@ class TeachingDesignService:
         raise ValueError("教学设计仅支持 PDF 或 DOCX 文件")
 
     @staticmethod
-    def normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        payload = payload or {}
-        confidence = payload.get('confidence') if isinstance(payload, dict) else {}
-        confidence = confidence if isinstance(confidence, dict) else {}
-        source_excerpt_map = payload.get('source_excerpt_map') if isinstance(payload, dict) else {}
-        source_excerpt_map = source_excerpt_map if isinstance(source_excerpt_map, dict) else {}
-        missing_fields = payload.get('missing_fields') if isinstance(payload, dict) else []
-        missing_fields = missing_fields if isinstance(missing_fields, list) else []
-        if not isinstance(payload, dict):
-            raise ValueError("教学设计提取结果必须是对象")
+    def _normalize_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
+        confidence = payload.get("confidence")
+        source_excerpt_map = payload.get("source_excerpt_map")
+        missing_fields = payload.get("missing_fields")
+        return {
+            "confidence": {
+                str(key): max(0.0, min(1.0, float(value)))
+                for key, value in (confidence or {}).items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            }
+            if isinstance(confidence, dict)
+            else {},
+            "missing_fields": [str(item) for item in (missing_fields or []) if str(item).strip()]
+            if isinstance(missing_fields, list)
+            else [],
+            "source_excerpt_map": {
+                str(key): str(value).strip()
+                for key, value in (source_excerpt_map or {}).items()
+                if str(value).strip()
+            }
+            if isinstance(source_excerpt_map, dict)
+            else {},
+        }
 
-        normalized = {
+    @staticmethod
+    def normalize_extraction_result(result: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
+        if result is None:
+            result = {}
+        if not isinstance(result, dict):
+            raise ValueError("Teaching design extraction result must be an object")
+        return {
+            key: TeachingDesignService._clean_string_list(result.get(key))
+            for key in TeachingDesignService.CONTRACT_EXTRACTION_FIELDS
+        }
+
+    @staticmethod
+    def extraction_result_from_legacy(payload: Dict[str, Any]) -> Dict[str, List[str]]:
+        legacy = TeachingDesignService.normalize_payload(payload)
+        return TeachingDesignService.normalize_extraction_result({
+            "course_objectives": legacy["learning_objectives"],
+            "knowledge_points": legacy["knowledge_points"],
+            "chapter_topics": [legacy["chapter_theme"]] if legacy["chapter_theme"] else [],
+            "key_and_difficult_points": legacy["key_difficulties"],
+            "competency_goals": legacy["capability_targets"],
+            "applicable_grade": [legacy["grade_level"]] if legacy["grade_level"] else [],
+            "class_hour_constraints": [legacy["time_constraints"]] if legacy["time_constraints"] else [],
+            "teacher_notes": legacy.get("teacher_notes", []),
+        })
+
+    @staticmethod
+    def legacy_payload_from_extraction_result(
+        result: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        normalized_result = TeachingDesignService.normalize_extraction_result(result)
+        metadata = TeachingDesignService._normalize_metadata(metadata or {})
+        chapter_topics = normalized_result["chapter_topics"]
+        applicable_grade = normalized_result["applicable_grade"]
+        class_hour_constraints = normalized_result["class_hour_constraints"]
+        return TeachingDesignService.normalize_payload({
+            "course_title": chapter_topics[0] if chapter_topics else None,
+            "chapter_theme": chapter_topics[0] if chapter_topics else None,
+            "learning_objectives": normalized_result["course_objectives"],
+            "knowledge_points": normalized_result["knowledge_points"],
+            "key_difficulties": normalized_result["key_and_difficult_points"],
+            "capability_targets": normalized_result["competency_goals"],
+            "grade_level": applicable_grade[0] if applicable_grade else None,
+            "time_constraints": class_hour_constraints[0] if class_hour_constraints else None,
+            "debate_focuses": normalized_result["knowledge_points"][:3],
+            "source_summary": "\n".join(normalized_result["teacher_notes"]) or None,
+            "teacher_notes": normalized_result["teacher_notes"],
+            **metadata,
+        })
+
+    @staticmethod
+    def contract_metadata_from_legacy(payload: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = TeachingDesignService._normalize_metadata(payload)
+        reverse_map = TeachingDesignService.LEGACY_TO_CONTRACT_FIELDS
+
+        def contract_key(key: str) -> str:
+            return reverse_map.get(key, key)
+
+        return {
+            "confidence": {
+                contract_key(key): value
+                for key, value in metadata["confidence"].items()
+            },
+            "missing_fields": [contract_key(key) for key in metadata["missing_fields"]],
+            "source_excerpt_map": {
+                contract_key(key): value
+                for key, value in metadata["source_excerpt_map"].items()
+            },
+        }
+
+    @staticmethod
+    def normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("Teaching design extraction result must be an object")
+
+        if isinstance(payload.get("extraction_result"), dict):
+            metadata = TeachingDesignService._normalize_metadata(payload)
+            base_payload = TeachingDesignService.legacy_payload_from_extraction_result(
+                payload["extraction_result"],
+                metadata,
+            )
+            payload = {**base_payload, **payload}
+
+        metadata = TeachingDesignService._normalize_metadata(payload)
+        return {
             "course_title": TeachingDesignService._clean_optional_string(payload.get("course_title")),
             "chapter_theme": TeachingDesignService._clean_optional_string(payload.get("chapter_theme")),
             "learning_objectives": TeachingDesignService._clean_string_list(payload.get("learning_objectives")),
@@ -197,19 +317,9 @@ class TeachingDesignService:
             "debate_focuses": TeachingDesignService._clean_string_list(payload.get("debate_focuses")),
             "forbidden_boundaries": TeachingDesignService._clean_string_list(payload.get("forbidden_boundaries")),
             "source_summary": TeachingDesignService._clean_optional_string(payload.get("source_summary")),
-            'confidence': {
-                str(key): max(0.0, min(1.0, float(value)))
-                for key, value in confidence.items()
-                if isinstance(value, (int, float))
-            },
-            'missing_fields': [str(item) for item in missing_fields if str(item).strip()],
-            'source_excerpt_map': {
-                str(key): str(value).strip()
-                for key, value in source_excerpt_map.items()
-                if str(value).strip()
-            },
+            "teacher_notes": TeachingDesignService._clean_string_list(payload.get("teacher_notes")),
+            **metadata,
         }
-        return normalized
 
     @staticmethod
     def extract_text_from_bytes(*, file_data: bytes, file_type: str) -> str:
@@ -319,12 +429,34 @@ class TeachingDesignService:
         return "insufficient"
 
     @staticmethod
+    def infer_contract_status(extraction_result: Dict[str, Any]) -> str:
+        normalized = TeachingDesignService.normalize_extraction_result(extraction_result)
+        populated_field_count = sum(1 for value in normalized.values() if value)
+        if populated_field_count >= 4:
+            return "ready"
+        return "needs_review"
+
+    @staticmethod
+    def _contract_file_type(source_file_type: Optional[str]) -> Optional[str]:
+        value = (source_file_type or "").strip().lower()
+        if value == "application/pdf" or value == "pdf":
+            return "pdf"
+        if (
+            value == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            or value.endswith(".docx")
+            or value == "docx"
+        ):
+            return "docx"
+        return value or None
+
+    @staticmethod
     def upsert_current_version(
         db: Session,
         *,
         class_id: str,
         created_by: Optional[str],
-        extracted_payload: Dict[str, Any],
+        extracted_payload: Optional[Dict[str, Any]] = None,
+        extraction_result: Optional[Dict[str, Any]] = None,
         version_name: Optional[str] = None,
         title: Optional[str] = None,
         raw_text: Optional[str] = None,
@@ -339,8 +471,23 @@ class TeachingDesignService:
         if class_uuid is None:
             raise ValueError("无效的班级ID")
 
-        normalized_payload = TeachingDesignService.normalize_payload(extracted_payload)
+        if extracted_payload is None and extraction_result is None:
+            raise ValueError("Teaching design extraction result is required")
+
+        normalized_payload = TeachingDesignService.normalize_payload(extracted_payload or {})
+        normalized_result = TeachingDesignService.normalize_extraction_result(
+            extraction_result
+            if extraction_result is not None
+            else TeachingDesignService.extraction_result_from_legacy(normalized_payload)
+        )
+        contract_metadata = TeachingDesignService.contract_metadata_from_legacy(extracted_payload or {})
+        if extraction_result is not None:
+            normalized_payload = TeachingDesignService.legacy_payload_from_extraction_result(
+                normalized_result,
+                contract_metadata,
+            )
         extraction_status = TeachingDesignService.infer_extraction_status(normalized_payload)
+        contract_status = TeachingDesignService.infer_contract_status(normalized_result)
 
         db.query(ClassTeachingDesignVersion).filter(
             ClassTeachingDesignVersion.class_id == class_uuid,
@@ -360,6 +507,11 @@ class TeachingDesignService:
             source_file_type=TeachingDesignService._clean_optional_string(source_file_type),
             source_file_size=int(source_file_size) if source_file_size is not None else None,
             raw_text=TeachingDesignService._clean_optional_string(raw_text),
+            extraction_result=normalized_result,
+            confidence=contract_metadata.get("confidence") or TeachingDesignService.contract_metadata_from_legacy(normalized_payload)["confidence"],
+            missing_fields=contract_metadata.get("missing_fields") or TeachingDesignService.contract_metadata_from_legacy(normalized_payload)["missing_fields"],
+            source_excerpt_map=contract_metadata.get("source_excerpt_map") or TeachingDesignService.contract_metadata_from_legacy(normalized_payload)["source_excerpt_map"],
+            status=contract_status,
             extracted_payload=normalized_payload,
             extraction_status=extraction_status,
             derived_from_version_id=TeachingDesignService._uuid(derived_from_version_id),
@@ -511,7 +663,41 @@ class TeachingDesignService:
     def serialize_version(version: Optional[ClassTeachingDesignVersion]) -> Optional[Dict[str, Any]]:
         if version is None:
             return None
+        legacy_payload = TeachingDesignService.normalize_payload(version.extracted_payload or {})
+        extraction_result = TeachingDesignService.normalize_extraction_result(
+            version.extraction_result
+            if version.extraction_result is not None
+            else TeachingDesignService.extraction_result_from_legacy(legacy_payload)
+        )
+        contract_metadata = TeachingDesignService.contract_metadata_from_legacy(legacy_payload)
+        confidence = version.confidence if isinstance(version.confidence, dict) else contract_metadata["confidence"]
+        missing_fields = version.missing_fields if isinstance(version.missing_fields, list) else contract_metadata["missing_fields"]
+        source_excerpt_map = (
+            version.source_excerpt_map
+            if isinstance(version.source_excerpt_map, dict)
+            else contract_metadata["source_excerpt_map"]
+        )
+        if version.extraction_status == "failed":
+            status = "failed"
+        elif version.extraction_result is None:
+            status = TeachingDesignService.infer_contract_status(extraction_result)
+        elif version.status in TeachingDesignService.CONTRACT_STATUSES:
+            status = version.status
+        else:
+            status = TeachingDesignService.infer_contract_status(extraction_result)
+        uploaded_at = version.created_at.isoformat() if version.created_at else None
         return {
+            # Frozen TeachingDesignSchema version fields.
+            "version_id": str(version.id),
+            "uploaded_at": uploaded_at,
+            "source_file_type": TeachingDesignService._contract_file_type(version.source_file_type),
+            "source_file_name": version.source_filename,
+            "extraction_result": extraction_result,
+            "confidence": confidence,
+            "missing_fields": missing_fields,
+            "source_excerpt_map": source_excerpt_map,
+            "status": status,
+            # Transitional aliases used by the existing teacher UI and topic service.
             "id": str(version.id),
             "class_id": str(version.class_id),
             "created_by": str(version.created_by) if version.created_by else None,
@@ -519,15 +705,55 @@ class TeachingDesignService:
             "title": version.title,
             "source_type": version.source_type,
             "source_filename": version.source_filename,
-            "source_file_type": version.source_file_type,
+            "source_file_mime_type": version.source_file_type,
             "source_file_size": version.source_file_size,
             "raw_text": version.raw_text,
-            "extracted_payload": version.extracted_payload or {},
+            "extracted_payload": legacy_payload,
             "extraction_status": version.extraction_status,
             "derived_from_version_id": str(version.derived_from_version_id) if version.derived_from_version_id else None,
             "correction_notes": version.correction_notes,
             "is_active": bool(version.is_active),
             "activated_at": version.activated_at.isoformat() if version.activated_at else None,
-            "created_at": version.created_at.isoformat() if version.created_at else None,
+            "created_at": uploaded_at,
             "updated_at": version.updated_at.isoformat() if version.updated_at else None,
+        }
+
+    @staticmethod
+    def serialize_design(db: Session, class_id: str) -> Dict[str, Any]:
+        class_uuid = TeachingDesignService._uuid(class_id)
+        if class_uuid is None:
+            raise ValueError("Invalid class ID")
+
+        versions = (
+            db.query(ClassTeachingDesignVersion)
+            .filter(ClassTeachingDesignVersion.class_id == class_uuid)
+            .order_by(
+                ClassTeachingDesignVersion.is_active.desc(),
+                ClassTeachingDesignVersion.created_at.desc(),
+            )
+            .all()
+        )
+        serialized_versions = [TeachingDesignService.serialize_version(version) for version in versions]
+        current = next((item for item in serialized_versions if item["is_active"]), None)
+        return {
+            "design_id": f"teaching-design:{class_uuid}",
+            "class_id": str(class_uuid),
+            "current_version_id": current["version_id"] if current else None,
+            "versions": [
+                {
+                    key: item[key]
+                    for key in (
+                        "version_id",
+                        "uploaded_at",
+                        "source_file_type",
+                        "source_file_name",
+                        "extraction_result",
+                        "confidence",
+                        "missing_fields",
+                        "source_excerpt_map",
+                        "status",
+                    )
+                }
+                for item in serialized_versions
+            ],
         }

@@ -23,6 +23,7 @@ from services.config_service import ConfigService
 from services.coze_client import CozeClient
 from services.domain_pack_service import DEFAULT_DOMAIN_PACK_ID
 from services.mode_policy_service import DEFAULT_MODE, ModePolicyService
+from services.prompt_pack_service import PromptBuildContext, PromptPackService
 from services.report_file_storage_service import ReportFileStorageService
 from services.score_validation_service import ScoreValidationService
 from services.score_eligibility_service import ScoreEligibilityService
@@ -119,6 +120,9 @@ class Report:
                     "speaker_role": participant.get("role"),
                     "stance": participant.get("stance"),
                     "score_status": participant.get("score_status") or final_score.get("score_status"),
+                    "scoring_source": final_score.get("scoring_source"),
+                    "scoring_quality": final_score.get("scoring_quality"),
+                    "eligible_for_analytics": bool(final_score.get("eligible_for_analytics")),
                     "overall_score": legacy_scores["overall_score"],
                     "legacy_scores": legacy_scores,
                 }
@@ -216,6 +220,8 @@ class Report:
                 continue
             summary[stance]["participant_count"] += 1
             final_score = participant.get("final_score") or {}
+            if not final_score.get("eligible_for_analytics"):
+                continue
             try:
                 score_values[stance].append(float(final_score.get("overall_score") or 0.0))
             except (TypeError, ValueError):
@@ -439,18 +445,34 @@ class ReportGenerator:
                 total_duration = sum(max(0, int(s.duration or 0)) for s in speech_list)
                 all_scored = [score_by_speech_id.get(str(s.id)) for s in speech_list]
                 all_scored = [s for s in all_scored if s is not None]
-                scored = [s for s in all_scored if ScoreEligibilityService.is_eligible(s)]
-                excluded_count = len(all_scored) - len(scored)
+                eligible_scores = [s for s in all_scored if ScoreEligibilityService.is_eligible(s)]
+                excluded_count = len(all_scored) - len(eligible_scores)
+                # Reports may display a clearly labelled fallback when no trusted
+                # score exists. Analytics and winner calculations use the
+                # canonical eligibility filter elsewhere and never consume it.
+                displayed_scores = eligible_scores or all_scored
                 score_status = (
                     "no_speech"
                     if speech_count == 0
-                    else "excluded"
-                    if not scored and len(all_scored) >= speech_count
+                    else "fallback"
+                    if not eligible_scores and len(all_scored) >= speech_count
                     else "ready"
-                    if len(scored) >= speech_count
+                    if len(eligible_scores) >= speech_count
                     else "processing"
                 )
-                if not scored:
+                qualities = {
+                    str(score.scoring_quality or score.status or "legacy_unknown")
+                    for score in displayed_scores
+                }
+                sources = {
+                    str(score.scoring_source or "legacy_unknown")
+                    for score in displayed_scores
+                }
+                score_quality = (
+                    next(iter(qualities)) if len(qualities) == 1 else "partial"
+                )
+                scoring_source = next(iter(sources)) if len(sources) == 1 else "mixed"
+                if not displayed_scores:
                     return {
                         "logic_score": 0.0,
                         "argument_score": 0.0,
@@ -459,17 +481,21 @@ class ReportGenerator:
                         "teamwork_score": 0.0,
                         "overall_score": 0.0,
                         "speech_count": speech_count,
-                        "scored_count": len(scored),
+                        "scored_count": len(all_scored),
+                        "eligible_score_count": len(eligible_scores),
                         "excluded_score_count": excluded_count,
                         "score_status": score_status,
+                        "scoring_source": None,
+                        "scoring_quality": None,
+                        "eligible_for_analytics": False,
                         "total_duration": total_duration,
                     }
-                logic_avg = sum(float(s.logic_score) for s in scored) / len(scored)
-                argument_avg = sum(float(s.argument_score) for s in scored) / len(scored)
-                response_avg = sum(float(s.response_score) for s in scored) / len(scored)
-                persuasion_avg = sum(float(s.persuasion_score) for s in scored) / len(scored)
-                teamwork_avg = sum(float(s.teamwork_score) for s in scored) / len(scored)
-                overall_avg = sum(float(s.overall_score) for s in scored) / len(scored)
+                logic_avg = sum(float(s.logic_score) for s in displayed_scores) / len(displayed_scores)
+                argument_avg = sum(float(s.argument_score) for s in displayed_scores) / len(displayed_scores)
+                response_avg = sum(float(s.response_score) for s in displayed_scores) / len(displayed_scores)
+                persuasion_avg = sum(float(s.persuasion_score) for s in displayed_scores) / len(displayed_scores)
+                teamwork_avg = sum(float(s.teamwork_score) for s in displayed_scores) / len(displayed_scores)
+                overall_avg = sum(float(s.overall_score) for s in displayed_scores) / len(displayed_scores)
                 return {
                     "logic_score": round(logic_avg, 2),
                     "argument_score": round(argument_avg, 2),
@@ -478,9 +504,13 @@ class ReportGenerator:
                     "teamwork_score": round(teamwork_avg, 2),
                     "overall_score": round(overall_avg, 2),
                     "speech_count": speech_count,
-                    "scored_count": len(scored),
+                    "scored_count": len(all_scored),
+                    "eligible_score_count": len(eligible_scores),
                     "excluded_score_count": excluded_count,
                     "score_status": score_status,
+                    "scoring_source": scoring_source,
+                    "scoring_quality": score_quality,
+                    "eligible_for_analytics": bool(eligible_scores),
                     "total_duration": total_duration,
                 }
 
@@ -822,23 +852,39 @@ class ReportGenerator:
     def _build_coze_prompt(report: Report) -> str:
         stats = report.statistics or {}
         winner = stats.get("winner") or report.winner
-        topic = report.topic
-        duration = report.duration
-        start = report.start_time
-        end = report.end_time
-        return (
-            "你是辩论裁判AI，请基于“对话消息记录”生成一份可直接用于教学复盘的《辩论完整报告》。\n"
-            "输出要求：\n"
-            "1) 只输出 Markdown 正文，不要代码块包裹，不要额外解释。\n"
-            "2) 报告需包含：概览（辩题/时间/胜负）、双方核心论点提炼、关键回合与转折点、逻辑建构力分析、AI核心知识运用评估、批判性思维表现、语言表达力点评、AI伦理与科技素养体现、逐个辩手的优缺点与改进建议、全局建议。\n"
-            "3) 在评价每位辩手时，请引用其使用的AI课程术语（如情感计算、NLP、AIGC、AI伦理等），并对术语使用的准确性和深度给出具体评价。\n"
-            "4) 若消息里带有每段发言的评分与理由，请在“详细分析”里按发言序号引用并整合。\n"
-            "5) 语言：中文，行文客观、可操作。\n\n"
-            f"辩题：{topic}\n"
-            f"开始时间：{start}\n"
-            f"结束时间：{end}\n"
-            f"时长：{duration}分钟\n"
-            f"当前统计胜者：{winner}\n"
+        mode = ModePolicyService.normalize_mode(getattr(report, "mode", DEFAULT_MODE))
+        return PromptPackService.render_agent_task_prompt(
+            PromptBuildContext(
+                agent="report",
+                mode=mode,
+                phase="report",
+                topic=str(report.topic or ""),
+                role="reporter",
+                speaker_role="reporter",
+                stance="neutral",
+                output_contract={"markdown_report": "string"},
+            ),
+            task_type="markdown_debate_report",
+            task_data={
+                "debate_metadata": {
+                    "topic": report.topic,
+                    "start_time": report.start_time,
+                    "end_time": report.end_time,
+                    "duration_minutes": report.duration,
+                    "current_statistical_winner": winner,
+                    "mode": mode,
+                },
+                "required_sections": [
+                    "辩论概览与数据质量说明",
+                    "双方立论与证明责任",
+                    "核心争点裁决",
+                    "关键回合与转折点",
+                    "逐位辩手表现与改进动作",
+                    "知识材料与专业概念使用",
+                    "全局复盘与下一步训练",
+                ],
+                "report_data_location": "本提示词之后附带的 Report JSON",
+            },
         )
 
     @staticmethod
@@ -872,7 +918,6 @@ class ReportGenerator:
             raw_messages: List[Dict] = [{"role": "user", "content": message_str}]
 
 
-            raw_messages.append({"role": "user", "content": "请开始生成《辩论完整报告》Markdown。"})
             chat_params = coze.build_chat_coze_params(
                 bot_id=bot_id,
                 user_id=f"report:{debate_id}",
@@ -1093,26 +1138,39 @@ class ReportGenerator:
         content_str: str = "",
     ) -> Optional[str]:
         try:
-            judge_prompt = f"""
-你是智能辩论系统的裁判，请基于以下辩论记录生成一份 Markdown 复盘报告。
-
-辩题：{debate_topic}
-辩论详情：{content_str}
-
-要求：
-1. 使用中文输出。
-2. 包含总体评价、双方核心论点、关键回合分析、逐个辩手优缺点和改进建议。
-3. 如果记录中包含评分，请结合评分原因进行解释。
-"""
+            judge_prompt = PromptPackService.render_agent_task_prompt(
+                PromptBuildContext(
+                    agent="report",
+                    mode=DEFAULT_MODE,
+                    phase="report",
+                    topic=str(debate_topic or ""),
+                    role="reporter",
+                    speaker_role="reporter",
+                    stance="neutral",
+                    output_contract={"markdown_report": "string"},
+                ),
+                task_type="markdown_debate_report",
+                task_data={
+                    "debate_record": content_str,
+                    "required_sections": [
+                        "总体评价",
+                        "双方核心论点与证明责任",
+                        "核心争点和关键回合",
+                        "逐位辩手优点、缺口和改进动作",
+                        "全局建议",
+                    ],
+                },
+            )
 
             judgeagent = JudgeAgent(db)
             markdown_text = await judgeagent._call_agent(prompt=judge_prompt)
 
             try:
                 data = json.loads(markdown_text)
-                markdown_text = data.get("report")
-            except Exception:
-                logger.warning("报告 JSON 解析失败，使用原始文本")
+                if isinstance(data, dict) and data.get("report"):
+                    markdown_text = data["report"]
+            except (TypeError, json.JSONDecodeError):
+                pass
 
             if not markdown_text:
                 logger.error("生成的Markdown报告为空")

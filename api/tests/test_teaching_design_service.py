@@ -100,12 +100,16 @@ def test_upload_and_extract_current_version_from_docx_persists_active_record(db_
 
     assert version["source_type"] == "upload"
     assert version["source_filename"] == "teaching-design.docx"
-    assert version["source_file_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert version["source_file_type"] == "docx"
+    assert version["source_file_mime_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     assert version["source_file_size"] == len(file_bytes)
     assert version["is_active"] is True
     assert version["title"] == "teaching-design.docx"
     assert version["extracted_payload"]["course_title"] == "人工智能导论"
     assert "生成式AI" in version["extracted_payload"]["knowledge_points"]
+    assert version["status"] == "ready"
+    assert version["extraction_result"]["course_objectives"]
+    assert version["version_id"] == version["id"]
 
 
 def test_list_versions_returns_active_first(db_session):
@@ -231,3 +235,50 @@ def test_create_corrected_version_creates_new_active_record_with_lineage(db_sess
     assert corrected["correction_notes"] == "教师修正了知识点和目标字段"
     assert corrected["source_filename"] == "origin.docx"
     assert corrected["is_active"] is True
+
+
+def test_serialize_design_matches_frozen_teaching_design_schema(db_session):
+    teacher, cls = _teacher_class(db_session)
+    version = TeachingDesignService.upsert_current_version(
+        db=db_session,
+        class_id=str(cls.id),
+        created_by=str(teacher.id),
+        extracted_payload={
+            "extraction_result": {
+                "course_objectives": ["Assess claims"],
+                "knowledge_points": ["Evidence"],
+                "chapter_topics": ["Argumentation"],
+                "key_and_difficult_points": ["Source credibility"],
+                "competency_goals": ["Critical thinking"],
+                "applicable_grade": ["Grade 10"],
+                "class_hour_constraints": ["Two periods"],
+                "teacher_notes": ["Invite competing interpretations"],
+            },
+            "confidence": {"knowledge_points": 0.9},
+            "missing_fields": [],
+            "source_excerpt_map": {"knowledge_points": "Evidence must be traceable."},
+        },
+        source_filename="design.pdf",
+        source_file_type="application/pdf",
+    )
+
+    design = TeachingDesignService.serialize_design(db_session, str(cls.id))
+
+    assert design["class_id"] == str(cls.id)
+    assert design["current_version_id"] == version["version_id"]
+    assert len(design["versions"]) == 1
+    contract_version = design["versions"][0]
+    assert set(contract_version) == {
+        "version_id",
+        "uploaded_at",
+        "source_file_type",
+        "source_file_name",
+        "extraction_result",
+        "confidence",
+        "missing_fields",
+        "source_excerpt_map",
+        "status",
+    }
+    assert contract_version["source_file_type"] == "pdf"
+    assert contract_version["status"] == "ready"
+    assert contract_version["extraction_result"]["teacher_notes"] == ["Invite competing interpretations"]

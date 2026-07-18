@@ -109,6 +109,19 @@ class ReportFileStorageService:
             raise ValueError("storage path escapes root")
         return target
 
+    @staticmethod
+    def _matches_expected_digest(file_path: Path, storage_meta: Dict[str, Any]) -> bool:
+        expected_digest = str(storage_meta.get("sha256") or "").strip().lower()
+        if not expected_digest:
+            # Artifacts generated before digest metadata was introduced remain
+            # readable and will receive a digest on their next regeneration.
+            return True
+        try:
+            actual_digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        except OSError:
+            return False
+        return secrets.compare_digest(actual_digest, expected_digest)
+
     @classmethod
     def _safe_legacy_path(cls, candidate: str | Path | None) -> Optional[Path]:
         if not candidate:
@@ -138,7 +151,11 @@ class ReportFileStorageService:
                 stored_path = cls.resolve_pdf_storage_path(storage_meta)
             except ValueError:
                 stored_path = None
-            if stored_path and stored_path.is_file():
+            if (
+                stored_path
+                and stored_path.is_file()
+                and cls._matches_expected_digest(stored_path, storage_meta)
+            ):
                 return storage_meta, stored_path, False
 
         legacy_candidates = []

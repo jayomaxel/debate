@@ -29,6 +29,7 @@ from services.file_access_service import FileAccessService, PrivateFileNotFound
 from schemas.operations import OperationalErrorCode, ReportStatus
 from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_teacher, PermissionChecker
+from utils.error_contract import public_exception_detail
 
 logger = get_logger(__name__)
 
@@ -172,18 +173,50 @@ class TeachingDesignPayloadRequest(BaseModel):
     source_excerpt_map: Optional[dict[str, str]] = None
 
 
+class TeachingDesignExtractionResultRequest(BaseModel):
+    course_objectives: Optional[List[str]] = None
+    knowledge_points: Optional[List[str]] = None
+    chapter_topics: Optional[List[str]] = None
+    key_and_difficult_points: Optional[List[str]] = None
+    competency_goals: Optional[List[str]] = None
+    applicable_grade: Optional[List[str]] = None
+    class_hour_constraints: Optional[List[str]] = None
+    teacher_notes: Optional[List[str]] = None
+
+
 class UpsertTeachingDesignRequest(BaseModel):
     version_name: Optional[str] = None
     title: Optional[str] = None
     raw_text: Optional[str] = None
-    extracted_payload: TeachingDesignPayloadRequest
+    extracted_payload: Optional[TeachingDesignPayloadRequest] = None
+    extraction_result: Optional[TeachingDesignExtractionResultRequest] = None
+    confidence: Optional[dict[str, float]] = None
+    missing_fields: Optional[List[str]] = None
+    source_excerpt_map: Optional[dict[str, str]] = None
 
 
 class CorrectTeachingDesignRequest(BaseModel):
     version_name: Optional[str] = None
     title: Optional[str] = None
     correction_notes: Optional[str] = None
-    extracted_payload: TeachingDesignPayloadRequest
+    extracted_payload: Optional[TeachingDesignPayloadRequest] = None
+    extraction_result: Optional[TeachingDesignExtractionResultRequest] = None
+    confidence: Optional[dict[str, float]] = None
+    missing_fields: Optional[List[str]] = None
+    source_excerpt_map: Optional[dict[str, str]] = None
+
+
+def _resolve_teaching_design_payload(request: UpsertTeachingDesignRequest | CorrectTeachingDesignRequest) -> dict:
+    if request.extraction_result is not None:
+        return {
+            "extraction_result": request.extraction_result.model_dump(exclude_none=True),
+            "confidence": request.confidence or {},
+            "missing_fields": request.missing_fields or [],
+            "source_excerpt_map": request.source_excerpt_map or {},
+        }
+    if request.extracted_payload is not None:
+        return request.extracted_payload.model_dump(exclude_none=True)
+    raise ValueError("Teaching design extraction result is required")
 
 
 class TopicRecommendationRequest(BaseModel):
@@ -283,7 +316,7 @@ async def create_class(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -306,7 +339,7 @@ async def get_classes(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -326,16 +359,41 @@ async def get_teacher_dashboard(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
 # ==================== 学生管理 ====================
+
+@router.get("/classes/{class_id}/teaching-design", summary="获取班级教学设计")
+async def get_teaching_design(
+    class_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    checker = PermissionChecker(db)
+    if not checker.can_access_class(current_user, class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该班级",
+        )
+    try:
+        return {
+            "code": 200,
+            "message": "获取成功",
+            "data": TeachingDesignService.serialize_design(db, class_id),
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=public_exception_detail(e),
+        )
+
 
 @router.get("/classes/{class_id}/teaching-design/current", summary="获取班级当前教学设计")
 async def get_current_teaching_design(
@@ -434,7 +492,7 @@ async def activate_teaching_design_version(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -478,7 +536,7 @@ async def upload_teaching_design(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -504,7 +562,7 @@ async def upsert_current_teaching_design(
             version_name=request.version_name,
             title=request.title,
             raw_text=request.raw_text,
-            extracted_payload=request.extracted_payload.model_dump(exclude_none=True),
+            extracted_payload=_resolve_teaching_design_payload(request),
         )
         return {
             "code": 200,
@@ -514,7 +572,7 @@ async def upsert_current_teaching_design(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -539,7 +597,7 @@ async def create_corrected_teaching_design_version(
             class_id=class_id,
             version_id=version_id,
             created_by=str(current_user.id),
-            extracted_payload=request.extracted_payload.model_dump(exclude_none=True),
+            extracted_payload=_resolve_teaching_design_payload(request),
             version_name=request.version_name,
             title=request.title,
             correction_notes=request.correction_notes,
@@ -552,7 +610,7 @@ async def create_corrected_teaching_design_version(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -593,7 +651,7 @@ async def generate_topic_recommendations(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -630,7 +688,7 @@ async def list_topic_recommendation_runs(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -665,7 +723,7 @@ async def get_topic_recommendation_analytics(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -706,7 +764,7 @@ async def get_topic_recommendation_dashboard(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -745,7 +803,7 @@ async def get_topic_recommendation_version_comparison(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -804,7 +862,7 @@ async def add_student(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -837,7 +895,7 @@ async def get_students(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -879,7 +937,7 @@ async def create_debate(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -926,7 +984,7 @@ async def update_debate(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -968,7 +1026,7 @@ async def get_debate(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -1009,7 +1067,7 @@ async def get_teacher_report(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
+            detail=public_exception_detail(exc),
         )
 
     return {
@@ -1053,7 +1111,7 @@ async def get_teacher_teaching_summary(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
+            detail=public_exception_detail(exc),
         )
 
     return {
@@ -1188,7 +1246,7 @@ async def recalculate_teacher_report(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
+            detail=public_exception_detail(exc),
         )
 
     AuditService.record_event(
@@ -1241,7 +1299,7 @@ async def get_debates(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -1275,7 +1333,7 @@ async def preview_role_assignment(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -1314,7 +1372,7 @@ async def create_reservation(
         )
         return {"code": 200, "message": "创建成功", "data": result}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=public_exception_detail(e))
 
 
 @router.get("/reservations", summary="获取预约辩论赛列表")
@@ -1360,7 +1418,7 @@ async def get_reservation(
         )
         return {"code": 200, "message": "获取成功", "data": result}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=public_exception_detail(e))
 
 
 @router.put("/reservations/{reservation_id}", summary="更新预约辩论赛")
@@ -1466,7 +1524,7 @@ async def upload_debate_support_document(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
     return {
         "code": 200,

@@ -39,6 +39,13 @@ class ClassTeachingDesignVersion(Base):
     source_file_type = Column(String(64), nullable=True)
     source_file_size = Column(Integer, nullable=True)
     raw_text = Column(Text, nullable=True)
+    # Canonical Work Package E contract fields.  Legacy columns remain so
+    # existing recommendation and teacher clients can be migrated gradually.
+    extraction_result = Column(JSON, nullable=True)
+    confidence = Column(JSON, nullable=True)
+    missing_fields = Column(JSON, nullable=True)
+    source_excerpt_map = Column(JSON, nullable=True)
+    status = Column(String(32), nullable=False, default="needs_review", server_default="needs_review")
     extracted_payload = Column(JSON, nullable=True)
     extraction_status = Column(String(32), nullable=False, default="partial", server_default="partial")
     correction_notes = Column(Text, nullable=True)

@@ -578,7 +578,7 @@ function GuestGrowth({
                 <PreviewSummaryCard
                   icon={<Sparkles className="h-6 w-6 text-slate-700" />}
                   value={numberPlaceholder}
-                  label="领先百分位"
+                  label="超过同班比例"
                   tone="student-card-soft-peach"
                 />
                 <PreviewSummaryCard
@@ -777,4 +777,3 @@ function EmptyPreview({ title }: { title: string }) {
     </section>
   );
 }
-

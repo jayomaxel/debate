@@ -25,6 +25,7 @@ from schemas.operations import OperationalErrorCode
 from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_role
 from logging_config import get_logger
+from utils.error_contract import public_exception_detail
 
 logger = get_logger(__name__)
 
@@ -230,7 +231,7 @@ async def ask_question(
         logger.warning(f"问题验证失败: {e}, user={current_user.account}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     
     except RuntimeError as e:
@@ -328,7 +329,7 @@ async def get_conversation_history(
         logger.warning(f"参数验证失败: {e}, user={current_user.account}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
     
     except RuntimeError as e:

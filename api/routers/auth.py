@@ -25,6 +25,7 @@ from utils.security import (
     build_upload_guard_error_contract,
     normalize_contract_role,
 )
+from utils.error_contract import public_exception_detail
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -183,7 +184,7 @@ async def register_teacher(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -220,7 +221,7 @@ async def register_student(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -271,7 +272,7 @@ async def login(
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -318,7 +319,7 @@ async def refresh_token(
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -493,7 +494,7 @@ async def change_password(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -517,7 +518,7 @@ async def get_profile(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -556,7 +557,7 @@ async def update_profile(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )
 
 
@@ -591,7 +592,7 @@ async def upload_profile_avatar(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -615,7 +616,7 @@ async def select_default_avatar(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=public_exception_detail(e),
         )
 
 
@@ -670,5 +671,5 @@ async def delete_account(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=public_exception_detail(e)
         )

@@ -11,6 +11,10 @@ from pydantic_settings import BaseSettings, NoDecode
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PUBLIC_BASE_URL = "https://csidebate.xyz"
+DEFAULT_E2E_HEALTH_PROBE_AUDIO_PATH = str(
+    BASE_DIR / "health_fixtures" / "e2e_probe.wav"
+)
+DEFAULT_E2E_HEALTH_PROBE_EXPECTED_TEXT = "健康探针"
 DEFAULT_ALLOWED_ORIGINS = [
     "https://csidebate.xyz",
     "http://csidebate.xyz",
@@ -125,6 +129,33 @@ class Settings(BaseSettings):
     UPLOAD_QUARANTINE_DIR: str = "uploads/quarantine"
     REPORT_FILE_STORAGE_BACKEND: str = os.getenv("REPORT_FILE_STORAGE_BACKEND", "local")
     REPORT_FILE_STORAGE_DIR: str = os.getenv("REPORT_FILE_STORAGE_DIR", "private_storage/reports")
+    # 生产链路健康探针：必须显式提供一段可识别的短音频，避免仅凭配置项误判健康。
+    E2E_HEALTH_PROBE_ENABLED: bool = os.getenv(
+        "E2E_HEALTH_PROBE_ENABLED",
+        "true" if IS_PRODUCTION else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    E2E_HEALTH_PROBE_AUDIO_PATH: Optional[str] = os.getenv(
+        "E2E_HEALTH_PROBE_AUDIO_PATH", DEFAULT_E2E_HEALTH_PROBE_AUDIO_PATH
+    )
+    E2E_HEALTH_PROBE_AUDIO_B64: Optional[str] = os.getenv(
+        "E2E_HEALTH_PROBE_AUDIO_B64", None
+    )
+    E2E_HEALTH_PROBE_AUDIO_FORMAT: str = os.getenv(
+        "E2E_HEALTH_PROBE_AUDIO_FORMAT", "wav"
+    )
+    E2E_HEALTH_PROBE_EXPECTED_TEXT: Optional[str] = os.getenv(
+        "E2E_HEALTH_PROBE_EXPECTED_TEXT", DEFAULT_E2E_HEALTH_PROBE_EXPECTED_TEXT
+    )
+    E2E_HEALTH_PROBE_TIMEOUT_SECONDS: float = float(
+        os.getenv("E2E_HEALTH_PROBE_TIMEOUT_SECONDS", "30")
+    )
+    E2E_HEALTH_PROBE_TOKEN: Optional[str] = os.getenv(
+        "E2E_HEALTH_PROBE_TOKEN", None
+    )
+    RELEASE_GATE_REQUIRE_E2E_HEALTH: bool = os.getenv(
+        "RELEASE_GATE_REQUIRE_E2E_HEALTH",
+        "true" if IS_PRODUCTION else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".doc"}
     AVATAR_MAX_UPLOAD_SIZE: int = 2 * 1024 * 1024  # 2MB

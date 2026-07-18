@@ -182,7 +182,7 @@ class JudgeAgent:
             messages = [
                 {
                     "role": "system",
-                    "content": "你是辩论裁判。严格按用户要求输出JSON，不要输出额外文本、不要代码块。",
+                    "content": PromptPackService.render_agent_system_prompt("judge"),
                 },
                 {"role": "user", "content": prompt},
             ]
@@ -398,12 +398,28 @@ class JudgeAgent:
             raise ValueError("batch judge JSON missing speech_scores or global_report")
 
         normalized_scores = []
+        expected_speech_ids = {
+            str(item.get("speech_id") or "").strip()
+            for item in context
+            if isinstance(item, dict)
+            and str(item.get("speech_id") or "").strip()
+            and str(item.get("content") or "").strip()
+        }
+        seen_speech_ids = set()
         partial = False
         for item in speech_scores:
             if not isinstance(item, dict):
                 partial = True
                 continue
             speech_id = str(item.get("speech_id") or "").strip()
+            if (
+                not speech_id
+                or speech_id not in expected_speech_ids
+                or speech_id in seen_speech_ids
+            ):
+                partial = True
+                continue
+            seen_speech_ids.add(speech_id)
             scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
             validation = ScoreValidationService.validate_speech_score(scores)
             if validation.errors:
@@ -436,6 +452,30 @@ class JudgeAgent:
                     "violations": violations,
                 }
             )
+
+        missing_speech_ids = expected_speech_ids - seen_speech_ids
+        if missing_speech_ids:
+            partial = True
+            fallback_meta = ScoreValidationService.build_report_meta(
+                scoring_source="fallback",
+                scoring_quality="fallback",
+                provider=provider,
+                mode=mode,
+                retry_count=retry_count,
+            ).to_dict()
+            for missing_speech_id in sorted(missing_speech_ids):
+                normalized_scores.append(
+                    {
+                        "speech_id": missing_speech_id,
+                        "scores": {
+                            **ScoreValidationService.build_fallback_score(
+                                "judge batch output omitted this speech"
+                            ),
+                            "report_meta": fallback_meta,
+                        },
+                        "violations": [],
+                    }
+                )
 
         report_quality = "partial" if partial else scoring_quality
         report_meta = ScoreValidationService.build_report_meta(
@@ -569,12 +609,11 @@ class JudgeAgent:
                 "speaker_role": speaker_role,
                 "phase": phase,
                 "speech_content": speech_content,
-                "rubric_dimensions": list(ScoreValidationService.expected_speech_score_contract().keys()),
+                "rubric_dimensions": list(ScoreValidationService.SCORE_FIELDS),
                 "requirements": [
                     "score each dimension from 0 to 100",
                     "return JSON only",
                     "include concise feedback grounded in the speech",
-                    "do not hide fallback or partial quality states",
                 ],
             },
         )
@@ -725,7 +764,7 @@ class JudgeAgent:
         prompt = PromptPackService.render_agent_task_prompt(
             PromptBuildContext(
                 agent="judge",
-                phase="feedback",
+                phase="report",
                 topic="",
                 role="judge",
                 speaker_role="judge",

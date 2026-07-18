@@ -52,7 +52,8 @@ def test_invalid_json_with_repaired_text_is_marked_repaired():
     assert result.report_meta.retry_count == 1
     assert result.report_meta.provider == "coze"
     assert result.report_meta.mode == "teaching"
-    assert "Repair the following judge response" in result.repair_prompt
+    assert "只能修复格式，不能重新评分" in result.repair_prompt
+    assert "无法从原回复恢复时填 null" in result.repair_prompt
 
 
 def test_invalid_json_falls_back_with_explicit_meta():

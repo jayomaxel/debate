@@ -177,11 +177,17 @@ class ScoreValidationService:
     ) -> str:
         contract = expected_contract or cls.expected_speech_score_contract()
         return (
-            "Repair the following judge response into valid JSON only. "
-            "Do not add markdown fences or explanations. "
-            "Use exactly this contract: "
-            f"{json.dumps(contract, ensure_ascii=False, sort_keys=True)}\n\n"
-            f"Raw response:\n{raw_text}"
+            "你是裁判输出格式修复器，只能修复格式，不能重新评分。\n"
+            "规则：\n"
+            "1. 只输出一个合法 JSON 对象，不要 Markdown 代码块、说明或前后文字。\n"
+            "2. 保留原回复中可恢复的分数、反馈、speech_id、胜者和理由，不改变其语义。\n"
+            "3. 可以修复 JSON 标点、引号、字段名拼写和字符串形式的数字。\n"
+            "4. 不得凭空增加原回复没有的评分、违规、证据、胜负结论或报告内容。\n"
+            "5. 必填值无法从原回复恢复时填 null，让下游校验触发显式 fallback；不要猜测默认分。\n"
+            "6. 严格使用以下字段结构，不添加契约外字段：\n"
+            f"{json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True)}\n\n"
+            "待修复的原始裁判回复：\n"
+            f"{raw_text}"
         )
 
     @classmethod

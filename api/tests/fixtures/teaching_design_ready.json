@@ -9,12 +9,18 @@
     "versions": [
       {
         "version_id": "version-demo",
+        "uploaded_at": "2026-07-18T09:30:00Z",
         "source_file_type": "pdf",
         "source_file_name": "teaching-design.pdf",
         "extraction_result": {
           "course_objectives": ["Evaluate evidence quality"],
           "knowledge_points": ["Source credibility"],
-          "chapter_topics": ["Evidence and argument"]
+          "chapter_topics": ["Evidence and argument"],
+          "key_and_difficult_points": ["Distinguish a claim from evidence"],
+          "competency_goals": ["Build an evidence-based argument"],
+          "applicable_grade": ["Grade 10"],
+          "class_hour_constraints": ["Two class periods"],
+          "teacher_notes": ["Ask students to cite a source for each claim"]
         },
         "confidence": {"knowledge_points": 0.92},
         "missing_fields": [],

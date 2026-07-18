@@ -74,9 +74,14 @@ def test_login_rate_limit_blocks_after_threshold(rate_limit_client):
         response = rate_limit_client.post("/api/auth/login")
         assert response.status_code == 200
 
-    blocked = rate_limit_client.post("/api/auth/login")
+    blocked = rate_limit_client.post(
+        "/api/auth/login",
+        headers={"x-request-id": "req-rate-limit"},
+    )
 
     assert blocked.status_code == 429
+    assert blocked.headers["X-Request-Id"] == "req-rate-limit"
+    assert blocked.json()["request_id"] == "req-rate-limit"
     assert blocked.json()["data"]["bucket"] == "login"
     assert int(blocked.headers["Retry-After"]) >= 1
 

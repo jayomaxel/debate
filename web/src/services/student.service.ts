@@ -375,6 +375,18 @@ export interface ClassComparisonMyStats {
   student_name: string;
   rank: number;
   percentile: number | null;
+  leading_percentile?: number | null;
+  rank_position_percentile?: number | null;
+  percentile_label?: string;
+  percentile_description?: string;
+  percentile_basis?: {
+    label: string;
+    formula: string;
+    leading_peer_count: number;
+    comparable_peer_count: number;
+    sample_size: number;
+    rank_position_percentile: number | null;
+  } | null;
   score: number;
   overall_score: number;
   ability_scores: ClassComparisonAbilityScores;

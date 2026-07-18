@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from prometheus_client import Counter
@@ -13,6 +11,7 @@ from utils.security import (
     is_token_session_valid,
     verify_token,
 )
+from utils.error_contract import resolve_request_id
 from utils.upload_security import (
     UploadPart,
     cleanup_quarantined_uploads,
@@ -40,7 +39,7 @@ class UploadGuardMiddleware(BaseHTTPMiddleware):
         if not is_multipart_request(content_type):
             return await call_next(request)
 
-        request_id = request.headers.get("x-request-id") or f"req_{uuid.uuid4().hex}"
+        request_id = resolve_request_id(request)
 
         try:
             body = await request.body()

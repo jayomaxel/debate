@@ -3589,6 +3589,7 @@ class DebateFlowController:
                         stance="negative",
                         context=context,
                         include_audio=False,
+                        debate_id=str(getattr(debate, "id", "") or ""),
                         stream_callback=handle_text_delta,
                         **kwargs,
                     )
@@ -3992,6 +3993,7 @@ class DebateFlowController:
                     stance=self._resolve_ai_stance(room_state, speaker_role),
                     context=self._build_llm_context(recent_speeches, debate),
                     include_audio=False,
+                    debate_id=str(getattr(debate, "id", "") or ""),
                     **generation_kwargs,
                 ),
                 timeout=self._resolve_ai_generation_timeout(turn_plan),
