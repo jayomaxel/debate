@@ -3,10 +3,16 @@ from pathlib import Path
 
 
 DOCS_DIR = Path(__file__).resolve().parents[2] / "docs" / "api_contract_examples"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def _load_json(filename: str):
     with (DOCS_DIR / filename).open("r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+def _load_fixture(filename: str):
+    with (FIXTURES_DIR / filename).open("r", encoding="utf-8") as fp:
         return json.load(fp)
 
 
@@ -46,6 +52,41 @@ def test_work_package_e_contract_examples_exist_and_parse():
         payload = _load_json(filename)
         assert payload['code'] == 200
         assert payload['data']
+
+
+def test_teaching_design_contract_fixture_matches_the_published_example():
+    fixture = _load_fixture("teaching_design_ready.json")
+    example = _load_json("teaching_design_ready.json")["data"]
+
+    assert fixture["contract"] == "TeachingDesignSchema"
+    assert fixture["example"] == example
+    assert set(example) == {"design_id", "class_id", "current_version_id", "versions"}
+    assert example["versions"]
+
+    version = example["versions"][0]
+    assert set(version) == {
+        "version_id",
+        "uploaded_at",
+        "source_file_type",
+        "source_file_name",
+        "extraction_result",
+        "confidence",
+        "missing_fields",
+        "source_excerpt_map",
+        "status",
+    }
+    assert version["source_file_type"] in {"pdf", "docx"}
+    assert version["status"] in {"extracting", "ready", "needs_review", "failed"}
+    assert set(version["extraction_result"]) == {
+        "course_objectives",
+        "knowledge_points",
+        "chapter_topics",
+        "key_and_difficult_points",
+        "competency_goals",
+        "applicable_grade",
+        "class_hour_constraints",
+        "teacher_notes",
+    }
 
 
 def test_version_comparison_contract_example_contains_expected_sections():

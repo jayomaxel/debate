@@ -66,3 +66,12 @@
 - [ ] 报告读取、报告重算、教师摘要通过。
 - [ ] 管理端模型、Coze、ASR、TTS、向量、邮件配置保存与读取通过。
 - [ ] 失败场景可定位：日志、健康检查、错误响应足够明确。
+
+## 9. Work Package E
+
+- [ ] The class teaching-design endpoint returns `TeachingDesignSchema` with an active version and version history.
+- [ ] Each version uses the frozen extraction fields and one of: `extracting`, `ready`, `needs_review`, `failed`.
+- [ ] Corrected teaching designs preserve the source version and make the correction the active version.
+- [ ] Support documents retain a purpose label, summary result, summary quality, and failure state.
+- [ ] Knowledge snippets are filtered by debate phase and are present in AI debate prompts.
+- [ ] Published API examples and test fixtures use the same fields and values.

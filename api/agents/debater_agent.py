@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from services.config_service import ConfigService
 from services.coze_client import CozeClient
+from services.knowledge_base import KnowledgeBase
 from services.prompt_pack_service import PromptBuildContext, PromptPackService
 from utils.http_client_pool import async_http_client_pool
 from utils.voice_processor import voice_processor
@@ -42,6 +43,29 @@ class AIDebaterAgent:
         self.bot_id = None
         self.api_token = None
         self.base_url = None
+
+    @staticmethod
+    def _knowledge_phase_for_speech(speech_type: str) -> str:
+        return {
+            "opening": "opening",
+            "question": "questioning",
+            "response": "questioning",
+            "rebuttal": "free_debate",
+            "free_debate": "free_debate",
+            "closing": "closing",
+        }.get(str(speech_type or "").strip(), "free_debate")
+
+    def _load_knowledge_snippets(self, debate_id: Optional[str], speech_type: str) -> List[Dict[str, Any]]:
+        if not debate_id:
+            return []
+        try:
+            return KnowledgeBase(self.db).get_knowledge_snippets(
+                str(debate_id),
+                self._knowledge_phase_for_speech(speech_type),
+            )
+        except Exception as exc:
+            logger.warning("Unable to load debate knowledge snippets: %s", exc)
+            return []
 
     @staticmethod
     def _format_elapsed_seconds(elapsed_seconds: float) -> str:
@@ -354,6 +378,7 @@ class AIDebaterAgent:
         topic: str,
         stance: str,
         knowledge_base_content: Optional[str] = None,
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate an opening statement through Prompt Pack."""
@@ -361,6 +386,7 @@ class AIDebaterAgent:
             topic,
             stance,
             "opening",
+            knowledge_snippets=knowledge_snippets,
             task_type="opening_statement",
             task_data={
                 "speaker_position": self.position,
@@ -386,6 +412,7 @@ class AIDebaterAgent:
         speaker_role: Optional[str] = None,
         previous_questions: Optional[List[str]] = None,
         question_focus: Optional[str] = None,
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate a cross-examination question through Prompt Pack."""
@@ -401,12 +428,25 @@ class AIDebaterAgent:
             for question in (previous_questions or [])
             if str(question or "").strip()
         ][-3:]
+        requirements = [
+            "ask exactly one specific question",
+            "avoid repeating previous questions",
+            "press definition, evidence, logic, boundary, or unanswered points according to role focus",
+            "do not invent a previous opponent speech when no opponent argument is supplied",
+        ]
+        if not cleaned_arguments:
+            requirements.extend([
+                "不需要等待对方先发言，可直接围绕辩题发问",
+                "预判正方可能提出的核心理由并追问其依据",
+                "不要引用不存在的上一轮发言",
+            ])
 
         prompt = self._build_prompt_pack_prompt(
             topic,
             stance,
             "questioning",
             context=context,
+            knowledge_snippets=knowledge_snippets,
             task_type="cross_examination_question",
             task_data={
                 "speaker_position": self.position,
@@ -415,12 +455,7 @@ class AIDebaterAgent:
                 "question_focus": normalized_focus,
                 "opponent_arguments": cleaned_arguments,
                 "previous_questions": cleaned_previous_questions,
-                "requirements": [
-                    "ask exactly one specific question",
-                    "avoid repeating previous questions",
-                    "press definition, evidence, logic, boundary, or unanswered points according to role focus",
-                    "do not invent a previous opponent speech when no opponent argument is supplied",
-                ],
+                "requirements": requirements,
                 "max_chars": self.MAX_REPLY_CHARS,
             },
         )
@@ -432,6 +467,7 @@ class AIDebaterAgent:
         stance: str,
         question: str,
         context: List[Dict],
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate an answer through Prompt Pack."""
@@ -440,6 +476,7 @@ class AIDebaterAgent:
             stance,
             "questioning",
             context=context,
+            knowledge_snippets=knowledge_snippets,
             task_type="question_response",
             task_data={
                 "question": question,
@@ -460,6 +497,7 @@ class AIDebaterAgent:
         stance: str,
         opponent_argument: str,
         context: List[Dict],
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate a rebuttal through Prompt Pack."""
@@ -468,6 +506,7 @@ class AIDebaterAgent:
             stance,
             "free_debate",
             context=context,
+            knowledge_snippets=knowledge_snippets,
             task_type="rebuttal",
             task_data={
                 "opponent_argument": opponent_argument,
@@ -488,6 +527,7 @@ class AIDebaterAgent:
         stance: str,
         context: List[Dict],
         key_points: List[str],
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate a closing statement through Prompt Pack."""
@@ -496,6 +536,7 @@ class AIDebaterAgent:
             stance,
             "closing",
             context=context,
+            knowledge_snippets=knowledge_snippets,
             task_type="closing_statement",
             task_data={
                 "key_points": list(key_points or []),
@@ -516,6 +557,7 @@ class AIDebaterAgent:
         stance: str,
         context: List[Dict],
         recent_speeches: List[Dict],
+        knowledge_snippets: Optional[List[Dict[str, Any]]] = None,
         stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> str:
         """Generate a free-debate speech through Prompt Pack."""
@@ -524,6 +566,7 @@ class AIDebaterAgent:
             stance,
             "free_debate",
             context=context,
+            knowledge_snippets=knowledge_snippets,
             task_type="free_debate_speech",
             task_data={
                 "recent_speeches": list(recent_speeches or [])[-5:],
@@ -567,6 +610,13 @@ class AIDebaterAgent:
         try:
             # 根据发言类型生成文字内容
             # 流式模式下，这里接收上层传入的增量文本回调；非流式模式则保持为None。
+            knowledge_snippets = list(kwargs.get("knowledge_snippets") or [])
+            if not knowledge_snippets:
+                knowledge_snippets = self._load_knowledge_snippets(
+                    kwargs.get("debate_id"),
+                    speech_type,
+                )
+            snippet_kwargs = {"knowledge_snippets": knowledge_snippets} if knowledge_snippets else {}
             stream_callback = kwargs.get("stream_callback")
             text = ""
             
@@ -575,6 +625,7 @@ class AIDebaterAgent:
                     topic,
                     stance,
                     kwargs.get("knowledge_base_content"),
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             elif speech_type == "question":
@@ -587,6 +638,7 @@ class AIDebaterAgent:
                     speaker_role=kwargs.get("speaker_role"),
                     previous_questions=kwargs.get("previous_questions", []),
                     question_focus=kwargs.get("question_focus"),
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             elif speech_type == "response":
@@ -595,6 +647,7 @@ class AIDebaterAgent:
                     stance,
                     kwargs.get("question", ""),
                     context,
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             elif speech_type == "rebuttal":
@@ -603,6 +656,7 @@ class AIDebaterAgent:
                     stance,
                     kwargs.get("opponent_argument", ""),
                     context,
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             elif speech_type == "closing":
@@ -611,6 +665,7 @@ class AIDebaterAgent:
                     stance,
                     context,
                     kwargs.get("key_points", []),
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             elif speech_type == "free_debate":
@@ -619,6 +674,7 @@ class AIDebaterAgent:
                     stance,
                     context,
                     kwargs.get("recent_speeches", []),
+                    **snippet_kwargs,
                     stream_callback=stream_callback,
                 )
             else:
