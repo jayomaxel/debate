@@ -402,6 +402,22 @@ class AIDebaterAgent:
             if str(question or "").strip()
         ][-3:]
 
+        requirements = [
+            "ask exactly one specific question",
+            "avoid repeating previous questions",
+            "press definition, evidence, logic, boundary, or unanswered points according to role focus",
+            "do not invent a previous opponent speech when no opponent argument is supplied",
+        ]
+        if not cleaned_arguments:
+            opponent_label = "反方" if str(stance).strip().lower() == "positive" else "正方"
+            requirements.extend(
+                [
+                    "当前没有可引用的对方历史发言，不需要等待对方先发言。",
+                    f"请围绕辩题主动预判{opponent_label}最可能采用的核心前提并提出质询。",
+                    "不得引用不存在的上一轮发言，也不得虚构对方已经表达过的观点。",
+                ]
+            )
+
         prompt = self._build_prompt_pack_prompt(
             topic,
             stance,
@@ -415,12 +431,7 @@ class AIDebaterAgent:
                 "question_focus": normalized_focus,
                 "opponent_arguments": cleaned_arguments,
                 "previous_questions": cleaned_previous_questions,
-                "requirements": [
-                    "ask exactly one specific question",
-                    "avoid repeating previous questions",
-                    "press definition, evidence, logic, boundary, or unanswered points according to role focus",
-                    "do not invent a previous opponent speech when no opponent argument is supplied",
-                ],
+                "requirements": requirements,
                 "max_chars": self.MAX_REPLY_CHARS,
             },
         )

@@ -2,14 +2,13 @@
 学生知识库API路由
 提供学生访问知识库的功能，包括提问和查看对话历史
 """
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
 import logging
 import json
-import os
 import uuid
 
 from database import get_db
@@ -17,6 +16,13 @@ from models.kb_document import KBDocument
 from models.user import User
 from services.rag_service import RAGService
 from services.document_service import DocumentService
+from services.file_access_service import FileAccessService, PrivateFileNotFound
+from services.kb_vector_schema_service import (
+    KBVectorSchemaService,
+    VectorAlignmentUnavailable,
+)
+from schemas.operations import OperationalErrorCode
+from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_role
 from logging_config import get_logger
 
@@ -84,7 +90,8 @@ async def get_sessions(
     dependencies=[Depends(require_role(["student"]))]
 )
 async def ask_question_stream(
-    request: AskQuestionRequest,
+    payload: AskQuestionRequest,
+    http_request: Request,
     current_user: User = Depends(require_role(["student"])),
     db: Session = Depends(get_db)
 ):
@@ -93,19 +100,30 @@ async def ask_question_stream(
     返回Server-Sent Events (SSE)流。
     """
     try:
-        if not request.question.strip():
+        if not payload.question.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="问题不能为空"
             )
             
+        try:
+            KBVectorSchemaService.require_rag_available(db)
+        except VectorAlignmentUnavailable:
+            return operational_error_response(
+                http_request,
+                code=OperationalErrorCode.VECTOR_DIMENSION_MISMATCH,
+                message="知识库向量正在校验或重建，请稍后重试",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=True,
+                details=KBVectorSchemaService.runtime_snapshot(),
+            )
         rag_service = RAGService(db)
         
         async def event_generator():
             async for chunk in rag_service.ask_question_stream(
-                question=request.question,
+                question=payload.question,
                 user_id=str(current_user.id),
-                session_id=request.session_id
+                session_id=payload.session_id
             ):
                 # 格式化为SSE数据格式
                 yield f"data: {chunk}\n\n"
@@ -130,7 +148,8 @@ async def ask_question_stream(
     dependencies=[Depends(require_role(["student"]))]
 )
 async def ask_question(
-    request: AskQuestionRequest,
+    payload: AskQuestionRequest,
+    http_request: Request,
     current_user: User = Depends(require_role(["student"])),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -158,25 +177,37 @@ async def ask_question(
     """
     try:
         # 验证问题不为空（Pydantic已经验证了min_length，但再次确认）
-        if not request.question.strip():
+        if not payload.question.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="问题不能为空"
             )
         
+        try:
+            KBVectorSchemaService.require_rag_available(db)
+        except VectorAlignmentUnavailable:
+            return operational_error_response(
+                http_request,
+                code=OperationalErrorCode.VECTOR_DIMENSION_MISMATCH,
+                message="知识库向量正在校验或重建，请稍后重试",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=True,
+                details=KBVectorSchemaService.runtime_snapshot(),
+            )
+
         # 创建RAG服务
         rag_service = RAGService(db)
         
         # 调用RAG服务回答问题
         result = await rag_service.ask_question(
-            question=request.question,
+            question=payload.question,
             user_id=str(current_user.id),
-            session_id=request.session_id
+            session_id=payload.session_id
         )
         
         logger.info(
             f"问题回答成功: user={current_user.account}, "
-            f"session={request.session_id}, "
+            f"session={payload.session_id}, "
             f"used_kb={result['used_kb']}, "
             f"confidence={result['confidence']}, "
             f"sources_count={len(result['sources'])}"
@@ -376,7 +407,11 @@ async def list_documents(
         doc_service = DocumentService(db)
         
         # 获取文档列表
-        result = doc_service.list_documents(page=page, page_size=page_size)
+        result = doc_service.list_documents(
+            page=page,
+            page_size=page_size,
+            published_only=True,
+        )
         
         # 序列化文档列表
         documents_data = []
@@ -442,17 +477,15 @@ async def download_document(
                 detail="文档ID格式错误",
             )
 
-        document = db.query(KBDocument).filter(KBDocument.id == document_uuid).first()
-        if not document:
+        try:
+            private_file = FileAccessService(db).knowledge_document(
+                current_user,
+                str(document_uuid),
+            )
+        except PrivateFileNotFound:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="文档不存在",
-            )
-
-        if not document.file_path or not os.path.exists(document.file_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="文档文件不存在",
             )
 
         logger.info(
@@ -461,10 +494,10 @@ async def download_document(
             current_user.account,
         )
         return FileResponse(
-            path=document.file_path,
-            media_type=document.file_type or "application/octet-stream",
-            filename=document.filename,
-            headers={"Cache-Control": "no-store"},
+            path=private_file.path,
+            media_type=private_file.media_type,
+            filename=private_file.filename,
+            headers=FileAccessService.private_headers(),
         )
     except HTTPException:
         raise

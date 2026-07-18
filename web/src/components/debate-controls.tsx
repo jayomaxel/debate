@@ -12,6 +12,7 @@ import {
   audioPlaybackDebug,
   getAudioElementDebugSnapshot,
 } from '@/lib/utils';
+import { getPlayableMediaUrl, isPrivateMediaReference } from '@/services/media.service';
 import {
   MessageSquare,
   Send
@@ -66,12 +67,47 @@ const DebateControls: React.FC<DebateControlsProps> = ({
   const [autoPlayQueue, setAutoPlayQueue] = useState<AutoPlayQueueItem[]>([]);
   const [currentAutoPlayItem, setCurrentAutoPlayItem] = useState<AutoPlayQueueItem | null>(null);
   const [manualPlayingId, setManualPlayingId] = useState<string | null>(null);
+  const [playableAudioUrls, setPlayableAudioUrls] = useState<Record<string, string>>({});
   const autoPlayAudioRef = useRef<HTMLAudioElement>(null);
   const visibleAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const visibleAudioRefCallbacksRef = useRef<Map<string, (element: HTMLAudioElement | null) => void>>(new Map());
   const playedAudioKeysRef = useRef<Set<string>>(new Set());
   const queuedAudioKeysRef = useRef<Set<string>>(new Set());
   const autoPlayEnabled = controlledAutoPlayEnabled ?? internalAutoPlayEnabled;
+
+  useEffect(() => {
+    let cancelled = false;
+    const privateUrls = Array.from(
+      new Set(
+        transcript
+          .map((entry) => entry.audioUrl)
+          .filter((value): value is string => Boolean(value) && isPrivateMediaReference(value)),
+      ),
+    );
+    for (const audioUrl of privateUrls) {
+      if (playableAudioUrls[audioUrl]) continue;
+      void getPlayableMediaUrl(audioUrl)
+        .then((mediaUrl) => {
+          if (!cancelled) {
+            setPlayableAudioUrls((current) => ({ ...current, [audioUrl]: mediaUrl }));
+          }
+        })
+        .catch((error) => {
+          audioPlaybackDebug('DebateControls', '私有音频票据申请失败', {
+            audioUrl,
+            error: String(error),
+          });
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [playableAudioUrls, transcript]);
+
+  const playableUrlFor = (audioUrl?: string) => {
+    if (!audioUrl) return undefined;
+    return isPrivateMediaReference(audioUrl) ? playableAudioUrls[audioUrl] : audioUrl;
+  };
 
   // 自动滚动到最新消息
   useEffect(() => {
@@ -102,6 +138,8 @@ const DebateControls: React.FC<DebateControlsProps> = ({
     for (const entry of transcript) {
       // 只有真正拿到音频URL的新消息才会进入自动播放队列，文本补丁不会重复入队。
       if (!isTranscriptAudioEntry(entry) || !entry.audioUrl) continue;
+      const playableUrl = playableUrlFor(entry.audioUrl);
+      if (!playableUrl) continue;
       // 流式 PCM 已经播过的消息，不再让最终整段音频自动重播。
       if (suppressedEntryIds.has(entry.id)) continue;
       const queueKey = getTranscriptAudioQueueKey(entry);
@@ -112,7 +150,7 @@ const DebateControls: React.FC<DebateControlsProps> = ({
       queuedAudioKeysRef.current.add(queueKey);
       newQueueItems.push({
         key: queueKey,
-        url: entry.audioUrl,
+        url: playableUrl,
         speechId: entry.speechId,
         segmentId: entry.segmentId,
         speakerRole: entry.speakerRole,
@@ -125,7 +163,7 @@ const DebateControls: React.FC<DebateControlsProps> = ({
       transcriptCount: transcript.length,
     });
     setAutoPlayQueue((prev) => [...prev, ...newQueueItems]);
-  }, [autoPlayEnabled, currentAutoPlayItem, externalPlaybackLock, suppressAutoPlayEntryIds, transcript]);
+  }, [autoPlayEnabled, currentAutoPlayItem, externalPlaybackLock, playableAudioUrls, suppressAutoPlayEntryIds, transcript]);
 
   useEffect(() => {
     if (!autoPlayEnabled) return;
@@ -360,7 +398,7 @@ const DebateControls: React.FC<DebateControlsProps> = ({
                             ref={getVisibleAudioRef(entry.id)}
                             controls 
                             preload="metadata" 
-                            src={entry.audioUrl} 
+                            src={playableUrlFor(entry.audioUrl)}
                             onPlay={() => handleVisibleAudioPlay(entry)}
                             onPause={() => handleVisibleAudioStop(entry.id)}
                             onEnded={() => {

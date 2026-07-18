@@ -18,7 +18,7 @@ import subprocess
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, Awaitable, List, AsyncIterator
 from http import HTTPStatus
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 from sqlalchemy.orm import Session
 from config import settings
 import uuid
@@ -1468,7 +1468,17 @@ class VoiceProcessor:
         filename = f"{uuid.uuid4().hex}.{audio_format}"
         path = upload_dir / filename
         path.write_bytes(audio_data)
-        return f"{file_url_prefix.rstrip('/')}/{filename}"
+        parsed_prefix = urlsplit(file_url_prefix)
+        public_origin = f"{parsed_prefix.scheme}://{parsed_prefix.netloc}"
+        from services.file_access_service import FileAccessService
+
+        object_key = f"asr/{filename}"
+        ticket = FileAccessService.issue_media_ticket(
+            user_id="asr-provider",
+            object_key=object_key,
+            provider_only=True,
+        )
+        return f"{public_origin}{FileAccessService.ticketed_media_url(object_key, ticket)}"
 
     def _extract_text_from_transcription(self, payload: Any) -> str:
         if not payload:
@@ -1638,8 +1648,12 @@ class VoiceProcessor:
             # 创建上传目录
             os.makedirs(resolved_upload_dir, exist_ok=True)
 
-            # 生成完整路径
-            file_path = os.path.join(resolved_upload_dir, filename)
+            # The caller-supplied name is metadata only. Persist a random object key
+            # so room/user identifiers never become guessable disk paths.
+            from services.file_access_service import FileAccessService
+
+            object_name = FileAccessService.random_object_name(filename)
+            file_path = os.path.join(resolved_upload_dir, object_name)
 
             # 保存文件
             with open(file_path, "wb") as f:
