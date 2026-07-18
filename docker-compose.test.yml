@@ -130,5 +130,31 @@ services:
       timeout: 3s
       retries: 20
 
+  runtime-network-e2e:
+    profiles: ["network-e2e"]
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      <<: *api-test-environment
+      RUNTIME_API_ONE_WS: ws://api-one:7860
+      RUNTIME_API_TWO_WS: ws://api-two:7860
+      RUNTIME_FAILOVER_CONTAINER: debate-e2e-api-one-1
+      RUNTIME_DOCKER_SOCKET: /var/run/docker.sock
+    command:
+      - python
+      - -m
+      - pytest
+      - -q
+      - tests/stack_e2e/test_runtime_network_multi_instance.py
+    depends_on:
+      api-one:
+        condition: service_healthy
+      api-two:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   e2e-uploads:

@@ -144,7 +144,7 @@ jobs:
 
   docker-e2e:
     name: Complete Docker release gate
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     needs: [backend-fast, backend-integration, frontend]
     runs-on: ubuntu-latest
     steps:
@@ -159,6 +159,28 @@ jobs:
           -d --build --wait web
       - name: Run gateway smoke
         run: bash scripts/run-production-smoke.sh http://127.0.0.1:18860
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install browser smoke dependencies
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Run real-browser production gateway paths
+        working-directory: web
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:18860
+        run: pnpm run test:e2e
+      - name: Kill one API instance during cross-instance WebSocket traffic
+        run: >-
+          docker compose -f docker-compose.test.yml --profile stack
+          --profile network-e2e run --rm runtime-network-e2e
       - name: Show Docker logs on failure
         if: failure()
         run: docker compose -f docker-compose.test.yml --profile stack logs --no-color
