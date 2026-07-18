@@ -62,6 +62,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
       ${PIP_TRUSTED_HOST:+--trusted-host ${PIP_TRUSTED_HOST}} \
       -r requirements.txt
 
+COPY pytest.ini .
 COPY api/ .
 
 RUN mkdir -p \

@@ -1,118 +1,96 @@
-# 部署说明
+# 部署与回滚说明
 
-## 目标
+## 发布前提
 
-本文档说明如何基于仓库根目录的 `docker-compose.yml` 部署工作包 C 依赖的后端安全能力、前端网关和基础运维组件。
+- 使用 Docker Engine 24+ 和 Docker Compose Plugin。
+- `.env.deploy` 至少配置 `POSTGRES_PASSWORD`、`DATABASE_URL`、`SECRET_KEY`、`PUBLIC_BASE_URL`、`ALLOWED_ORIGINS`。
+- `SECRET_KEY` 使用独立长随机值，`DEBUG=false`，生产来源域名必须显式列出。
+- PostgreSQL 已备份并完成一次恢复演练。
+- [发布验收清单](../docs/acceptance_checklist.md)中的 PR 与 Docker 门禁已经通过。
 
-## 前提条件
+## 数据库升级
 
-- 已安装 Docker Engine 24+ 和 Docker Compose Plugin
-- 目标主机可以拉取 PostgreSQL、Python、Node、Redis 相关镜像
-- 已准备部署环境变量：
-  - `POSTGRES_PASSWORD`
-  - `DATABASE_URL`
-  - `SECRET_KEY`
-  - `PUBLIC_BASE_URL`
-  - `ALLOWED_ORIGINS`
+当前发布包含以下连续迁移：
 
-## 持久化目录
+- 020：持久化后台任务、唯一去重键、租约和失败状态。
+- 021：知识文档发布状态。
+- 022：权威辩论运行时状态及版本号。
+- 023：评分来源、质量、重试、失败码和分析资格。
 
-- PostgreSQL 数据保存在 `pgdata` volume
-- Redis AOF 数据保存在 `redisdata` volume
-- API 日志目录为 `./api/logs`
-- 上传与隔离目录为 `./api/uploads`
+先在与生产同版本的备份库执行：
 
-## 首次部署
-
-1. 在仓库根目录准备 `.env.deploy`
-2. 可先复制 `.env.deploy.example` 为 `.env.deploy`
-3. 至少写入以下内容：
-
-```env
-POSTGRES_PASSWORD=replace-with-strong-password
-DATABASE_URL=postgresql://pgvector:replace-with-strong-password@db:5432/debate_system
-SECRET_KEY=replace-with-long-random-secret
-PUBLIC_BASE_URL=https://your-domain.example.com
-ALLOWED_ORIGINS=https://your-domain.example.com
+```bash
+docker compose --env-file .env.deploy -f docker-compose.yml run --rm api alembic upgrade head
 ```
 
-4. 主 `docker-compose.yml` 已开启必填变量校验；如果不带 `--env-file .env.deploy` 直接执行，会在 Compose 解析阶段被拦截。这是为了避免占位密码或本机旧数据卷状态导致的假故障。
-5. 启动服务：
+确认只有一个 head：
+
+```bash
+docker compose --env-file .env.deploy -f docker-compose.yml run --rm api alembic heads
+```
+
+023 会保守地将无法证明可信的历史评分标为 `legacy_unknown` 且排除分析；明确的降级评分标为 `fallback`。升级后必须抽查分类数量，不能直接把未知历史数据批量改成可信。
+
+## 部署
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.yml up -d --build
-```
-
-6. 检查容器状态：
-
-```bash
 docker compose --env-file .env.deploy -f docker-compose.yml ps
 ```
 
-## 部署后校验
+若部署多个 API 实例，所有实例必须连接同一 PostgreSQL 和 Redis，并设置：
 
-- API 健康检查：
-
-```bash
-docker compose --env-file .env.deploy -f docker-compose.yml exec api curl -fsS http://localhost:7860/health
+```env
+REALTIME_MULTI_INSTANCE=true
+INSTANCE_ID=<每个实例唯一值>
 ```
 
-- 网关健康检查：
+报告、音频和教学材料目录需要共享持久存储；不能让不同实例使用各自的临时容器磁盘。
+
+## 发布后检查
+
+Linux/macOS：
 
 ```bash
-curl -fsS http://127.0.0.1:8860/healthz
+SMOKE_BASE_URL=https://your-domain.example.com \
+  bash scripts/run-production-smoke.sh
 ```
 
-- 同域 API 代理检查：
+Windows：
 
-```bash
-curl -fsS http://127.0.0.1:8860/api/health
+```powershell
+$env:SMOKE_BASE_URL = "https://your-domain.example.com"
+./scripts/run-production-smoke.ps1
 ```
 
-- Metrics 检查：
-  - `GET /metrics` 应可返回 Prometheus 指标
-  - 默认仅允许本机或 RFC1918 私网访问
+提供 `SMOKE_ACCOUNT`、`SMOKE_PASSWORD`、`SMOKE_USER_TYPE` 时脚本还会验证登录。三项必须同时设置。
 
-## 升级发布
+真实供应商检查只在受控环境执行，同时提供 `PROVIDER_BASE_URL`、`PROVIDER_API_KEY`、`PROVIDER_MODEL`。脚本只输出通过/失败，不输出密钥或完整响应。
 
-1. 拉取新代码
-2. 先执行本地或 CI 校验
-3. 重建并滚动拉起：
+## 故障处理
 
-```bash
-docker compose --env-file .env.deploy -f docker-compose.yml up -d --build
-```
-
-4. 再次执行健康检查，并补做登录、上传、安全审计、WebSocket ticket 等关键路径冒烟验证
+- `/api/health` 显示数据库失败：停止放量，检查连接、迁移 head 和数据库锁。
+- Redis 或 realtime bridge 未就绪：停止多实例流量，检查 Redis 连通性与各实例 `INSTANCE_ID`。
+- 向量 readiness 为 mismatch：停止知识检索流量，执行受控重建，完成前不得绕过 readiness。
+- 报告任务积压：检查 lease、dead-letter、Worker 日志和磁盘容量，不要直接删除任务行。
+- fallback 突增：检查供应商可用性；fallback 只能展示，不能人工改为 analytics eligible。
 
 ## 回滚
 
-1. 回退到上一版代码或镜像标签
-2. 使用同一份 `.env.deploy` 重新拉起：
+代码回滚与数据库回滚分开决策。020～023 均包含新状态数据，优先采用向前修复：
+
+1. 停止新流量和后台 Worker，保留数据库现场。
+2. 记录当前 Alembic revision、队列状态、向量重建状态和评分分类数量。
+3. 若旧镜像能兼容新增列，仅回滚镜像，不降级数据库。
+4. 只有确认旧代码无法运行且已完成备份时，才按 `023 -> 022 -> 021 -> 020 -> 019` 顺序逐级降级。
+5. 降级 023 会删除 provenance 字段，可能永久丢失 fallback 审计与分析资格信息；必须先导出相关列。
+6. 降级 022 前必须停止全部 API 实例，避免运行时状态重新写入。
+7. 降级 020 前必须处理运行中、重试中和 dead-letter 任务，否则任务恢复信息会丢失。
+
+执行单级降级示例：
 
 ```bash
-docker compose --env-file .env.deploy -f docker-compose.yml up -d --build
+docker compose --env-file .env.deploy -f docker-compose.yml run --rm api alembic downgrade 022
 ```
 
-3. 如果数据库结构发生变化，先确认 Alembic 迁移是否可逆
-4. 回滚后至少验证：
-  - `/health`
-  - `/api/health`
-  - `/healthz`
-  - 登录刷新链路
-  - 上传安全拦截
-
-## 开发环境
-
-本地联调请优先使用 `docker-compose.dev.yml`：
-
-```bash
-docker compose -f docker-compose.dev.yml up -d --build
-```
-
-默认访问地址：
-
-- API: `http://127.0.0.1:7860`
-- Web: `http://127.0.0.1:8860`
-- PostgreSQL: `127.0.0.1:5432`
-- Redis: `127.0.0.1:6379`
+回滚后重新执行健康检查、登录、报告读取、私有文件鉴权和 WebSocket 冒烟，并记录数据恢复结果。

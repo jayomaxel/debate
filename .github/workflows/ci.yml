@@ -3,10 +3,41 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
 
 jobs:
-  backend:
-    name: Backend
+  backend-fast:
+    name: Backend fast tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-0 libpango-1.0-0 libpangocairo-1.0-0 \
+            libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
+      - name: Install Python dependencies
+        run: python -m pip install -r api/requirements.txt
+      - name: Compile backend sources
+        run: python -m compileall -q api
+      - name: Run isolated unit and contract tests
+        env:
+          ENVIRONMENT: test
+          SECRET_KEY: fast-test-secret-key-with-at-least-32-characters
+        run: python -m pytest -q api/tests -m "not integration and not pgvector and not e2e"
+
+  backend-integration:
+    name: PostgreSQL Redis PDF integration
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -19,72 +50,71 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d debate_ci"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 20
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
-      ENVIRONMENT: development
+      ENVIRONMENT: test
       DEBUG: "false"
-      SECRET_KEY: ci-secret-key
+      SECRET_KEY: integration-test-secret-key-with-at-least-32-characters
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/debate_ci
-      PUBLIC_BASE_URL: http://localhost:8860
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/debate_ci
+      TEST_PGVECTOR_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/debate_ci
+      RUNTIME_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/debate_ci
+      RUNTIME_TEST_REDIS_HOST: localhost
+      RUNTIME_TEST_REDIS_PORT: "6379"
+      RUNTIME_TEST_REDIS_DB: "15"
       REDIS_HOST: localhost
       REDIS_PORT: "6379"
-      REDIS_DB: "0"
+      REDIS_DB: "15"
       REDIS_PASSWORD: ""
-      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:8860,http://127.0.0.1:8860
+      PUBLIC_BASE_URL: http://localhost:8860
+      ALLOWED_ORIGINS: http://localhost:8860,http://127.0.0.1:8860
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: api/requirements.txt
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libglib2.0-0 \
-            libpango-1.0-0 \
-            libpangocairo-1.0-0 \
-            libgdk-pixbuf2.0-0 \
-            libffi-dev \
-            shared-mime-info
+            libglib2.0-0 libpango-1.0-0 libpangocairo-1.0-0 \
+            libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
       - name: Install Python dependencies
         run: python -m pip install -r api/requirements.txt
-      - name: Compile backend sources
-        run: python -m compileall -q api
-      - name: Run Alembic migrations
+      - name: Migrate an empty PostgreSQL database
         working-directory: api
         run: alembic upgrade head
-      - name: Run backend tests
+      - name: Verify migrations and real dependency contracts
         run: |
-          python -m pytest \
-            api/tests/test_admin_secret_masking.py \
-            api/tests/test_websocket_ticket.py \
-            api/tests/test_upload_guard.py \
-            api/tests/test_audit_service.py \
-            api/tests/test_rate_limit.py \
-            api/tests/test_auth_session.py \
-            api/tests/test_config_masking.py \
-            api/tests/test_health_check.py \
-            api/tests/test_teaching_design_service.py \
-            api/tests/test_topic_recommendation.py \
-            api/tests/test_teacher_topic_recommendation_routes.py \
-            api/tests/test_report_score_readiness.py \
-            api/tests/test_teacher_student_contracts.py
+          python -m pytest -q \
+            api/tests/test_migration_020.py \
+            api/tests/test_migration_021.py \
+            api/tests/test_migration_022.py \
+            api/tests/test_migration_023.py \
+            api/tests/test_background_job_postgres.py \
+            api/tests/test_runtime_state_concurrency.py \
+            api/tests/test_websocket_multi_instance.py \
+            api/tests/test_file_object_authorization.py \
+            api/tests/test_student_report_pdf_cache.py \
+            api/tests/test_markdown_pdf.py
+      - name: Verify pgvector mismatch and rebuild last
+        run: python -m pytest -q api/tests/test_kb_vector_rebuild.py
 
   frontend:
-    name: Frontend
+    name: Frontend quality gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,24 +123,69 @@ jobs:
           version: 10.11.0
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
+      - name: Lint
+        working-directory: web
+        run: pnpm run lint
       - name: Type check
         working-directory: web
         run: pnpm run type-check
-      - name: Run frontend smoke tests
+      - name: Run all frontend tests
         working-directory: web
-        run: |
-          pnpm exec vitest run \
-            src/lib/debate-description.test.ts \
-            src/lib/debate-transcript.test.ts \
-            src/lib/student-assessment-onboarding.test.ts \
-            src/services/auth.service.test.ts \
-            src/services/student.service.test.ts
+        run: pnpm run test:run
       - name: Build frontend
         working-directory: web
         run: pnpm run build
+
+  docker-e2e:
+    name: Complete Docker release gate
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    needs: [backend-fast, backend-integration, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run production-dependency E2E suite
+        run: >-
+          docker compose -f docker-compose.test.yml up --build
+          --abort-on-container-exit --exit-code-from e2e e2e
+      - name: Start two API instances and gateway
+        run: >-
+          docker compose -f docker-compose.test.yml --profile stack up
+          -d --build --wait web
+      - name: Run gateway smoke
+        run: bash scripts/run-production-smoke.sh http://127.0.0.1:18860
+      - name: Show Docker logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml --profile stack logs --no-color
+      - name: Tear down test stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml --profile stack down --volumes --remove-orphans
+
+  provider-smoke:
+    name: Controlled real-provider smoke
+    if: github.event_name == 'workflow_dispatch'
+    needs: [backend-fast, backend-integration, frontend]
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_BASE_URL: ${{ secrets.PRODUCTION_SMOKE_BASE_URL }}
+      SMOKE_ACCOUNT: ${{ secrets.PRODUCTION_SMOKE_ACCOUNT }}
+      SMOKE_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_PASSWORD }}
+      SMOKE_USER_TYPE: ${{ secrets.PRODUCTION_SMOKE_USER_TYPE }}
+      PROVIDER_BASE_URL: ${{ secrets.PROVIDER_BASE_URL }}
+      PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
+      PROVIDER_MODEL: ${{ secrets.PROVIDER_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require controlled smoke secrets
+        run: |
+          test -n "$SMOKE_BASE_URL"
+          test -n "$PROVIDER_BASE_URL"
+          test -n "$PROVIDER_API_KEY"
+          test -n "$PROVIDER_MODEL"
+      - name: Test deployed app and real provider
+        run: bash scripts/run-production-smoke.sh
