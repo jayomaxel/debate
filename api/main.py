@@ -10,9 +10,8 @@ import database as database_module
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, Info, generate_latest
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from config import settings
 from database import get_redis, init_db, init_engine, init_redis
@@ -50,6 +49,11 @@ SERVICE_START_TIME.set(time())
 DATABASE_UP = Gauge("debate_database_up", "Database connectivity status.")
 REDIS_UP = Gauge("debate_redis_up", "Redis connectivity status.")
 REDIS_ENABLED = Gauge("debate_redis_enabled", "Whether Redis is configured for use.")
+BACKGROUND_JOBS = Gauge(
+    "debate_background_jobs",
+    "Persisted background jobs by status.",
+    ("status",),
+)
 
 # CORS：生产环境不建议 allow_origins=["*"] 与 allow_credentials=True 同时出现
 _cors_origins = settings.ALLOWED_ORIGINS if settings.ALLOWED_ORIGINS else ["*"]
@@ -80,14 +84,8 @@ app.include_router(voice.router)
 
 upload_root = Path(settings.UPLOAD_DIR)
 upload_root.mkdir(parents=True, exist_ok=True)
-for public_media_dir in ("audio", "asr"):
-    media_path = upload_root / public_media_dir
-    media_path.mkdir(parents=True, exist_ok=True)
-    app.mount(
-        f"/uploads/{public_media_dir}",
-        StaticFiles(directory=media_path),
-        name=f"uploads-{public_media_dir}",
-    )
+for private_media_dir in ("audio", "asr"):
+    (upload_root / private_media_dir).mkdir(parents=True, exist_ok=True)
 
 
 def _database_health() -> tuple[bool, str | None]:
@@ -120,6 +118,26 @@ def _redis_health() -> tuple[str, str | None]:
         return "disconnected", str(exc)
 
 
+def _vector_alignment_health() -> dict:
+    snapshot = KBVectorSchemaService.runtime_snapshot()
+    session_factory = database_module.SessionLocal
+    if session_factory is None:
+        return snapshot
+    db = session_factory()
+    try:
+        if KBVectorSchemaService.rebuild_job_active(db):
+            return {
+                **snapshot,
+                "status": "rebuilding",
+                "error_code": None,
+            }
+    except Exception:
+        logger.exception("Failed to inspect active vector rebuild job")
+    finally:
+        db.close()
+    return snapshot
+
+
 def _update_operational_metrics() -> None:
     database_connected, _ = _database_health()
     redis_status, _ = _redis_health()
@@ -127,6 +145,26 @@ def _update_operational_metrics() -> None:
     DATABASE_UP.set(1 if database_connected else 0)
     REDIS_UP.set(1 if redis_status == "connected" else 0)
     REDIS_ENABLED.set(0 if redis_status == "disabled" else 1)
+    if database_connected and database_module.SessionLocal is not None:
+        from models.background_job import BackgroundJob
+        from schemas.operations import BackgroundJobStatus
+
+        for job_status in BackgroundJobStatus:
+            BACKGROUND_JOBS.labels(status=job_status.value).set(0)
+        db = database_module.SessionLocal()
+        try:
+            counts = db.execute(
+                select(BackgroundJob.status, func.count(BackgroundJob.id)).group_by(
+                    BackgroundJob.status
+                )
+            ).all()
+            for status_value, count in counts:
+                BACKGROUND_JOBS.labels(status=str(status_value)).set(int(count))
+        except Exception:
+            db.rollback()
+            logger.debug("Background job metrics are not available yet", exc_info=True)
+        finally:
+            db.close()
 
 
 async def _ai_runtime_health() -> dict:
@@ -225,14 +263,25 @@ async def startup_event():
                 )
 
             try:
-                schema_changed = await KBVectorSchemaService.ensure_schema_matches_vector_config(
-                    db
+                vector_alignment = await KBVectorSchemaService.inspect_alignment_with_probe(
+                    db,
+                    probe_model=True,
                 )
-                if schema_changed:
-                    logger.info("Knowledge base vector schema aligned with vector config.")
+                if vector_alignment.get("status") != "ready":
+                    logger.warning(
+                        "Knowledge base vector alignment is not ready: status=%s code=%s",
+                        vector_alignment.get("status"),
+                        vector_alignment.get("error_code"),
+                    )
             except Exception:
                 db.rollback()
-                logger.exception("Failed to align knowledge base vector schema.")
+                KBVectorSchemaService.set_runtime_snapshot(
+                    {
+                        "status": "failed",
+                        "error_code": "VECTOR_PREFLIGHT_FAILED",
+                    }
+                )
+                logger.exception("Failed to inspect knowledge base vector alignment.")
 
             try:
                 repo_root = Path(__file__).resolve().parent.parent
@@ -273,7 +322,18 @@ async def startup_event():
         else:
             logger.warning("Redis connection failed during startup: %s", redis_error)
 
+        from utils.websocket_manager import websocket_manager
+
+        realtime_bridge_ready = await websocket_manager.start()
+        if settings.REALTIME_MULTI_INSTANCE and not realtime_bridge_ready:
+            raise RuntimeError(
+                "REALTIME_MULTI_INSTANCE requires a working Redis event bridge"
+            )
+
         _update_operational_metrics()
+        from services.background_job_runtime import start_background_job_worker
+
+        await start_background_job_worker(database_module.SessionLocal)
         logger.info("AIDebate API started successfully.")
     except Exception:
         logger.exception("Application startup failed.")
@@ -284,6 +344,11 @@ async def startup_event():
 async def shutdown_event():
     """Close shared resources during shutdown."""
     logger.info("Shutting down AIDebate API...")
+    from services.background_job_runtime import stop_background_job_worker
+    from utils.websocket_manager import websocket_manager
+
+    await stop_background_job_worker()
+    await websocket_manager.stop()
     await async_http_client_pool.aclose_all()
 
 
@@ -303,6 +368,10 @@ async def health_check():
         else {"status": "unavailable", "services": {}}
     )
     _update_operational_metrics()
+    vector_alignment = _vector_alignment_health()
+    from utils.websocket_manager import websocket_manager
+
+    realtime_status = websocket_manager.bridge_status()
 
     status = "healthy"
     status_code = 200
@@ -316,6 +385,19 @@ async def health_check():
     elif ai_runtime.get("status") != "ready":
         status = "degraded"
 
+    if vector_alignment.get("status") != "ready":
+        if settings.IS_PRODUCTION:
+            status = "unhealthy"
+            status_code = 503
+        elif status == "healthy":
+            status = "degraded"
+
+    if not realtime_status.get("ready"):
+        status = "unhealthy"
+        status_code = 503
+
+    from services.background_job_runtime import background_job_worker_status
+
     payload = {
         "status": status,
         "database": {
@@ -328,6 +410,9 @@ async def health_check():
             "port": settings.REDIS_PORT,
         },
         "ai": ai_runtime,
+        "background_jobs": background_job_worker_status(),
+        "rag": vector_alignment,
+        "realtime": realtime_status,
     }
 
     if database_error:
