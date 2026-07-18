@@ -516,6 +516,68 @@ def test_pdf_generation_is_atomic_and_three_reads_render_once(
     assert not list(private_root.rglob("*.tmp"))
 
 
+def test_deleted_pdf_cache_is_regenerated_and_returns_ready(
+    tmp_path,
+    teacher_token,
+    debate_for_teacher,
+    monkeypatch,
+):
+    private_root = tmp_path / "private-report-storage"
+    monkeypatch.setattr(
+        settings,
+        "REPORT_FILE_STORAGE_DIR",
+        str(private_root),
+        raising=False,
+    )
+    _cache_markdown(debate_for_teacher.id)
+    calls = 0
+
+    async def counted_renderer(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return b"%PDF-1.4\n%regenerated\n%%EOF"
+
+    monkeypatch.setattr(
+        ReportGenerator,
+        "render_markdown_to_pdf_async",
+        counted_renderer,
+        raising=True,
+    )
+    first = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}/export/pdf",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+    assert first.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).one()
+        old_meta = dict(
+            debate.report[ReportFileStorageService.PDF_STORAGE_META_KEY]
+        )
+        old_path = ReportFileStorageService.resolve_pdf_storage_path(old_meta)
+        old_path.unlink()
+    finally:
+        db.close()
+
+    second = client.get(
+        f"/api/student/reports/{debate_for_teacher.id}/export/pdf",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+    assert second.status_code == 200
+    assert calls == 2
+
+    db = TestingSessionLocal()
+    try:
+        debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).one()
+        new_meta = debate.report[ReportFileStorageService.PDF_STORAGE_META_KEY]
+        assert new_meta["storage_key"] != old_meta["storage_key"]
+        assert ReportFileStorageService.resolve_pdf_storage_path(new_meta).is_file()
+        assert debate.report["report_pdf_status"] == "ready"
+    finally:
+        db.close()
+
+
 def test_get_student_report_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):
     AuditService.clear_events()
 

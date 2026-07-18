@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 
 from models.config import VectorConfig
 from models.user import User
@@ -181,18 +182,25 @@ async def test_pgvector_rebuild_resumes_and_supports_1536_1024_round_trip(
     )
     assert BackgroundJobService.retry(db_session, job_id=claimed.id)
     fail_second_batch["enabled"] = False
+    # A fresh Session represents a restarted worker: progress must come only
+    # from PostgreSQL, not from process memory.
+    resumed_db = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )()
     resumed = BackgroundJobService.claim_next(
-        db_session,
+        resumed_db,
         worker_id="vector-worker-resumed",
         job_types=["kb_vector_rebuild"],
     )
     result_1024 = await KBVectorRebuildService.run(
-        db_session,
+        resumed_db,
         dict(resumed.payload),
         str(resumed.id),
     )
     assert BackgroundJobService.complete(
-        db_session,
+        resumed_db,
         job_id=resumed.id,
         worker_id="vector-worker-resumed",
         result=result_1024,
@@ -200,9 +208,9 @@ async def test_pgvector_rebuild_resumes_and_supports_1536_1024_round_trip(
     assert calls.count(["first chunk"]) == 1
     assert calls.count(["second chunk"]) == 2
     assert result_1024["status"] == "ready"
-    assert _column_dimension(db_session) == 1024
+    assert _column_dimension(resumed_db) == 1024
 
-    nearest = db_session.execute(
+    nearest = resumed_db.execute(
         text(
             """
             SELECT content
@@ -215,31 +223,73 @@ async def test_pgvector_rebuild_resumes_and_supports_1536_1024_round_trip(
     ).scalar_one()
     assert nearest in {"first chunk", "second chunk"}
 
+    new_document_id = "30000000-0000-0000-0000-000000000001"
+    new_chunk_id = "40000000-0000-0000-0000-000000000001"
+    resumed_db.execute(
+        text(
+            """
+            INSERT INTO kb_documents (
+                id, filename, file_path, file_type, file_size,
+                upload_status, uploaded_by, uploaded_at
+            ) VALUES (
+                CAST(:id AS uuid), 'vector-new.pdf', '/private/vector-new.pdf',
+                'application/pdf', 100, 'completed', CAST(:uploaded_by AS uuid), CURRENT_TIMESTAMP
+            )
+            """
+        ),
+        {"id": new_document_id, "uploaded_by": admin_id},
+    )
+    resumed_db.execute(
+        text(
+            """
+            INSERT INTO kb_document_chunks (
+                id, document_id, chunk_index, content, token_count, embedding, created_at
+            ) VALUES (
+                CAST(:id AS uuid), CAST(:document_id AS uuid), 0,
+                'new document chunk', 5, CAST(:embedding AS vector), CURRENT_TIMESTAMP
+            )
+            """
+        ),
+        {
+            "id": new_chunk_id,
+            "document_id": new_document_id,
+            "embedding": _vector_text(1024, 0.6),
+        },
+    )
+    resumed_db.commit()
+
     dimension_holder["value"] = 1536
-    updated_1536 = await ConfigService(db_session).update_vector_config(
+    updated_1536 = await ConfigService(resumed_db).update_vector_config(
         model_name="mock-1536",
         embedding_dimension=1536,
     )
-    job_1536 = KBVectorRebuildService.get_latest_job(db_session)
+    job_1536 = KBVectorRebuildService.get_latest_job(resumed_db)
     assert getattr(updated_1536, "_vector_rebuild_job_id") == str(job_1536.id)
     claimed_1536 = BackgroundJobService.claim_next(
-        db_session,
+        resumed_db,
         worker_id="vector-worker-upsize",
         job_types=["kb_vector_rebuild"],
     )
     result_1536 = await KBVectorRebuildService.run(
-        db_session,
+        resumed_db,
         dict(claimed_1536.payload),
         str(claimed_1536.id),
     )
     assert BackgroundJobService.complete(
-        db_session,
+        resumed_db,
         job_id=claimed_1536.id,
         worker_id="vector-worker-upsize",
         result=result_1536,
     )
     assert result_1536["status"] == "ready"
-    assert _column_dimension(db_session) == 1536
-    assert result_1536["non_null_embedding_count"] == 2
+    assert _column_dimension(resumed_db) == 1536
+    assert result_1536["non_null_embedding_count"] == 3
     assert result_1536["index_status"] == "ready"
-    assert db_session.execute(text("SELECT count(*) FROM kb_documents")).scalar_one() == 1
+    assert resumed_db.execute(text("SELECT count(*) FROM kb_documents")).scalar_one() == 2
+    contents = set(
+        resumed_db.execute(
+            text("SELECT content FROM kb_document_chunks WHERE embedding IS NOT NULL")
+        ).scalars()
+    )
+    assert contents == {"first chunk", "second chunk", "new document chunk"}
+    resumed_db.close()
