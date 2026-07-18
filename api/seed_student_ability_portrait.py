@@ -311,6 +311,10 @@ def upsert_debate_bundle(session, teacher: User, class_obj: Class, student: User
                 participation_id=participation.id,
                 speech_id=speech.id,
                 feedback="该学生论点结构清晰，表达稳定，具备较强的课堂辩论潜力。",
+                status="validated",
+                scoring_source="seed_fixture",
+                scoring_quality="validated",
+                eligible_for_analytics=True,
                 **item["scores"],
             )
             session.add(score)
@@ -324,6 +328,10 @@ def upsert_debate_bundle(session, teacher: User, class_obj: Class, student: User
             score.teamwork_score = item["scores"]["teamwork_score"]
             score.overall_score = item["scores"]["overall_score"]
             score.feedback = "该学生论点结构清晰，表达稳定，具备较强的课堂辩论潜力。"
+            score.status = "validated"
+            score.scoring_source = "seed_fixture"
+            score.scoring_quality = "validated"
+            score.eligible_for_analytics = True
             session.commit()
 
 

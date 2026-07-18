@@ -179,6 +179,10 @@ def test_materialize_debate_samples_from_completed_debate(db_session):
         teamwork_score=74.0,
         overall_score=78.5,
         feedback="整体表现稳定，无明显违规。",
+        status="validated",
+        scoring_source="test_fixture",
+        scoring_quality="validated",
+        eligible_for_analytics=True,
     )
     db_session.add(score)
     db_session.commit()

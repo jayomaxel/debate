@@ -18,7 +18,7 @@ from services.rubric_service import LEGACY_SCORE_FIELDS, RUBRIC_VERSION
 PROMPT_PACK_VERSION = "a.prompt_pack.v1"
 CALIBRATION_VERSION = "a.calibration.v1"
 SCORING_QUALITIES = ("validated", "repaired", "fallback", "partial")
-SCORING_SOURCES = ("judge_model", "fallback")
+SCORING_SOURCES = ("judge_model", "local_rule", "fallback")
 PROVIDERS = ("coze", "llm", "local")
 
 

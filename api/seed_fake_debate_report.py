@@ -629,6 +629,10 @@ def seed_fake_bundle(
                 phase=phase,
                 overall_score=score_payload["overall_score"],
             ),
+            status="validated",
+            scoring_source="seed_fixture",
+            scoring_quality="validated",
+            eligible_for_analytics=True,
             **score_payload,
         )
         session.add(score)
@@ -656,6 +660,10 @@ def seed_fake_bundle(
             participation_id=participation.id,
             speech_id=None,
             feedback="汇总得分，供历史详情与报告页直接读取。",
+            status="validated",
+            scoring_source="seed_fixture",
+            scoring_quality="validated",
+            eligible_for_analytics=True,
             logic_score=averaged["logic_score"],
             argument_score=averaged["argument_score"],
             response_score=averaged["response_score"],
