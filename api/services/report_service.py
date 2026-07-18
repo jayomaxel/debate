@@ -23,6 +23,7 @@ from services.config_service import ConfigService
 from services.coze_client import CozeClient
 from services.domain_pack_service import DEFAULT_DOMAIN_PACK_ID
 from services.mode_policy_service import DEFAULT_MODE, ModePolicyService
+from services.report_file_storage_service import ReportFileStorageService
 from services.score_validation_service import ScoreValidationService
 from config import settings
 
@@ -771,8 +772,9 @@ class ReportGenerator:
 
     @staticmethod
     def _get_report_pdf_cache_path(debate_id: str) -> Path:
-        base = Path(settings.UPLOAD_DIR)
-        return base / "reports" / f"debate_report_{debate_id}.pdf"
+        return ReportFileStorageService.resolve_pdf_storage_path(
+            ReportFileStorageService.create_pdf_storage_meta()
+        )
 
     @staticmethod
     def _build_fallback_markdown(report: Report) -> str:
@@ -1044,9 +1046,7 @@ class ReportGenerator:
                     duration=report.duration,
                 )
                 if pdf_bytes:
-                    cache_path = ReportGenerator._get_report_pdf_cache_path(report.debate_id)
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_bytes(bytes(pdf_bytes))
+                    ReportFileStorageService.persist_ephemeral_pdf_bytes(bytes(pdf_bytes))
                 return pdf_bytes
 
             if debate_topic is None:
@@ -1068,9 +1068,7 @@ class ReportGenerator:
                 duration=duration,
             )
             if pdf_bytes:
-                cache_path = ReportGenerator._get_report_pdf_cache_path(debate_id)
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_bytes(pdf_bytes)
+                ReportFileStorageService.persist_ephemeral_pdf_bytes(pdf_bytes)
             return pdf_bytes
 
         except Exception as e:

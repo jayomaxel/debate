@@ -411,6 +411,10 @@ async def test_lightweight_recalculation_clears_report_cache_without_replacing_s
             "report_markdown": "# old",
             "report_markdown_hash": "old-hash",
             "report_pdf_markdown_hash": "old-pdf-hash",
+            "report_pdf_storage": {
+                "backend": "local",
+                "storage_key": "ab/private-report.pdf",
+            },
             "report_quality": "fallback",
         },
         report_pdf="old.pdf",
@@ -457,5 +461,6 @@ async def test_lightweight_recalculation_clears_report_cache_without_replacing_s
     assert refreshed.report_pdf is None
     assert "report_markdown" not in refreshed.report
     assert "report_markdown_hash" not in refreshed.report
+    assert "report_pdf_storage" not in refreshed.report
     assert refreshed.report["report_recalculation_count"] == 1
     assert meta["report_quality"] == "validated"

@@ -109,6 +109,10 @@ def _seed_completed_debate_graph(suffix: str) -> dict:
                 "report_markdown": "# Cached teacher report",
                 "report_markdown_hash": "hash-before",
                 "report_pdf_markdown_hash": "pdf-hash-before",
+                "report_pdf_storage": {
+                    "backend": "local",
+                    "storage_key": "ab/private-teacher-report.pdf",
+                },
                 "report_quality": "cached",
                 "existing_note": "keep me",
             },
@@ -228,6 +232,7 @@ async def test_teacher_can_lightweight_recalculate_report_without_rescoring():
         assert "report_markdown" not in debate.report
         assert "report_markdown_hash" not in debate.report
         assert "report_pdf_markdown_hash" not in debate.report
+        assert "report_pdf_storage" not in debate.report
         assert debate.report["existing_note"] == "keep me"
         assert debate.report["report_recalculation_count"] == 1
         assert debate.report_pdf is None

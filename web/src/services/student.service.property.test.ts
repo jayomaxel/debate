@@ -109,7 +109,7 @@ describe('Student Service - Property-Based Tests', () => {
         });
         expect(createdLinks).toHaveLength(1);
         expect(createdLinks[0].href).toBe('blob:mock-url');
-        expect(createdLinks[0].download).toBe(`debate_report_${debateId}.pdf`);
+        expect(createdLinks[0].download).toBe('debate-report.pdf');
         expect(createdLinks[0].click).toHaveBeenCalled();
         expect(document.body.appendChild).toHaveBeenCalledWith(createdLinks[0]);
         expect(document.body.removeChild).toHaveBeenCalledWith(createdLinks[0]);

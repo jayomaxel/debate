@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from models.debate import Debate
 from models.score import Score
 from models.speech import Speech
+from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import ReportGenerator
 from services.scoring_service import ScoringService
 from services.score_validation_service import ScoreValidationService
@@ -97,15 +98,21 @@ class ReportOrchestrationService:
 
         markdown_hash = report_data.get("report_markdown_hash")
         pdf_hash = report_data.get("report_pdf_markdown_hash")
-        pdf_path = str(getattr(debate, "report_pdf", "") or "").strip()
+        pdf_storage = report_data.get(ReportFileStorageService.PDF_STORAGE_META_KEY)
+        has_pdf_reference = bool(
+            (isinstance(pdf_storage, dict) and pdf_storage.get("storage_key"))
+            or str(getattr(debate, "report_pdf", "") or "").strip()
+        )
 
         if pdf_hash and markdown_hash and pdf_hash != markdown_hash:
             return "stale"
-        if not pdf_hash and not pdf_path:
+        if not pdf_hash and not has_pdf_reference:
             return "absent"
-        if pdf_path and not Path(pdf_path).exists():
-            return "missing_file"
-        return "ready"
+        return (
+            "ready"
+            if ReportFileStorageService.has_pdf_artifact(debate, str(debate.id))
+            else "missing_file"
+        )
 
     @staticmethod
     def _quality_flags(meta: Dict[str, Any]) -> List[str]:
@@ -538,6 +545,7 @@ class ReportOrchestrationService:
         existing = ReportOrchestrationService._safe_report_dict(debate)
         recalculation_count = int(existing.get("report_recalculation_count") or 0) + 1
         now = datetime.utcnow().isoformat()
+        ReportFileStorageService.delete_pdf_artifact_for_debate(debate)
         debate.report = {
             key: value
             for key, value in existing.items()
@@ -545,6 +553,7 @@ class ReportOrchestrationService:
                 "report_markdown",
                 "report_markdown_hash",
                 "report_pdf_markdown_hash",
+                ReportFileStorageService.PDF_STORAGE_META_KEY,
                 "report_quality",
             }
         }
