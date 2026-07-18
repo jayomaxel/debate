@@ -17,7 +17,7 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
-_PUBLIC_SERVER_ERROR_PATTERN = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9，。！？、（）()《》：: -]{1,48}$")
+_PUBLIC_SERVER_ERROR_PATTERN = re.compile(r"^[\u4e00-\u9fffA-Za-z0-9_，。！？、（）()《》：: -]{1,48}$")
 _SERVER_ERROR_MESSAGE = "服务器内部错误，请稍后重试"
 _VALIDATION_ERROR_MESSAGE = "请求参数校验失败"
 _GENERIC_OPERATION_ERROR_MESSAGE = "请求处理失败，请稍后重试"

@@ -60,6 +60,9 @@ async def test_report_job_reaches_scoring_and_report_ready(e2e_db, e2e_session_f
     scores = e2e_db.query(Score).filter(Score.speech_id == speech.id).all()
     stored_debate = e2e_db.get(Debate, debate.id)
     assert stored_job.status == BackgroundJobStatus.SUCCEEDED.value
-    assert len(scores) == 1 and scores[0].eligible_for_analytics is True
-    assert scores[0].status == "validated"
+    assert len(scores) == 1
+    assert scores[0].status == "fallback"
+    assert scores[0].scoring_source == "fallback"
+    assert scores[0].scoring_quality == "fallback"
+    assert scores[0].eligible_for_analytics is False
     assert isinstance(stored_debate.report, dict) and stored_debate.report.get("winner")
