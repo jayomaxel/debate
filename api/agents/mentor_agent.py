@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from services.config_service import ConfigService
 from services.coze_client import CozeClient
+from services.mode_policy_service import ModePolicyService
 from services.prompt_pack_service import PromptBuildContext, PromptPackService
 from config import settings
 
@@ -56,10 +57,22 @@ class MentorAgent:
             history=list(context or []),
         )
         if task_type:
+            normalized_task_data = dict(task_data or {})
+            if task_type in {
+                "real_time_suggestion",
+                "counter_argument_suggestion",
+                "closing_points_suggestion",
+            }:
+                mentor_length = ModePolicyService.get_policy(
+                    mode=mode,
+                    agent="mentor",
+                    phase=phase,
+                )["mentor_length"]
+                normalized_task_data["max_chars"] = mentor_length["max_chars"]
             return PromptPackService.render_agent_task_prompt(
                 build_context,
                 task_type=task_type,
-                task_data=task_data or {},
+                task_data=normalized_task_data,
             )
         return PromptPackService.render_agent_prompt(build_context, task_prompt=task_prompt)
     

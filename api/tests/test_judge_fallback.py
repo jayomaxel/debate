@@ -66,7 +66,7 @@ def test_judge_agent_score_speech_uses_prompt_pack_and_repair(monkeypatch):
             assert "prompt_pack_version: a.prompt_pack.v1" in prompt
             assert "task_detail:" in prompt
             return "bad judge output"
-        assert "Repair the following judge response" in prompt
+        assert "只能修复格式，不能重新评分" in prompt
         return """
         {
           "logic_score": 71,
@@ -107,7 +107,7 @@ def test_judge_agent_batch_evaluate_uses_prompt_pack_repair_and_meta(monkeypatch
             assert "prompt_pack_version: a.prompt_pack.v1" in prompt
             assert "task_detail:" in prompt
             return "not json"
-        assert "Repair the following judge response" in prompt
+        assert "只能修复格式，不能重新评分" in prompt
         return """
         {
           "speech_scores": [

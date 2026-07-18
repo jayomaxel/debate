@@ -179,7 +179,7 @@ class JudgeAgent:
             messages = [
                 {
                     "role": "system",
-                    "content": "你是辩论裁判。严格按用户要求输出JSON，不要输出额外文本、不要代码块。",
+                    "content": PromptPackService.render_agent_system_prompt("judge"),
                 },
                 {"role": "user", "content": prompt},
             ]
@@ -606,12 +606,11 @@ class JudgeAgent:
                 "speaker_role": speaker_role,
                 "phase": phase,
                 "speech_content": speech_content,
-                "rubric_dimensions": list(ScoreValidationService.expected_speech_score_contract().keys()),
+                "rubric_dimensions": list(ScoreValidationService.SCORE_FIELDS),
                 "requirements": [
                     "score each dimension from 0 to 100",
                     "return JSON only",
                     "include concise feedback grounded in the speech",
-                    "do not hide fallback or partial quality states",
                 ],
             },
         )
@@ -756,7 +755,7 @@ class JudgeAgent:
         prompt = PromptPackService.render_agent_task_prompt(
             PromptBuildContext(
                 agent="judge",
-                phase="feedback",
+                phase="report",
                 topic="",
                 role="judge",
                 speaker_role="judge",

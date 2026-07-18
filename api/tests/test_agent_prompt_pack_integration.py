@@ -1,4 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+from agents.mentor_agent import MentorAgent
 
 
 AGENT_FILES = (
@@ -16,3 +19,20 @@ def test_agents_do_not_reintroduce_inline_business_prompt_blocks():
             offenders.append(str(path))
 
     assert offenders == []
+
+
+def test_mentor_tip_length_follows_teaching_mode_policy():
+    agent = MentorAgent(db=SimpleNamespace())
+
+    prompt = agent._build_prompt_pack_prompt(
+        "测试辩题",
+        "positive",
+        "debater_2",
+        "free_debate",
+        context=[{"config_meta": {"mode": "teaching"}}],
+        task_type="real_time_suggestion",
+        task_data={"max_chars": 80},
+    )
+
+    assert '"max_chars": 180' in prompt
+    assert '"min_chars": 120' in prompt
