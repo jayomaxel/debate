@@ -7,7 +7,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -22,6 +23,10 @@ from services.audit_service import AuditService
 from services.debate_service import DebateService
 from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
+from services.report_state_service import ReportStateService
+from services.file_access_service import FileAccessService, PrivateFileNotFound
+from schemas.operations import OperationalErrorCode, ReportStatus
+from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_student, PermissionChecker, require_role
 
 from models import Debate,Speech
@@ -500,6 +505,29 @@ async def join_debate(
 
 # ==================== 报告相关 ====================
 
+@router.get("/debates/{debate_id}/support-documents/{document_id}/download")
+async def download_debate_support_document(
+    debate_id: str,
+    document_id: str,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """Download support material only when the student belongs to the debate."""
+    try:
+        private_file = FileAccessService(db).support_document(
+            current_user,
+            debate_id,
+            document_id,
+        )
+    except PrivateFileNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    return FileResponse(
+        path=private_file.path,
+        media_type=private_file.media_type,
+        filename=private_file.filename,
+        headers=FileAccessService.private_headers(),
+    )
+
 from services.report_service import ReportGenerator
 from fastapi.responses import Response
 from utils.email_service import EmailService
@@ -526,12 +554,29 @@ def _legacy_pdf_cache_allowed(debate: Debate, report_meta: Dict) -> bool:
         not report_meta.get("report_markdown_hash")
         and not report_meta.get("report_pdf_markdown_hash")
         and _report_score_revision(debate) == 0
+        and int(report_meta.get("report_recalculation_count") or 0) == 0
     )
 
 
 def _compute_markdown_hash(markdown_text: str, score_revision: int = 0) -> str:
     payload = f"score_revision:{int(score_revision or 0)}\n{markdown_text}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _report_storage_root() -> Path:
+    return (BASE_DIR / settings.UPLOAD_DIR / "reports").resolve()
+
+
+def _default_report_pdf_path(debate_id: str) -> Path:
+    return _report_storage_root() / f"debate_report_{debate_id}.pdf"
+
+
+def _expected_pdf_cache_key(debate: Debate, debate_id: str, markdown_hash: str) -> str:
+    return ReportOrchestrationService.compute_pdf_cache_key(
+        debate_id,
+        _report_score_revision(debate),
+        markdown_hash,
+    )
 
 
 def _get_cached_report_markdown(debate: Debate) -> Optional[str]:
@@ -560,33 +605,50 @@ def _get_report_pdf_cache_response(
 ) -> Optional[Response]:
     report_meta = debate.report if isinstance(debate.report, dict) else {}
     markdown_hash = report_meta.get("report_markdown_hash")
-    cache_is_valid = (
-        (
-            markdown_hash
-            and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+    pdf_cache_key = report_meta.get("report_pdf_cache_key")
+    if pdf_cache_key and markdown_hash:
+        cache_is_valid = pdf_cache_key == _expected_pdf_cache_key(
+            debate,
+            debate_id,
+            str(markdown_hash),
         )
-        or _legacy_pdf_cache_allowed(debate, report_meta)
-    )
+    else:
+        cache_is_valid = (
+            (
+                markdown_hash
+                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+            )
+            or _legacy_pdf_cache_allowed(debate, report_meta)
+        )
     if not cache_is_valid:
         return None
 
     candidate_paths = []
     if debate.report_pdf:
         candidate_paths.append(Path(debate.report_pdf))
-    candidate_paths.append(
-        BASE_DIR / settings.UPLOAD_DIR / "reports" / f"debate_report_{debate_id}.pdf"
-    )
+    candidate_paths.append(_default_report_pdf_path(debate_id))
 
     for pdf_file in candidate_paths:
-        if pdf_file.exists():
-            if debate.report_pdf != pdf_file.as_posix():
-                debate.report_pdf = pdf_file.as_posix()
+        try:
+            safe_pdf_file = FileAccessService.resolve_report_path(pdf_file)
+        except PrivateFileNotFound:
+            continue
+        if safe_pdf_file.exists():
+            try:
+                pdf_bytes = safe_pdf_file.read_bytes()
+            except OSError:
+                continue
+            if not pdf_bytes.startswith(b"%PDF"):
+                continue
+            if debate.report_pdf != safe_pdf_file.as_posix():
+                debate.report_pdf = safe_pdf_file.as_posix()
                 db.commit()
             return Response(
-                content=pdf_file.read_bytes(),
+                content=pdf_bytes,
                 media_type="application/pdf",
                 headers={
-                    "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"
+                    "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf",
+                    **FileAccessService.private_headers(),
                 },
             )
 
@@ -595,6 +657,58 @@ def _get_report_pdf_cache_response(
 
 async def _ensure_report_ready(db: Session, debate_id: str) -> Dict[str, object]:
     return await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
+
+
+class ReportMarkdownGenerationError(RuntimeError):
+    pass
+
+
+class ReportStorageWriteError(RuntimeError):
+    pass
+
+
+def _record_report_failure(
+    db: Session,
+    debate: Debate,
+    *,
+    stage: str,
+    error_code: str,
+    error: Exception | str,
+) -> None:
+    existing = debate.report if isinstance(debate.report, dict) else {}
+    now = datetime.utcnow().isoformat()
+    debate.report = {
+        **existing,
+        f"report_{stage}_status": "failed",
+        f"report_{stage}_error": error_code,
+        f"report_{stage}_error_internal": str(error)[:1000],
+        f"report_{stage}_failed_at": now,
+    }
+    db.commit()
+
+
+def _write_pdf_atomically(target: Path, pdf_data: bytes) -> None:
+    storage_root = _report_storage_root()
+    resolved_target = target.resolve()
+    try:
+        resolved_target.relative_to(storage_root)
+    except ValueError as exc:
+        raise ReportStorageWriteError("report path is outside the allowed storage root") from exc
+
+    resolved_target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = resolved_target.with_name(
+        f".{resolved_target.name}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        temporary.write_bytes(pdf_data)
+        os.replace(temporary, resolved_target)
+    except Exception as exc:
+        raise ReportStorageWriteError(str(exc)) from exc
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _record_report_generation_audit(
@@ -632,24 +746,30 @@ async def _get_or_generate_report_markdown(
             db.commit()
         return cached
 
-    markdown_text = await ReportGenerator.generate_markdown_report_async(
-        db=db,
-        debate_topic=debate.topic,
-        content_str=content_str,
-    )
-    if not markdown_text:
-        existing = debate.report if isinstance(debate.report, dict) else {}
-        debate.report = {
-            **existing,
-            "report_markdown_status": "failed",
-            "report_markdown_error": "empty_result",
-            "report_markdown_failed_at": datetime.utcnow().isoformat(),
-        }
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="报告生成失败",
+    try:
+        markdown_text = await ReportGenerator.generate_markdown_report_async(
+            db=db,
+            debate_topic=debate.topic,
+            content_str=content_str,
         )
+    except Exception as exc:
+        _record_report_failure(
+            db,
+            debate,
+            stage="markdown",
+            error_code="generation_exception",
+            error=exc,
+        )
+        raise ReportMarkdownGenerationError(str(exc)) from exc
+    if not markdown_text:
+        _record_report_failure(
+            db,
+            debate,
+            stage="markdown",
+            error_code="empty_result",
+            error="markdown generator returned an empty result",
+        )
+        raise ReportMarkdownGenerationError("markdown generator returned an empty result")
 
     existing = debate.report if isinstance(debate.report, dict) else {}
     debate.report = {
@@ -667,6 +787,7 @@ async def _get_or_generate_report_markdown(
 @router.get("/reports/{debate_id}")
 async def get_student_report(
     debate_id: str,
+    request: Request,
     current_user: User = Depends(require_role(["student", "teacher"])),
     db: Session = Depends(get_db)
 ):
@@ -681,7 +802,29 @@ async def get_student_report(
             detail="无权访问该辩论报告"
         )
 
-    await _ensure_report_ready(db, debate_id)
+    debate_uuid = _uuid_value(debate_id)
+    debate = db.query(Debate).filter(Debate.id == debate_uuid).first()
+    if not debate:
+        raise HTTPException(status_code=404, detail="该辩论不存在")
+    operation_state = ReportStateService.enqueue_if_pending(db, debate)
+    if operation_state.report_status in {ReportStatus.PENDING, ReportStatus.PROCESSING}:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "code": 202,
+                "message": "报告正在生成",
+                "data": operation_state.model_dump(mode="json"),
+            },
+        )
+    if operation_state.report_status == ReportStatus.FAILED:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_DATA_NOT_READY,
+            message="报告生成失败，请重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id, "job_id": operation_state.job_id},
+        )
     
     # 生成报告
     report = ReportGenerator.generate_student_report(
@@ -701,8 +844,6 @@ async def get_student_report(
         metadata={"generated_report": True},
     )
     
-    debate_uuid = _uuid_value(debate_id)
-    debate = db.query(Debate).filter(Debate.id == debate_uuid).first()
     report_payload = ReportOrchestrationService.attach_report_meta(
         db=db,
         debate=debate,
@@ -713,13 +854,17 @@ async def get_student_report(
     return {
         "code": 200,
         "message": "获取成功",
-        "data": report_payload
+        "data": {
+            **report_payload,
+            "operation_state": operation_state.model_dump(mode="json"),
+        }
     }
 
 
 @router.get("/reports/{debate_id}/export/pdf")
 async def export_report_pdf(
     debate_id: str,
+    request: Request,
     current_user: User = Depends(require_role(["student", "teacher"])),
     db: Session = Depends(get_db)
 ):
@@ -746,44 +891,29 @@ async def export_report_pdf(
             detail="该辩论不存在"
         )
 
+    operation_state = ReportStateService.enqueue_if_pending(db, debate)
+    if operation_state.report_status in {ReportStatus.PENDING, ReportStatus.PROCESSING}:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "code": 202,
+                "message": "报告正在生成，暂时不能导出",
+                "data": operation_state.model_dump(mode="json"),
+            },
+        )
+    if operation_state.report_status == ReportStatus.FAILED:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_DATA_NOT_READY,
+            message="报告数据未就绪，请先重试报告任务",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id, "job_id": operation_state.job_id},
+        )
+
     cached_pdf_response = _get_report_pdf_cache_response(db, debate, debate_id)
     if cached_pdf_response is not None:
         return cached_pdf_response
-
-    await _ensure_report_ready(db, debate_id)
-    db.refresh(debate)
-
-    report_meta = debate.report if isinstance(debate.report, dict) else {}
-    markdown_hash = report_meta.get("report_markdown_hash")
-    pdf_path = debate.report_pdf
-    default_pdf_path = (
-        BASE_DIR / settings.UPLOAD_DIR / "reports" / f"debate_report_{debate_id}.pdf"
-    )
-    if not pdf_path and default_pdf_path.exists():
-        pdf_path = default_pdf_path.as_posix()
-        debate.report_pdf = pdf_path
-        db.commit()
-
-    if (
-        pdf_path
-        and os.path.exists(pdf_path)
-        and (
-            (
-                markdown_hash
-                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
-            )
-            or (
-                _legacy_pdf_cache_allowed(debate, report_meta)
-            )
-        )
-    ):
-        pdf_file = Path(pdf_path)
-        pdf_data = pdf_file.read_bytes()
-        return Response(
-            content=pdf_data,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"},
-        )
 
     cached_markdown = _get_cached_report_markdown(debate)
     markdown_was_cached = bool(cached_markdown)
@@ -810,11 +940,24 @@ async def export_report_pdf(
             content += f"{sepeaker_type}【角色】{s.speaker_role}，发言内容：{s.content}"
             content += "\n"
     
-    markdown_text = await _get_or_generate_report_markdown(db=db, debate=debate, content_str=content)
+    try:
+        markdown_text = await _get_or_generate_report_markdown(
+            db=db,
+            debate=debate,
+            content_str=content,
+        )
+    except ReportMarkdownGenerationError:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_MARKDOWN_GENERATION_FAILED,
+            message="报告正文生成失败，请稍后重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id},
+        )
 
     report_meta = debate.report if isinstance(debate.report, dict) else {}
     markdown_hash = report_meta.get("report_markdown_hash")
-    pdf_path = debate.report_pdf
 
     cached_pdf_response = _get_report_pdf_cache_response(db, debate, debate_id)
     if cached_pdf_response is not None:
@@ -823,38 +966,97 @@ async def export_report_pdf(
     start_time = debate.start_time.isoformat() if debate.start_time else None
     end_time = debate.end_time.isoformat() if debate.end_time else None
 
-    pdf_data = await ReportGenerator.render_markdown_to_pdf_async(
-        markdown_text=markdown_text,
-        debate_topic=debate.topic,
-        start_time=start_time,
-        end_time=end_time,
-        duration=debate.duration,
-    )
+    try:
+        pdf_data = await ReportGenerator.render_markdown_to_pdf_async(
+            markdown_text=markdown_text,
+            debate_topic=debate.topic,
+            start_time=start_time,
+            end_time=end_time,
+            duration=debate.duration,
+        )
+    except Exception as exc:
+        _record_report_failure(
+            db,
+            debate,
+            stage="pdf",
+            error_code="renderer_exception",
+            error=exc,
+        )
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_PDF_RENDER_FAILED,
+            message="PDF 渲染失败，请稍后重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id},
+        )
     if not pdf_data:
-        existing = debate.report if isinstance(debate.report, dict) else {}
-        debate.report = {
-            **existing,
-            "report_pdf_status": "failed",
-            "report_pdf_error": "empty_result",
-            "report_pdf_failed_at": datetime.utcnow().isoformat(),
-        }
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="PDF生成失败"
+        _record_report_failure(
+            db,
+            debate,
+            stage="pdf",
+            error_code="empty_result",
+            error="renderer returned an empty result",
+        )
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_PDF_RENDER_FAILED,
+            message="PDF 渲染失败，请稍后重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id},
+        )
+    if not bytes(pdf_data).startswith(b"%PDF"):
+        _record_report_failure(
+            db,
+            debate,
+            stage="pdf",
+            error_code="invalid_pdf_header",
+            error="renderer output does not start with %PDF",
+        )
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_PDF_RENDER_FAILED,
+            message="PDF 渲染结果无效，请稍后重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id},
         )
 
-    target_pdf_path = (
-        Path(pdf_path)
-        if pdf_path
-        else (BASE_DIR / settings.UPLOAD_DIR / "reports" / f"debate_report_{debate_id}.pdf")
-    )
-    target_pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    target_pdf_path.write_bytes(pdf_data)
+    # Never reuse a stale database path as a write target. Generated reports
+    # always land under the configured private reports directory.
+    target_pdf_path = FileAccessService.allocate_report_path()
+    try:
+        _write_pdf_atomically(target_pdf_path, bytes(pdf_data))
+    except ReportStorageWriteError as exc:
+        _record_report_failure(
+            db,
+            debate,
+            stage="pdf",
+            error_code="storage_write_failed",
+            error=exc,
+        )
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_STORAGE_WRITE_FAILED,
+            message="PDF 保存失败，请联系管理员检查存储",
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            retryable=True,
+            details={"debate_id": debate_id},
+        )
 
     updated_report = debate.report if isinstance(debate.report, dict) else {}
     if markdown_hash:
-        updated_report = {**updated_report, "report_pdf_markdown_hash": markdown_hash}
+        updated_report = {
+            **updated_report,
+            "report_pdf_markdown_hash": markdown_hash,
+            "report_pdf_cache_key": _expected_pdf_cache_key(
+                debate,
+                debate_id,
+                str(markdown_hash),
+            ),
+            "report_pdf_renderer_version": ReportOrchestrationService.PDF_RENDERER_VERSION,
+        }
     updated_report = {
         **updated_report,
         "report_pdf_status": "ready",
@@ -882,7 +1084,8 @@ async def export_report_pdf(
         content=pdf_data,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf"
+            "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf",
+            **FileAccessService.private_headers(),
         }
     )
 

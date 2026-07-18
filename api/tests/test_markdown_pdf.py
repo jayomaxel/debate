@@ -121,8 +121,8 @@ async def test_markdown_to_pdf():
             syntax_style="github"
         )
         
-        print(f"✓ PDF生成成功！文件大小: {len(pdf_bytes)} 字节")
-        print(f"✓ 文件已保存到: {output_path.absolute()}")
+        print(f"[OK] PDF生成成功！文件大小: {len(pdf_bytes)} 字节")
+        print(f"[OK] 文件已保存到: {output_path.absolute()}")
         
         # 测试2: 只返回字节流（不保存文件）
         print("\n测试2: 生成PDF字节流（不保存文件）")
@@ -132,7 +132,7 @@ async def test_markdown_to_pdf():
             syntax_style="monokai"  # 测试不同的代码高亮风格
         )
         
-        print(f"✓ PDF字节流生成成功！大小: {len(pdf_bytes2)} 字节")
+        print(f"[OK] PDF字节流生成成功！大小: {len(pdf_bytes2)} 字节")
         
         # 测试3: 简单的Markdown
         print("\n测试3: 简单Markdown内容")
@@ -163,16 +163,17 @@ def hello():
             title="简单测试"
         )
         
-        print(f"✓ 简单PDF生成成功！文件已保存到: {simple_output.absolute()}")
+        print(f"[OK] 简单PDF生成成功！文件已保存到: {simple_output.absolute()}")
         
         print("\n" + "="*50)
-        print("所有测试通过！✓")
+        print("所有测试通过！[OK]")
         print("="*50)
         
     except Exception as e:
-        print(f"\n✗ 测试失败: {e}")
+        print(f"\n[FAIL] 测试失败: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":

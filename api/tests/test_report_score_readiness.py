@@ -283,6 +283,11 @@ def test_report_meta_normalizes_repaired_and_flags_generation_failures(db_sessio
         teamwork_score=70,
         overall_score=70,
         feedback=ReportOrchestrationService.SCORE_FALLBACK_MARKER,
+        status="fallback",
+        scoring_source="fallback",
+        scoring_quality="fallback",
+        failure_code="SCORING_PROVIDER_ERROR",
+        eligible_for_analytics=False,
     )
     db_session.add_all([student, debate, participation, speech, score])
     db_session.commit()
@@ -354,6 +359,10 @@ def test_report_meta_flags_stale_markdown_and_pdf_caches(db_session):
         teamwork_score=78,
         overall_score=80,
         feedback="ready",
+        status="validated",
+        scoring_source="test_fixture",
+        scoring_quality="validated",
+        eligible_for_analytics=True,
     )
     db_session.add_all([student, debate, participation, speech, score])
     db_session.commit()
@@ -435,6 +444,10 @@ async def test_lightweight_recalculation_clears_report_cache_without_replacing_s
         teamwork_score=78,
         overall_score=80,
         feedback="ready",
+        status="validated",
+        scoring_source="test_fixture",
+        scoring_quality="validated",
+        eligible_for_analytics=True,
     )
     db_session.add_all([teacher, student, debate, participation, speech, score])
     db_session.commit()

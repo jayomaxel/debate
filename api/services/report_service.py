@@ -24,6 +24,7 @@ from services.coze_client import CozeClient
 from services.domain_pack_service import DEFAULT_DOMAIN_PACK_ID
 from services.mode_policy_service import DEFAULT_MODE, ModePolicyService
 from services.score_validation_service import ScoreValidationService
+from services.score_eligibility_service import ScoreEligibilityService
 from config import settings
 
 from openpyxl import Workbook
@@ -431,11 +432,15 @@ class ReportGenerator:
             def _compute_final_score(speech_list: List[Speech]) -> Dict:
                 speech_count = len(speech_list)
                 total_duration = sum(max(0, int(s.duration or 0)) for s in speech_list)
-                scored = [score_by_speech_id.get(str(s.id)) for s in speech_list]
-                scored = [s for s in scored if s is not None]
+                all_scored = [score_by_speech_id.get(str(s.id)) for s in speech_list]
+                all_scored = [s for s in all_scored if s is not None]
+                scored = [s for s in all_scored if ScoreEligibilityService.is_eligible(s)]
+                excluded_count = len(all_scored) - len(scored)
                 score_status = (
                     "no_speech"
                     if speech_count == 0
+                    else "excluded"
+                    if not scored and len(all_scored) >= speech_count
                     else "ready"
                     if len(scored) >= speech_count
                     else "processing"
@@ -450,6 +455,7 @@ class ReportGenerator:
                         "overall_score": 0.0,
                         "speech_count": speech_count,
                         "scored_count": len(scored),
+                        "excluded_score_count": excluded_count,
                         "score_status": score_status,
                         "total_duration": total_duration,
                     }
@@ -468,6 +474,7 @@ class ReportGenerator:
                     "overall_score": round(overall_avg, 2),
                     "speech_count": speech_count,
                     "scored_count": len(scored),
+                    "excluded_score_count": excluded_count,
                     "score_status": score_status,
                     "total_duration": total_duration,
                 }
@@ -608,6 +615,10 @@ class ReportGenerator:
                             "teamwork_score": speech_score.teamwork_score,
                             "overall_score": speech_score.overall_score,
                             "feedback": speech_score.feedback or "",
+                            "status": speech_score.status,
+                            "scoring_source": speech_score.scoring_source,
+                            "scoring_quality": speech_score.scoring_quality,
+                            "eligible_for_analytics": bool(speech_score.eligible_for_analytics),
                         }
                         if speech_score
                         else None,
