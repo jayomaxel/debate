@@ -177,10 +177,14 @@ async def test_teacher_can_get_report_with_meta_and_speech_anchors():
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["report_meta"]["report_quality"] == "validated"
+    assert data["report_meta"]["rubric_version"] == "a.rubric.v1"
+    assert data["report_meta"]["evidence_anchor_count"] == 1
+    assert data["report_meta"]["evidence_sources"][0]["source_type"] == "debate_speech"
     assert data["report"]["report_meta"]["report_quality"] == "validated"
     assert data["report"]["statistics"]["score_status"]["ready"] is True
     assert len(data["speech_anchors"]) == 1
     assert data["speech_anchors"][0]["speech_id"] == seeded["speech_id"]
+    assert data["speech_anchors"][0]["source_label"] == "Debate speech transcript"
 
 
 @pytest.mark.asyncio

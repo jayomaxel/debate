@@ -17,6 +17,7 @@ from models.score import Score
 from models.speech import Speech
 from services.report_service import ReportGenerator
 from services.scoring_service import ScoringService
+from services.score_validation_service import ScoreValidationService
 
 
 class ReportOrchestrationService:
@@ -130,8 +131,77 @@ class ReportOrchestrationService:
         return flags
 
     @staticmethod
+    def _score_contract_meta(report_data: Dict[str, Any]) -> Dict[str, Any]:
+        default_meta = ScoreValidationService.build_report_meta(
+            mode=report_data.get("mode")
+        ).to_dict()
+        meta = report_data.get("report_meta")
+        if isinstance(meta, dict):
+            default_meta.update(meta)
+        return default_meta
+
+    @staticmethod
+    def _evidence_source_info(anchor: Dict[str, Any]) -> Dict[str, str]:
+        source_type = str(
+            anchor.get("evidence_source") or anchor.get("source_type") or ""
+        ).strip()
+        source_label = str(anchor.get("source_label") or "").strip()
+        source_document_id = str(anchor.get("source_document_id") or "").strip()
+        anchor_type = str(anchor.get("anchor_type") or "").strip()
+
+        if not source_type:
+            if source_document_id:
+                source_type = "uploaded_document"
+            elif anchor.get("turn_id") or anchor_type == "turn":
+                source_type = "debate_speech"
+            else:
+                source_type = "unknown"
+
+        if not source_label:
+            if source_type == "debate_speech":
+                source_label = "Debate speech transcript"
+            elif source_type == "uploaded_document":
+                source_label = "Uploaded support document"
+            else:
+                source_label = source_type.replace("_", " ")
+
+        return {"source_type": source_type, "label": source_label}
+
+    @staticmethod
+    def _summarize_evidence_sources(
+        evidence_anchors: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        summary_by_type: Dict[str, Dict[str, Any]] = {}
+        for anchor in evidence_anchors or []:
+            if not isinstance(anchor, dict):
+                continue
+            source_info = ReportOrchestrationService._evidence_source_info(anchor)
+            source_type = source_info["source_type"]
+            bucket = summary_by_type.setdefault(
+                source_type,
+                {
+                    "source_type": source_type,
+                    "label": source_info["label"],
+                    "count": 0,
+                },
+            )
+            if not bucket.get("label") and source_info["label"]:
+                bucket["label"] = source_info["label"]
+            bucket["count"] += 1
+        return list(summary_by_type.values())
+
+    @staticmethod
     def build_report_meta(db: Session, debate: Debate) -> Dict[str, Any]:
         report_data = ReportOrchestrationService._safe_report_dict(debate)
+        score_contract_meta = ReportOrchestrationService._score_contract_meta(report_data)
+        evidence_anchors = (
+            report_data.get("evidence_anchors")
+            if isinstance(report_data.get("evidence_anchors"), list)
+            else []
+        )
+        evidence_sources = ReportOrchestrationService._summarize_evidence_sources(
+            evidence_anchors
+        )
         speeches = (
             db.query(Speech)
             .filter(
@@ -160,6 +230,17 @@ class ReportOrchestrationService:
         speech_count = len(valid_speeches)
         scored_count = len(scored_speech_ids)
         missing_count = max(0, speech_count - scored_count)
+        inferred_evidence_count = len(evidence_anchors)
+        inferred_evidence_sources = list(evidence_sources)
+        if inferred_evidence_count == 0 and speech_count > 0:
+            inferred_evidence_count = speech_count
+            inferred_evidence_sources = [
+                {
+                    "source_type": "debate_speech",
+                    "label": "Debate speech transcript",
+                    "count": speech_count,
+                }
+            ]
         score_revision = int(report_data.get("score_revision") or 0)
         legacy_quality = (
             str(report_data.get("report_quality"))
@@ -191,6 +272,14 @@ class ReportOrchestrationService:
                 report_data.get("score_fallback_generated") or fallback_scores
             ),
             "score_fallback_count": len(fallback_scores),
+            "scoring_source": score_contract_meta.get("scoring_source"),
+            "scoring_quality": score_contract_meta.get("scoring_quality"),
+            "provider": score_contract_meta.get("provider"),
+            "prompt_pack_version": score_contract_meta.get("prompt_pack_version"),
+            "rubric_version": score_contract_meta.get("rubric_version"),
+            "calibration_version": score_contract_meta.get("calibration_version"),
+            "mode": score_contract_meta.get("mode") or report_data.get("mode"),
+            "retry_count": int(score_contract_meta.get("retry_count") or 0),
             "score_checked_at": report_data.get("score_checked_at"),
             "score_generated_at": report_data.get("score_generated_at"),
             "report_markdown_status": report_data.get("report_markdown_status"),
@@ -209,6 +298,13 @@ class ReportOrchestrationService:
             "report_quality_supported_values": list(
                 ReportOrchestrationService.REPORT_QUALITY_VALUES
             ),
+            "evidence_anchor_count": inferred_evidence_count,
+            "evidence_source_types": [
+                item["source_type"]
+                for item in inferred_evidence_sources
+                if item.get("source_type")
+            ],
+            "evidence_sources": inferred_evidence_sources,
             "generated_at": datetime.utcnow().isoformat(),
         }
         meta["report_quality"] = ReportOrchestrationService.infer_report_quality(
@@ -218,14 +314,40 @@ class ReportOrchestrationService:
         return meta
 
     @staticmethod
-    def build_speech_anchors(speeches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def build_speech_anchors(
+        speeches: List[Dict[str, Any]],
+        evidence_anchors: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        evidence_by_turn: Dict[str, Dict[str, str]] = {}
+        for evidence_anchor in evidence_anchors or []:
+            if not isinstance(evidence_anchor, dict):
+                continue
+            turn_id = str(evidence_anchor.get("turn_id") or "").strip()
+            if not turn_id or turn_id in evidence_by_turn:
+                continue
+            source_info = ReportOrchestrationService._evidence_source_info(
+                evidence_anchor
+            )
+            evidence_by_turn[turn_id] = {
+                "evidence_source": source_info["source_type"],
+                "source_label": source_info["label"],
+            }
+
         anchors: List[Dict[str, Any]] = []
         for index, speech in enumerate(speeches or [], start=1):
             content = str(speech.get("content") or "").strip()
             score = speech.get("score") if isinstance(speech.get("score"), dict) else None
+            speech_id = str(speech.get("id") or "").strip()
+            source_info = evidence_by_turn.get(
+                speech_id,
+                {
+                    "evidence_source": "debate_speech",
+                    "source_label": "Debate speech transcript",
+                },
+            )
             anchors.append(
                 {
-                    "anchor_id": f"speech:{speech.get('id')}",
+                    "anchor_id": f"speech:{speech_id or speech.get('id')}",
                     "speech_id": speech.get("id"),
                     "sequence": index,
                     "speaker_name": speech.get("speaker_name"),
@@ -235,6 +357,8 @@ class ReportOrchestrationService:
                     "summary": content[:120] + ("..." if len(content) > 120 else ""),
                     "overall_score": score.get("overall_score") if score else None,
                     "score_status": "ready" if score else "missing",
+                    "evidence_source": source_info.get("evidence_source"),
+                    "source_label": source_info.get("source_label"),
                 }
             )
         return anchors
@@ -268,7 +392,8 @@ class ReportOrchestrationService:
         enriched = dict(report_payload or {})
         report_meta = ReportOrchestrationService.build_report_meta(db, debate)
         speech_anchors = ReportOrchestrationService.build_speech_anchors(
-            enriched.get("speeches") or []
+            enriched.get("speeches") or [],
+            enriched.get("evidence_anchors") or [],
         )
         statistics = dict(enriched.get("statistics") or {})
         statistics["speech_anchors"] = speech_anchors

@@ -139,7 +139,11 @@ class Report:
                     "speaker_role": str(speech.get("speaker_role") or speech.get("role") or ""),
                     "excerpt": excerpt[:180],
                     "source_document_id": "",
-                    "source_location": "",
+                    "source_location": f"speech:{turn_id}",
+                    "evidence_source": "debate_speech",
+                    "source_type": "debate_speech",
+                    "source_kind": "speech_turn",
+                    "source_label": "Debate speech transcript",
                     "evidence_relation": "support",
                 }
             )
