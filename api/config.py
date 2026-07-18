@@ -123,6 +123,8 @@ class Settings(BaseSettings):
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     UPLOAD_QUARANTINE_DIR: str = "uploads/quarantine"
+    REPORT_FILE_STORAGE_BACKEND: str = os.getenv("REPORT_FILE_STORAGE_BACKEND", "local")
+    REPORT_FILE_STORAGE_DIR: str = os.getenv("REPORT_FILE_STORAGE_DIR", "private_storage/reports")
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".doc"}
     AVATAR_MAX_UPLOAD_SIZE: int = 2 * 1024 * 1024  # 2MB

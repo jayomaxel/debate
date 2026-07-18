@@ -171,7 +171,11 @@ class ScoringService:
                         "speaker_role": speaker_role,
                         "excerpt": content[:180],
                         "source_document_id": "",
-                        "source_location": "",
+                        "source_location": f"speech:{speech_id}",
+                        "evidence_source": "debate_speech",
+                        "source_type": "debate_speech",
+                        "source_kind": "speech_turn",
+                        "source_label": "Debate speech transcript",
                         "evidence_relation": "support",
                     }
                 )

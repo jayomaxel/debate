@@ -258,6 +258,14 @@ export interface TeacherScoreStatus {
 export interface TeacherReportMeta {
   report_status?: string | null;
   report_quality?: TeacherReportQuality | null;
+  scoring_source?: string | null;
+  scoring_quality?: string | null;
+  provider?: string | null;
+  prompt_pack_version?: string | null;
+  rubric_version?: string | null;
+  calibration_version?: string | null;
+  mode?: string | null;
+  retry_count?: number;
   report_markdown_status?: string | null;
   report_markdown_error?: string | null;
   report_markdown_cache_status?: string | null;
@@ -276,8 +284,17 @@ export interface TeacherReportMeta {
   quality_flags?: string[];
   report_quality_supported_values?: string[];
   legacy_report_quality?: string | null;
+  evidence_anchor_count?: number;
+  evidence_source_types?: string[];
+  evidence_sources?: TeacherEvidenceSourceSummary[];
   recalculated_at?: string | null;
   generated_at?: string | null;
+}
+
+export interface TeacherEvidenceSourceSummary {
+  source_type: string;
+  label?: string | null;
+  count: number;
 }
 
 export interface TeacherSpeechAnchor {
@@ -291,6 +308,8 @@ export interface TeacherSpeechAnchor {
   summary?: string | null;
   overall_score?: number | null;
   score_status?: string | null;
+  evidence_source?: string | null;
+  source_label?: string | null;
 }
 
 export interface TeachingSummaryItem {

@@ -19,6 +19,7 @@ from schemas.operations import ExportStatus, ReportOperationStateContract, Repor
 from services.audit_service import AuditService
 from services.background_job_runtime import DEBATE_REPORT_JOB_TYPE
 from services.background_job_service import BackgroundJobService
+from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import ReportGenerator
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import create_token, hash_password
@@ -130,7 +131,16 @@ def _cache_markdown(debate_id: uuid.UUID, markdown_text: str = "# Report\n\nCach
 
 def test_export_pdf_returns_existing_report_pdf(tmp_path, teacher_token, debate_for_teacher, monkeypatch):
     pdf_bytes = b"%PDF-1.4\n%test\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
-    pdf_path = tmp_path / "existing.pdf"
+    storage_root = tmp_path / "private-report-storage"
+    monkeypatch.setattr(
+        settings,
+        "REPORT_FILE_STORAGE_DIR",
+        str(storage_root),
+        raising=False,
+    )
+    storage_meta = ReportFileStorageService.create_pdf_storage_meta()
+    pdf_path = ReportFileStorageService.resolve_pdf_storage_path(storage_meta)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_path.write_bytes(pdf_bytes)
     from services.file_access_service import FileAccessService
 
@@ -142,7 +152,10 @@ def test_export_pdf_returns_existing_report_pdf(tmp_path, teacher_token, debate_
 
     db = TestingSessionLocal()
     debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
-    debate.report_pdf = str(pdf_path)
+    debate.report = {
+        ReportFileStorageService.PDF_STORAGE_META_KEY: storage_meta,
+    }
+    debate.report_pdf = None
     db.commit()
     db.close()
 
@@ -162,7 +175,9 @@ def test_export_pdf_returns_existing_report_pdf(tmp_path, teacher_token, debate_
 
 def test_export_pdf_uses_default_path_and_writes_report_pdf(tmp_path, teacher_token, debate_for_teacher, monkeypatch):
     upload_dir = tmp_path / "uploads"
+    private_root = tmp_path / "private-report-storage"
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(upload_dir), raising=False)
+    monkeypatch.setattr(settings, "REPORT_FILE_STORAGE_DIR", str(private_root), raising=False)
 
     debate_id = str(debate_for_teacher.id)
     default_path = Path(str(upload_dir).rstrip("/\\")) / "reports" / f"debate_report_{debate_id}.pdf"
@@ -182,17 +197,27 @@ def test_export_pdf_uses_default_path_and_writes_report_pdf(tmp_path, teacher_to
     )
     assert resp.status_code == 200
     assert resp.content == pdf_bytes
+    assert "debate_report_" not in resp.headers["content-disposition"]
 
     db = TestingSessionLocal()
     debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
-    assert debate.report_pdf is not None and str(debate.report_pdf).strip()
+    storage_meta = debate.report.get(ReportFileStorageService.PDF_STORAGE_META_KEY)
+    assert isinstance(storage_meta, dict)
+    assert storage_meta["backend"] == "local"
+    assert debate_id not in storage_meta["storage_key"]
+    assert debate.report_pdf is None
+    migrated_path = ReportFileStorageService.resolve_pdf_storage_path(storage_meta)
+    assert migrated_path.exists()
+    assert not default_path.exists()
     db.close()
 
 
 def test_export_pdf_generation_records_audit_event(tmp_path, teacher_token, debate_for_teacher, monkeypatch):
     AuditService.clear_events()
     upload_dir = tmp_path / "uploads"
+    private_root = tmp_path / "private-report-storage"
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(upload_dir), raising=False)
+    monkeypatch.setattr(settings, "REPORT_FILE_STORAGE_DIR", str(private_root), raising=False)
 
     _cache_markdown(debate_for_teacher.id)
 
@@ -212,6 +237,7 @@ def test_export_pdf_generation_records_audit_event(tmp_path, teacher_token, deba
     )
 
     assert resp.status_code == 200
+    assert "debate_report_" not in resp.headers["content-disposition"]
     events = AuditService.list_events(limit=10, event_type="report_regeneration")
     assert events
     event = events[0]
@@ -220,6 +246,7 @@ def test_export_pdf_generation_records_audit_event(tmp_path, teacher_token, deba
     assert event["metadata"]["action"] == "export_report_pdf"
     assert event["metadata"]["generated_pdf"] is True
     assert event["metadata"]["generated_markdown"] is False
+    assert str(debate_for_teacher.id) not in str(event["metadata"]["pdf_storage_key"])
     AuditService.clear_events()
 
 
@@ -428,7 +455,7 @@ def test_pdf_storage_failure_uses_stable_error_contract(
         return b"%PDF-1.4\n%%EOF"
 
     def failed_write(*args, **kwargs):
-        raise student_router.ReportStorageWriteError("sensitive disk path")
+        raise OSError("sensitive disk path")
 
     monkeypatch.setattr(
         ReportGenerator,
@@ -436,7 +463,12 @@ def test_pdf_storage_failure_uses_stable_error_contract(
         valid_renderer,
         raising=True,
     )
-    monkeypatch.setattr(student_router, "_write_pdf_atomically", failed_write, raising=True)
+    monkeypatch.setattr(
+        ReportFileStorageService,
+        "persist_pdf_bytes_for_debate",
+        failed_write,
+        raising=True,
+    )
     response = client.get(
         f"/api/student/reports/{debate_for_teacher.id}/export/pdf",
         headers={"Authorization": f"Bearer {teacher_token}"},
@@ -454,7 +486,9 @@ def test_pdf_generation_is_atomic_and_three_reads_render_once(
     monkeypatch,
 ):
     upload_dir = tmp_path / "uploads"
+    private_root = tmp_path / "private-report-storage"
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(upload_dir), raising=False)
+    monkeypatch.setattr(settings, "REPORT_FILE_STORAGE_DIR", str(private_root), raising=False)
     _cache_markdown(debate_for_teacher.id)
     calls = 0
 
@@ -479,8 +513,7 @@ def test_pdf_generation_is_atomic_and_three_reads_render_once(
 
     assert [response.status_code for response in responses] == [200, 200, 200]
     assert calls == 1
-    report_dir = upload_dir / "reports"
-    assert not list(report_dir.glob("*.tmp"))
+    assert not list(private_root.rglob("*.tmp"))
 
 
 def test_get_student_report_records_audit_event(teacher_token, debate_for_teacher, monkeypatch):

@@ -60,6 +60,24 @@ const formatMetaStatus = (value?: string | number | boolean | null) => {
   return String(value);
 };
 
+const getScoringSourceLabel = (reportMeta?: TeacherReportMeta | null) => {
+  if (!reportMeta) return '-';
+  const source =
+    reportMeta.scoring_source === 'judge_model'
+      ? '评分模型'
+      : reportMeta.scoring_source === 'fallback'
+        ? '降级补全'
+        : reportMeta.scoring_source || '-';
+  return reportMeta.provider ? `${source} / ${reportMeta.provider}` : source;
+};
+
+const formatEvidenceSources = (sources?: TeacherReportMeta['evidence_sources']) => {
+  if (!sources?.length) return '-';
+  return sources
+    .map((item) => `${item.label || item.source_type || 'unknown'} ×${item.count ?? 0}`)
+    .join('、');
+};
+
 const DebateReportPage: React.FC<DebateReportPageProps> = ({
   debateId,
   studentName,
@@ -342,6 +360,14 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
                   <span>Markdown：{formatMetaStatus(reportMeta?.report_markdown_cache_status || reportMeta?.report_markdown_status)}</span>
                   <span>PDF：{formatMetaStatus(reportMeta?.report_pdf_cache_status || reportMeta?.report_pdf_status)}</span>
                 </div>
+                <div className="mt-2 grid gap-1 text-sm md:grid-cols-2 xl:grid-cols-3">
+                  <span>评分来源：{getScoringSourceLabel(reportMeta)}</span>
+                  <span>量表版本：{formatMetaStatus(reportMeta?.rubric_version)}</span>
+                  <span>Prompt Pack：{formatMetaStatus(reportMeta?.prompt_pack_version)}</span>
+                  <span>校准版本：{formatMetaStatus(reportMeta?.calibration_version)}</span>
+                  <span>证据锚点：{formatMetaStatus(reportMeta?.evidence_anchor_count)}</span>
+                  <span>证据来源：{formatEvidenceSources(reportMeta?.evidence_sources)}</span>
+                </div>
                 {reportMeta?.quality_flags?.length ? (
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     {reportMeta.quality_flags.map((flag) => (
@@ -456,6 +482,9 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
                   {anchor.summary ? (
                     <div className="mt-1 line-clamp-2 text-xs text-slate-500">{anchor.summary}</div>
                   ) : null}
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    证据来源：{anchor.source_label || anchor.evidence_source || 'Debate speech transcript'}
+                  </div>
                 </button>
               ))}
               {!speechAnchors.length ? (

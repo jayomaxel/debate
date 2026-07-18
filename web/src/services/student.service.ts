@@ -5,6 +5,8 @@
 
 import { api } from '../lib/api';
 
+const REPORT_PDF_DOWNLOAD_FILENAME = 'debate-report.pdf';
+
 // ==================== 接口定义 ====================
 
 // 个人信息
@@ -927,7 +929,7 @@ class StudentService {
       const url = window.URL.createObjectURL(response as any);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `debate_report_${debateId}.pdf`;
+      link.download = REPORT_PDF_DOWNLOAD_FILENAME;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);

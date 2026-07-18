@@ -112,6 +112,10 @@ def _seed_completed_debate_graph(suffix: str) -> dict:
                 "report_markdown": "# Cached teacher report",
                 "report_markdown_hash": "hash-before",
                 "report_pdf_markdown_hash": "pdf-hash-before",
+                "report_pdf_storage": {
+                    "backend": "local",
+                    "storage_key": "ab/private-teacher-report.pdf",
+                },
                 "report_quality": "cached",
                 "existing_note": "keep me",
             },
@@ -184,10 +188,14 @@ async def test_teacher_can_get_report_with_meta_and_speech_anchors():
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["report_meta"]["report_quality"] == "validated"
+    assert data["report_meta"]["rubric_version"] == "a.rubric.v1"
+    assert data["report_meta"]["evidence_anchor_count"] == 1
+    assert data["report_meta"]["evidence_sources"][0]["source_type"] == "debate_speech"
     assert data["report"]["report_meta"]["report_quality"] == "validated"
     assert data["report"]["statistics"]["score_status"]["ready"] is True
     assert len(data["speech_anchors"]) == 1
     assert data["speech_anchors"][0]["speech_id"] == seeded["speech_id"]
+    assert data["speech_anchors"][0]["source_label"] == "Debate speech transcript"
 
 
 @pytest.mark.asyncio
@@ -240,6 +248,7 @@ async def test_teacher_recalculation_queues_new_revision_without_rescoring():
         assert "report_markdown" not in debate.report
         assert "report_markdown_hash" not in debate.report
         assert "report_pdf_markdown_hash" not in debate.report
+        assert "report_pdf_storage" not in debate.report
         assert debate.report["existing_note"] == "keep me"
         assert debate.report["report_recalculation_count"] == 1
         assert debate.report_pdf is None

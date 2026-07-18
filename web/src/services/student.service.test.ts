@@ -1345,7 +1345,7 @@ describe('Student Service - Unit Tests', () => {
         responseType: 'blob',
       });
       expect(createObjectURLMock).toHaveBeenCalledWith(mockBlob);
-      expect(linkElement.download).toBe(`debate_report_${debateId}.pdf`);
+      expect(linkElement.download).toBe('debate-report.pdf');
       expect(clickMock).toHaveBeenCalled();
       expect(appendChildMock).toHaveBeenCalled();
       expect(removeChildMock).toHaveBeenCalled();
@@ -1391,7 +1391,7 @@ describe('Student Service - Unit Tests', () => {
       await StudentService.exportReportPDF(debateId);
 
       // Assert - verify filename format
-      expect(linkElement.download).toBe(`debate_report_${debateId}.pdf`);
+      expect(linkElement.download).toBe('debate-report.pdf');
     });
   });
 

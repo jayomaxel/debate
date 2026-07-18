@@ -1,11 +1,9 @@
 """
 学生端API路由
 """
-import os
 import hashlib
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -21,6 +19,7 @@ from services.profile_service import ProfileService
 from services.assessment_service import AssessmentService
 from services.audit_service import AuditService
 from services.debate_service import DebateService
+from services.report_file_storage_service import ReportFileStorageService
 from services.report_orchestration_service import ReportOrchestrationService
 from services.scoring_service import ScoringService
 from services.report_state_service import ReportStateService
@@ -30,7 +29,6 @@ from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_student, PermissionChecker, require_role
 
 from models import Debate,Speech
-from config import settings,BASE_DIR
 
 
 logger = get_logger(__name__)
@@ -563,14 +561,6 @@ def _compute_markdown_hash(markdown_text: str, score_revision: int = 0) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _report_storage_root() -> Path:
-    return (BASE_DIR / settings.UPLOAD_DIR / "reports").resolve()
-
-
-def _default_report_pdf_path(debate_id: str) -> Path:
-    return _report_storage_root() / f"debate_report_{debate_id}.pdf"
-
-
 def _expected_pdf_cache_key(debate: Debate, debate_id: str, markdown_hash: str) -> str:
     return ReportOrchestrationService.compute_pdf_cache_key(
         debate_id,
@@ -598,6 +588,15 @@ def _get_cached_report_markdown(debate: Debate) -> Optional[str]:
     return None
 
 
+def _report_pdf_download_headers(debate: Debate) -> Dict[str, str]:
+    filename = ReportFileStorageService.build_pdf_download_name()
+    return {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
 def _get_report_pdf_cache_response(
     db: Session,
     debate: Debate,
@@ -623,34 +622,22 @@ def _get_report_pdf_cache_response(
     if not cache_is_valid:
         return None
 
-    candidate_paths = []
-    if debate.report_pdf:
-        candidate_paths.append(Path(debate.report_pdf))
-    candidate_paths.append(_default_report_pdf_path(debate_id))
-
-    for pdf_file in candidate_paths:
-        try:
-            safe_pdf_file = FileAccessService.resolve_report_path(pdf_file)
-        except PrivateFileNotFound:
-            continue
-        if safe_pdf_file.exists():
-            try:
-                pdf_bytes = safe_pdf_file.read_bytes()
-            except OSError:
-                continue
-            if not pdf_bytes.startswith(b"%PDF"):
-                continue
-            if debate.report_pdf != safe_pdf_file.as_posix():
-                debate.report_pdf = safe_pdf_file.as_posix()
-                db.commit()
-            return Response(
-                content=pdf_bytes,
-                media_type="application/pdf",
-                headers={
-                    "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf",
-                    **FileAccessService.private_headers(),
-                },
-            )
+    try:
+        _, pdf_file, migrated = ReportFileStorageService.migrate_legacy_pdf_for_debate(
+            debate, debate_id
+        )
+        pdf_bytes = pdf_file.read_bytes() if pdf_file and pdf_file.is_file() else None
+    except (OSError, ValueError):
+        pdf_bytes = None
+        migrated = False
+    if pdf_bytes and pdf_bytes.startswith(b"%PDF"):
+        if migrated:
+            db.commit()
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers=_report_pdf_download_headers(debate),
+        )
 
     return None
 
@@ -660,10 +647,6 @@ async def _ensure_report_ready(db: Session, debate_id: str) -> Dict[str, object]
 
 
 class ReportMarkdownGenerationError(RuntimeError):
-    pass
-
-
-class ReportStorageWriteError(RuntimeError):
     pass
 
 
@@ -685,30 +668,6 @@ def _record_report_failure(
         f"report_{stage}_failed_at": now,
     }
     db.commit()
-
-
-def _write_pdf_atomically(target: Path, pdf_data: bytes) -> None:
-    storage_root = _report_storage_root()
-    resolved_target = target.resolve()
-    try:
-        resolved_target.relative_to(storage_root)
-    except ValueError as exc:
-        raise ReportStorageWriteError("report path is outside the allowed storage root") from exc
-
-    resolved_target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = resolved_target.with_name(
-        f".{resolved_target.name}.{uuid.uuid4().hex}.tmp"
-    )
-    try:
-        temporary.write_bytes(pdf_data)
-        os.replace(temporary, resolved_target)
-    except Exception as exc:
-        raise ReportStorageWriteError(str(exc)) from exc
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _record_report_generation_audit(
@@ -1023,12 +982,12 @@ async def export_report_pdf(
             details={"debate_id": debate_id},
         )
 
-    # Never reuse a stale database path as a write target. Generated reports
-    # always land under the configured private reports directory.
-    target_pdf_path = FileAccessService.allocate_report_path()
     try:
-        _write_pdf_atomically(target_pdf_path, bytes(pdf_data))
-    except ReportStorageWriteError as exc:
+        pdf_storage_meta, target_pdf_path = ReportFileStorageService.persist_pdf_bytes_for_debate(
+            debate,
+            bytes(pdf_data),
+        )
+    except Exception as exc:
         _record_report_failure(
             db,
             debate,
@@ -1066,7 +1025,6 @@ async def export_report_pdf(
     if updated_report:
         debate.report = updated_report
 
-    debate.report_pdf = target_pdf_path.as_posix()
     db.commit()
     _record_report_generation_audit(
         actor_id=actor_id,
@@ -1077,16 +1035,15 @@ async def export_report_pdf(
             "generated_pdf": True,
             "generated_markdown": not markdown_was_cached,
             "pdf_file": target_pdf_path.name,
+            "pdf_storage_backend": pdf_storage_meta.get("backend"),
+            "pdf_storage_key": pdf_storage_meta.get("storage_key"),
         },
     )
     
     return Response(
         content=pdf_data,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f"attachment; filename=debate_report_{debate_id}.pdf",
-            **FileAccessService.private_headers(),
-        }
+        headers=_report_pdf_download_headers(debate),
     )
 
 

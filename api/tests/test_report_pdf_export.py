@@ -1,12 +1,21 @@
+from pathlib import Path
+
 import pytest
 
 from config import settings
+from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import Report, ReportGenerator
 
 
 @pytest.mark.asyncio
 async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        settings,
+        "REPORT_FILE_STORAGE_DIR",
+        str(tmp_path / "private-report-storage"),
+        raising=False,
+    )
 
     async def fake_generate_markdown_via_coze(db, report):
         return f"# Test Report\n\nTopic: {report.topic}\n\nThis is a test speech."
@@ -15,6 +24,16 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
         ReportGenerator,
         "_generate_markdown_via_coze",
         fake_generate_markdown_via_coze,
+        raising=True,
+    )
+
+    async def fake_render_markdown_to_pdf_async(**kwargs):
+        return b"%PDF-1.4\n%private-storage\n%%EOF"
+
+    monkeypatch.setattr(
+        ReportGenerator,
+        "render_markdown_to_pdf_async",
+        fake_render_markdown_to_pdf_async,
         raising=True,
     )
 
@@ -82,6 +101,7 @@ async def test_export_to_pdf_async_generates_pdf(tmp_path, monkeypatch):
     assert isinstance(pdf_bytes, (bytes, bytearray))
     assert bytes(pdf_bytes).startswith(b"%PDF")
 
-    cache_path = ReportGenerator._get_report_pdf_cache_path(report.debate_id)
-    assert cache_path.exists()
-    assert cache_path.read_bytes().startswith(b"%PDF")
+    storage_root = Path(str(getattr(settings, "REPORT_FILE_STORAGE_DIR"))).resolve()
+    cached_files = list(storage_root.rglob("*.pdf"))
+    assert cached_files
+    assert cached_files[0].read_bytes().startswith(b"%PDF")

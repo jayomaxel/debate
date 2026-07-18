@@ -88,12 +88,21 @@ async def test_report_readiness_scores_missing_valid_speeches(db_session):
     assert report_data["domain_pack_id"] == "default"
     assert report_data["report_meta"]["scoring_quality"] == "validated"
     assert report_data["report_meta"]["provider"] == "local"
+    assert report_data["report_meta"]["rubric_version"] == "a.rubric.v1"
     assert report_data["participant_scores"][0]["overall_score"] > 0
     assert report_data["evidence_anchors"][0]["turn_id"] == str(speech.id)
+    assert report_data["evidence_anchors"][0]["source_label"] == "Debate speech transcript"
     assert report_data["turning_points"][0]["turn_id"] == str(speech.id)
     assert report_data["team_summary"]["positive"]["participant_count"] == 1
     assert report_data["statistics"]["calibration_summary"]["calibration_version"] == "a.calibration.v1"
     assert "anomaly_samples" in report_data["statistics"]
+
+    meta = ReportOrchestrationService.build_report_meta(db_session, debate)
+    assert meta["scoring_source"] == "judge_model"
+    assert meta["rubric_version"] == "a.rubric.v1"
+    assert meta["evidence_anchor_count"] == 1
+    assert meta["evidence_sources"][0]["source_type"] == "debate_speech"
+    assert meta["evidence_sources"][0]["label"] == "Debate speech transcript"
 
 
 def test_report_includes_participants_without_speeches(db_session):
@@ -295,6 +304,7 @@ def test_report_meta_normalizes_repaired_and_flags_generation_failures(db_sessio
     meta = ReportOrchestrationService.build_report_meta(db_session, debate)
 
     assert meta["report_quality"] == "partial"
+    assert meta["rubric_version"] == "a.rubric.v1"
     assert meta["legacy_report_quality"] == "repaired"
     assert "repaired" not in meta["report_quality_supported_values"]
     assert meta["score_fallback_detected"] is True
@@ -410,6 +420,10 @@ async def test_lightweight_recalculation_clears_report_cache_without_replacing_s
             "report_markdown": "# old",
             "report_markdown_hash": "old-hash",
             "report_pdf_markdown_hash": "old-pdf-hash",
+            "report_pdf_storage": {
+                "backend": "local",
+                "storage_key": "ab/private-report.pdf",
+            },
             "report_quality": "fallback",
         },
         report_pdf="old.pdf",
@@ -460,5 +474,6 @@ async def test_lightweight_recalculation_clears_report_cache_without_replacing_s
     assert refreshed.report_pdf is None
     assert "report_markdown" not in refreshed.report
     assert "report_markdown_hash" not in refreshed.report
+    assert "report_pdf_storage" not in refreshed.report
     assert refreshed.report["report_recalculation_count"] == 1
     assert meta["report_quality"] == "validated"
