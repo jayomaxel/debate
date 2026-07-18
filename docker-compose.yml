@@ -52,6 +52,13 @@ services:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required. Use --env-file .env.deploy with docker-compose.yml.}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required. Use --env-file .env.deploy with docker-compose.yml.}
+      E2E_HEALTH_PROBE_ENABLED: ${E2E_HEALTH_PROBE_ENABLED:-true}
+      E2E_HEALTH_PROBE_AUDIO_PATH: ${E2E_HEALTH_PROBE_AUDIO_PATH:-/app/health_fixtures/e2e_probe.wav}
+      E2E_HEALTH_PROBE_AUDIO_FORMAT: ${E2E_HEALTH_PROBE_AUDIO_FORMAT:-wav}
+      E2E_HEALTH_PROBE_EXPECTED_TEXT: ${E2E_HEALTH_PROBE_EXPECTED_TEXT:-健康探针}
+      E2E_HEALTH_PROBE_TIMEOUT_SECONDS: ${E2E_HEALTH_PROBE_TIMEOUT_SECONDS:-30}
+      E2E_HEALTH_PROBE_TOKEN: ${E2E_HEALTH_PROBE_TOKEN:-}
+      RELEASE_GATE_REQUIRE_E2E_HEALTH: ${RELEASE_GATE_REQUIRE_E2E_HEALTH:-true}
     command: >
       sh -c "alembic upgrade head &&
       uvicorn main:app --host 0.0.0.0 --port 7860"

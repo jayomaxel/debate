@@ -32,3 +32,4 @@ def test_metrics_endpoint_exposes_operational_status(monkeypatch):
     assert response.status_code == 200
     assert "debate_database_up" in body
     assert "debate_redis_enabled" in body
+    assert "debate_e2e_probe_up" in body

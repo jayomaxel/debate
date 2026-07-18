@@ -4,10 +4,11 @@ FastAPI application entrypoint.
 
 from pathlib import Path
 from time import time
+from hmac import compare_digest
 
 import uvicorn
 import database as database_module
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,10 @@ from middleware.upload_guard import UploadGuardMiddleware
 from routers import admin, admin_kb, auth, student, student_kb, teacher, voice, websocket
 from services.kb_seed_service import KBSeedService
 from services.kb_vector_schema_service import KBVectorSchemaService
+from services.e2e_health_probe_service import (
+    e2e_health_probe_service,
+    get_last_probe_state,
+)
 from utils.http_client_pool import async_http_client_pool
 
 
@@ -155,6 +160,24 @@ async def _ai_runtime_health() -> dict:
         return {"status": "error", "error": str(exc), "services": {}}
     finally:
         db.close()
+
+
+def _e2e_health_snapshot() -> dict:
+    """Expose the last probe result without running an expensive probe."""
+    return {
+        "enabled": bool(settings.E2E_HEALTH_PROBE_ENABLED),
+        "release_gate_required": bool(settings.RELEASE_GATE_REQUIRE_E2E_HEALTH),
+        "last": get_last_probe_state(),
+    }
+
+
+def _authorize_e2e_probe(request: Request) -> None:
+    expected_token = (settings.E2E_HEALTH_PROBE_TOKEN or "").strip()
+    if not expected_token:
+        return
+    supplied_token = request.headers.get("X-E2E-Probe-Token", "")
+    if not supplied_token or not compare_digest(supplied_token, expected_token):
+        raise HTTPException(status_code=403, detail="Invalid E2E probe token")
 
 @app.on_event("startup")
 async def startup_event():
@@ -328,6 +351,7 @@ async def health_check():
             "port": settings.REDIS_PORT,
         },
         "ai": ai_runtime,
+        "e2e": _e2e_health_snapshot(),
     }
 
     if database_error:
@@ -336,6 +360,35 @@ async def health_check():
     if redis_error:
         payload["redis"]["error"] = redis_error
 
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.get("/health/e2e")
+@app.get("/api/health/e2e")
+@app.get("/health/readiness")
+@app.get("/api/health/readiness")
+async def e2e_health_check(request: Request):
+    """Run the production speech -> transcript -> AI response health probe."""
+    _authorize_e2e_probe(request)
+
+    if database_module.SessionLocal is None:
+        payload = {
+            "status": "unavailable",
+            "error": "database session factory is not initialized",
+            "release_gate": {
+                "required": bool(settings.RELEASE_GATE_REQUIRE_E2E_HEALTH),
+                "eligible": False,
+            },
+        }
+        return JSONResponse(status_code=503, content=payload)
+
+    db = database_module.SessionLocal()
+    try:
+        payload = await e2e_health_probe_service.run(db)
+    finally:
+        db.close()
+
+    status_code = 200 if payload.get("status") == "passed" else 503
     return JSONResponse(status_code=status_code, content=payload)
 
 
