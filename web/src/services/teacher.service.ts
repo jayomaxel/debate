@@ -9,6 +9,9 @@ import type {
   DebateConfigMeta,
   RoleAssignmentInput,
   RoleAssignmentPreviewContract,
+  TopicRecommendationAnalyticsContract,
+  TopicRecommendationDashboardContract,
+  TopicRecommendationRunSummary,
   TeachingDesignPayload,
   TeachingDesignVersionContract,
   TopicRecommendationRunContract,
@@ -546,6 +549,21 @@ class TeacherService {
     }
   }
 
+  static async downloadDebateSupportDocument(
+    debateId: string,
+    documentId: string
+  ): Promise<Blob> {
+    try {
+      return await api.get<Blob>(
+        `/api/teacher/debates/${debateId}/support-documents/${documentId}/download`,
+        { responseType: 'blob' }
+      );
+    } catch (error) {
+      console.error('[TeacherService] Download debate support document failed:', error);
+      throw error;
+    }
+  }
+
   static async getCurrentTeachingDesign(
     classId: string
   ): Promise<TeachingDesignVersionContract | null> {
@@ -559,6 +577,42 @@ class TeacherService {
   ): Promise<TeachingDesignVersionContract[]> {
     return await api.get<TeachingDesignVersionContract[]>(
       '/api/teacher/classes/' + classId + '/teaching-design/versions'
+    );
+  }
+
+  static async getTeachingDesignVersion(
+    classId: string,
+    versionId: string
+  ): Promise<TeachingDesignVersionContract> {
+    return await api.get<TeachingDesignVersionContract>(
+      `/api/teacher/classes/${classId}/teaching-design/versions/${versionId}`
+    );
+  }
+
+  static async activateTeachingDesignVersion(
+    classId: string,
+    versionId: string
+  ): Promise<TeachingDesignVersionContract> {
+    return await api.post<TeachingDesignVersionContract>(
+      `/api/teacher/classes/${classId}/teaching-design/versions/${versionId}/activate`
+    );
+  }
+
+  static async correctTeachingDesignVersion(
+    classId: string,
+    versionId: string,
+    payload: TeachingDesignPayload,
+    versionName?: string,
+    correctionNotes?: string
+  ): Promise<TeachingDesignVersionContract> {
+    return await api.post<TeachingDesignVersionContract>(
+      `/api/teacher/classes/${classId}/teaching-design/versions/${versionId}/correct`,
+      {
+        version_name: versionName,
+        title: payload.course_title || versionName,
+        correction_notes: correctionNotes,
+        extracted_payload: payload,
+      }
     );
   }
 
@@ -605,6 +659,72 @@ class TeacherService {
     return await api.post<TopicRecommendationRunContract>(
       '/api/teacher/classes/' + classId + '/topic-recommendations',
       params
+    );
+  }
+
+  static async listTopicRecommendationRuns(
+    classId: string,
+    params: {
+      limit?: number;
+      date_from?: string;
+      date_to?: string;
+    } = {}
+  ): Promise<TopicRecommendationRunSummary[]> {
+    return await api.get<TopicRecommendationRunSummary[]>(
+      `/api/teacher/classes/${classId}/topic-recommendations`,
+      { params }
+    );
+  }
+
+  static async getTopicRecommendationAnalytics(
+    classId: string,
+    params: {
+      date_from?: string;
+      date_to?: string;
+    } = {}
+  ): Promise<TopicRecommendationAnalyticsContract> {
+    return await api.get<TopicRecommendationAnalyticsContract>(
+      `/api/teacher/classes/${classId}/topic-recommendations/analytics`,
+      { params }
+    );
+  }
+
+  static async getTopicRecommendationDashboard(
+    classId: string,
+    params: {
+      recent_limit?: number;
+      leaderboard_limit?: number;
+      observation_limit?: number;
+      date_from?: string;
+      date_to?: string;
+    } = {}
+  ): Promise<TopicRecommendationDashboardContract> {
+    return await api.get<TopicRecommendationDashboardContract>(
+      `/api/teacher/classes/${classId}/topic-recommendations/dashboard`,
+      { params }
+    );
+  }
+
+  static async getTopicRecommendationVersionComparison(
+    classId: string,
+    params: {
+      current_version_id?: string;
+      previous_version_id?: string;
+      date_from?: string;
+      date_to?: string;
+    } = {}
+  ): Promise<TopicRecommendationAnalyticsContract['version_comparison_summary']> {
+    return await api.get<TopicRecommendationAnalyticsContract['version_comparison_summary']>(
+      `/api/teacher/classes/${classId}/topic-recommendations/version-comparison`,
+      { params }
+    );
+  }
+
+  static async getTopicRecommendationRun(
+    runId: string
+  ): Promise<TopicRecommendationRunContract> {
+    return await api.get<TopicRecommendationRunContract>(
+      `/api/teacher/topic-recommendations/${runId}`
     );
   }
 

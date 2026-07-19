@@ -6,6 +6,10 @@ import TeacherService from '@/services/teacher.service';
 vi.mock('@/services/teacher.service', () => ({
   default: {
     getCurrentTeachingDesign: vi.fn(),
+    listTeachingDesignVersions: vi.fn(),
+    getTeachingDesignVersion: vi.fn(),
+    activateTeachingDesignVersion: vi.fn(),
+    correctTeachingDesignVersion: vi.fn(),
     uploadTeachingDesign: vi.fn(),
     saveTeachingDesign: vi.fn(),
   },
@@ -14,6 +18,7 @@ vi.mock('@/services/teacher.service', () => ({
 describe('TeachingDesignManager', () => {
   beforeEach(() => {
     vi.mocked(TeacherService.getCurrentTeachingDesign).mockResolvedValue(null);
+    vi.mocked(TeacherService.listTeachingDesignVersions).mockResolvedValue([]);
   });
 
   it('shows the independent teaching design entry and empty state', async () => {

@@ -46,6 +46,7 @@ export interface TeachingDesignViewModel {
 
 export interface TopicCandidateContract {
   candidate_id: string;
+  candidate_order?: number;
   topic_text: string;
   mapped_course_objectives: string[];
   mapped_knowledge_points: string[];
@@ -54,14 +55,166 @@ export interface TopicCandidateContract {
   difficulty_level?: string | null;
   recommendation_reason?: string | null;
   evidence_basis: string[];
+  quality_score?: number | null;
+  quality_flags?: string[];
+  adoption_stats?: TopicRecommendationAdoptionSummary & {
+    is_adopted?: boolean;
+  };
 }
 
 export interface TopicRecommendationRunContract {
   run_id: string;
+  recommendation_run_id?: string;
+  parent_run_id?: string | null;
   status: 'ready' | 'partial' | 'unavailable';
+  legacy_status?: string;
+  teaching_design_status?: string;
   teaching_design_version_id?: string | null;
+  mode?: 'competition' | 'teaching';
+  activity_focus?: DebateConfigMeta['activity_focus'];
+  generation_source?: string;
+  provider?: string;
+  generation_quality?: string;
+  retry_count?: number;
+  preferred_count?: number;
+  difficulty_preference?: string | null;
   warnings: string[];
+  generated_at?: string | null;
+  candidate_count?: number;
+  candidate_topics?: string[];
+  adoption_summary?: TopicRecommendationAdoptionSummary;
   candidates: TopicCandidateContract[];
+}
+
+export interface TopicRecommendationAdoptionSummary {
+  total_adoptions: number;
+  direct_adoptions: number;
+  edited_adoptions: number;
+  debate_adoptions: number;
+  reservation_adoptions: number;
+  distinct_candidates_adopted?: number;
+  last_adopted_at?: string | null;
+}
+
+export type TopicRecommendationRunSummary = Omit<
+  TopicRecommendationRunContract,
+  'candidates'
+> & {
+  candidates?: TopicCandidateContract[];
+};
+
+export interface TopicRecommendationVersionBreakdown {
+  teaching_design_version_id: string;
+  version_name?: string | null;
+  title?: string | null;
+  is_active?: boolean;
+  total_runs: number;
+  total_candidates: number;
+  adopted_run_count: number;
+  adopted_candidate_count: number;
+  total_adoptions: number;
+  direct_adoptions: number;
+  edited_adoptions: number;
+  run_adoption_rate: number;
+  candidate_adoption_rate: number;
+  last_generated_at?: string | null;
+  last_adopted_at?: string | null;
+}
+
+export interface TopicRecommendationVersionComparisonSummary {
+  current_version?: TopicRecommendationVersionBreakdown | null;
+  previous_version?: TopicRecommendationVersionBreakdown | null;
+  delta?: Record<string, number>;
+}
+
+export interface TopicRecommendationAnalyticsContract {
+  class_id: string;
+  date_from?: string | null;
+  date_to?: string | null;
+  total_runs: number;
+  total_candidates: number;
+  adopted_run_count: number;
+  adopted_candidate_count: number;
+  total_adoptions: number;
+  direct_adoptions: number;
+  edited_adoptions: number;
+  debate_adoptions: number;
+  reservation_adoptions: number;
+  run_adoption_rate: number;
+  candidate_adoption_rate: number;
+  average_candidates_per_run: number;
+  quality_counts: Record<string, number>;
+  provider_counts: Record<string, number>;
+  status_counts: Record<string, number>;
+  quality_rates: Record<string, number>;
+  version_breakdown: TopicRecommendationVersionBreakdown[];
+  version_comparison_summary?: TopicRecommendationVersionComparisonSummary;
+  last_generated_at?: string | null;
+  last_adopted_at?: string | null;
+  latest_run_id?: string | null;
+}
+
+export interface TopicRecommendationRankedCandidate {
+  run_id: string;
+  candidate_id: string;
+  candidate_order?: number;
+  topic_text: string;
+  difficulty_level?: string | null;
+  recommendation_reason?: string | null;
+  quality_score?: number | null;
+  quality_flags?: string[];
+  total_adoptions: number;
+  direct_adoptions: number;
+  edited_adoptions: number;
+  debate_adoptions?: number;
+  reservation_adoptions?: number;
+  last_adopted_at?: string | null;
+}
+
+export interface TopicRecommendationDashboardContract {
+  class_id: string;
+  date_from?: string | null;
+  date_to?: string | null;
+  summary: Pick<
+    TopicRecommendationAnalyticsContract,
+    | 'total_runs'
+    | 'total_candidates'
+    | 'adopted_run_count'
+    | 'adopted_candidate_count'
+    | 'total_adoptions'
+    | 'run_adoption_rate'
+    | 'candidate_adoption_rate'
+    | 'average_candidates_per_run'
+    | 'direct_adoptions'
+    | 'edited_adoptions'
+    | 'debate_adoptions'
+    | 'reservation_adoptions'
+  >;
+  quality: Pick<
+    TopicRecommendationAnalyticsContract,
+    | 'quality_counts'
+    | 'quality_rates'
+    | 'provider_counts'
+    | 'status_counts'
+    | 'version_breakdown'
+    | 'version_comparison_summary'
+  >;
+  timeline: {
+    latest_run_id?: string | null;
+    last_generated_at?: string | null;
+    last_adopted_at?: string | null;
+    latest_run?: TopicRecommendationRunSummary | null;
+    latest_adopted_run?: TopicRecommendationRunSummary | null;
+  };
+  leaderboards: {
+    top_adopted_candidates: TopicRecommendationRankedCandidate[];
+    top_edited_candidates: TopicRecommendationRankedCandidate[];
+  };
+  observations: {
+    high_quality_low_adoption_candidates: TopicRecommendationRankedCandidate[];
+    high_quality_edited_only_candidates: TopicRecommendationRankedCandidate[];
+  };
+  recent_runs: TopicRecommendationRunSummary[];
 }
 
 export type DebateRole = 'debater_1' | 'debater_2' | 'debater_3' | 'debater_4';
