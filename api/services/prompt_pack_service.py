@@ -47,6 +47,58 @@ DEBATE_FUNDAMENTALS = [
     "与队友口径保持一致；重复已有观点时必须增加新的回应、证据、比较或战略价值。",
 ]
 
+# These contracts are deliberately separate from the longer playbook prose. They
+# are the short, executable instructions that keep a debate turn from degrading
+# into a transcript summary when the model is given a lot of history.
+DEBATE_TASK_EXECUTION_CONTRACTS: Dict[str, Dict[str, Any]] = {
+    "question_response": {
+        "target": "the opponent's question or claim in task_data.question",
+        "mandatory_sequence": [
+            "Answer the question directly in the first sentence.",
+            "State whether the opponent's premise or conclusion is valid, invalid, or valid only under a stated condition.",
+            "Explain one concrete reason using a mechanism, evidence, boundary, or proof burden.",
+            "Connect the answer back to the assigned stance and the current clash.",
+        ],
+        "hard_fail_conditions": [
+            "Repeating the question and adding only a summary.",
+            "Avoiding the question by changing the topic.",
+            "Giving a conclusion without explaining why the opponent's reasoning succeeds or fails.",
+        ],
+    },
+    "rebuttal": {
+        "target": "the opponent's argument in task_data.opponent_argument",
+        "mandatory_sequence": [
+            "Identify the opponent's central claim in one short clause; do not quote the whole speech.",
+            "Directly state the decisive problem with that claim, premise, mechanism, evidence, or impact.",
+            "Explain why that problem breaks or limits the opponent's conclusion.",
+            "Rebuild the assigned side's argument with a mechanism, evidence, or alternative explanation.",
+            "Compare the consequences and explain why the assigned side is stronger on this clash.",
+        ],
+        "hard_fail_conditions": [
+            "Paraphrasing or repeating the opponent without a direct challenge.",
+            "Saying only that the opponent is wrong without a reason.",
+            "Adding a generic summary that never identifies what changes in the comparison.",
+            "Attacking a claim that does not appear in the supplied opponent argument.",
+        ],
+    },
+    "free_debate_speech": {
+        "target": "the latest opponent argument in task_data.opponent_argument, supported by task_data.recent_speeches",
+        "mandatory_sequence": [
+            "When an opponent argument is available, make it the first and primary target.",
+            "Open with a direct answer or challenge instead of a neutral recap.",
+            "Give one reasoned rebuttal with a mechanism, evidence, boundary, or proof burden.",
+            "Add only the supporting point needed to advance the assigned side.",
+            "Close with a comparison of impact, probability, scope, reversibility, or proof burden.",
+        ],
+        "hard_fail_conditions": [
+            "Repeating the latest speech and then summarizing it.",
+            "Producing a standalone opening statement when an opponent argument is available.",
+            "Listing several shallow objections without completing one rebuttal.",
+        ],
+    },
+}
+
+
 JUDGE_ADJUDICATION_POLICY = {
     "scope": [
         "本规则只用于 speech_score 单段发言评分和 batch_debate_evaluation 全场胜负裁决。",
@@ -620,6 +672,11 @@ class PromptPackService:
                 "是否满足输出格式与长度限制",
             ],
         }
+        execution_contract = DEBATE_TASK_EXECUTION_CONTRACTS.get(task_type)
+        if execution_contract:
+            playbook["task_execution_contract"] = cls._normalize_task_data(
+                execution_contract
+            )
         if context.agent in {"debater", "mentor", "judge"} and role_playbook:
             playbook["speaker_role_playbook"] = cls._normalize_task_data(role_playbook)
         if context.agent == "judge" and role_playbook:
