@@ -4,6 +4,8 @@
  */
 
 import { api } from '../lib/api';
+import { toReportViewModel } from '../lib/frontend-adapters';
+import type { FrontendReportViewModel, ReportContract } from '../lib/frontend-contracts';
 
 const REPORT_PDF_DOWNLOAD_FILENAME = 'debate-report.pdf';
 
@@ -408,59 +410,8 @@ export interface ClassComparison {
   sample_size: number;
 }
 
-// 辩论报告（学生端报告查看接口 /api/student/reports/{debate_id}）
-export interface DebateReport {
-  debate_id: string;
-  topic: string;
-  start_time: string | null;
-  end_time: string | null;
-  duration: number;
-  participants: Array<{
-    user_id: string;
-    name: string;
-    role: string;
-    stance: string;
-    is_ai?: boolean;
-    has_speech?: boolean;
-    score_status?: 'ready' | 'no_speech' | 'processing' | 'failed' | string;
-    speech_count?: number;
-    final_score: {
-      logic_score: number;
-      argument_score: number;
-      response_score: number;
-      persuasion_score: number;
-      teamwork_score: number;
-      overall_score: number;
-      speech_count: number;
-      total_duration?: number;
-    };
-  }>;
-  speeches: Array<{
-    id: string;
-    speaker_user_id?: string | null;
-    speaker_type?: string;
-    speaker_role?: string;
-    speaker_name?: string;
-    stance?: string | null;
-    role?: string | null;
-    phase: string;
-    content: string;
-    duration: number;
-    timestamp: string;
-    score: {
-      logic_score: number;
-      argument_score: number;
-      response_score: number;
-      persuasion_score: number;
-      teamwork_score: number;
-      overall_score: number;
-      feedback: string;
-    } | null;
-  }>;
-  statistics: Record<string, unknown>;
-  winner: string;
-  summary?: string;
-}
+// 页面只消费适配后的报告 ViewModel。
+export type DebateReport = FrontendReportViewModel;
 
 // 知识库
 export interface KBSource {
@@ -921,7 +872,8 @@ class StudentService {
    */
   static async getReport(debateId: string): Promise<DebateReport> {
     try {
-      return await api.get<DebateReport>(`/api/student/reports/${debateId}`);
+      const response = await api.get<ReportContract>(`/api/student/reports/${debateId}`);
+      return toReportViewModel(response);
     } catch (error) {
       console.error('[StudentService] Get report failed:', error);
       throw error;

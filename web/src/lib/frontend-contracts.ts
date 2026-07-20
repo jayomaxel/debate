@@ -1,4 +1,8 @@
-export type TeachingDesignStatus = 'extracting' | 'ready' | 'needs_review' | 'failed';
+export type TeachingDesignStatus =
+  | 'extracting'
+  | 'ready'
+  | 'needs_review'
+  | 'failed';
 
 export interface TeachingDesignPayload {
   course_title?: string | null;
@@ -223,7 +227,10 @@ export interface DebateConfigMeta {
   mode?: 'competition' | 'teaching';
   role_assignment_mode?: 'strength_first' | 'growth_first';
   assignment_policy?: 'ai_auto_assign' | 'ai_recommend_then_confirm';
-  role_rotation_policy?: 'balanced_rotation' | 'strength_priority' | 'growth_priority';
+  role_rotation_policy?:
+    | 'balanced_rotation'
+    | 'strength_priority'
+    | 'growth_priority';
   rounds?: number;
   knowledge_points?: string[];
   objective?: string[];
@@ -272,6 +279,164 @@ export interface AssignmentViewModel {
     score?: number | null;
     confidence?: number | null;
   }>;
+}
+
+export interface ReportScoreContract {
+  logic_score?: number | null;
+  argument_score?: number | null;
+  response_score?: number | null;
+  persuasion_score?: number | null;
+  teamwork_score?: number | null;
+  overall_score?: number | null;
+  speech_count?: number | null;
+  total_duration?: number | null;
+  feedback?: string | null;
+}
+
+export interface ReportParticipantContract {
+  user_id: string;
+  name?: string | null;
+  role?: string | null;
+  stance?: string | null;
+  is_ai?: boolean;
+  has_speech?: boolean;
+  score_status?: string | null;
+  speech_count?: number | null;
+  final_score?: ReportScoreContract | null;
+}
+
+export interface ReportSpeechContract {
+  id: string;
+  debate_id?: string | null;
+  user_id?: string | null;
+  speaker_user_id?: string | null;
+  speaker_type?: string | null;
+  speaker_role?: string | null;
+  speaker_name?: string | null;
+  stance?: string | null;
+  role?: string | null;
+  phase?: string | null;
+  content?: string | null;
+  duration?: number | null;
+  timestamp?: string | null;
+  created_at?: string | null;
+  score?: ReportScoreContract | null;
+}
+
+export interface ReportContract {
+  debate_id: string;
+  student_id?: string | null;
+  topic?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  duration?: number | null;
+  participants?: ReportParticipantContract[] | null;
+  speeches?: ReportSpeechContract[] | null;
+  statistics?: Record<string, unknown> | null;
+  winner?: string | null;
+  summary?: string | null;
+  role?: string | null;
+  stance?: string | null;
+  final_score?: number | null;
+  ability_scores?: {
+    logic?: number | null;
+    expression?: number | null;
+    rebuttal?: number | null;
+    teamwork?: number | null;
+    knowledge?: number | null;
+  } | null;
+  feedback?: string | null;
+  generated_at?: string | null;
+}
+
+export interface FrontendReportViewModel {
+  debate_id: string;
+  topic: string;
+  start_time: string | null;
+  end_time: string | null;
+  duration: number;
+  participants: Array<{
+    user_id: string;
+    name: string;
+    role: string;
+    stance: string;
+    is_ai?: boolean;
+    has_speech?: boolean;
+    score_status?: string;
+    speech_count?: number;
+    final_score: {
+      logic_score: number;
+      argument_score: number;
+      response_score: number;
+      persuasion_score: number;
+      teamwork_score: number;
+      overall_score: number;
+      speech_count: number;
+      total_duration?: number;
+    };
+  }>;
+  speeches: Array<{
+    id: string;
+    speaker_user_id?: string | null;
+    speaker_type?: string;
+    speaker_role?: string;
+    speaker_name?: string;
+    stance?: string | null;
+    role?: string | null;
+    phase: string;
+    content: string;
+    duration: number;
+    timestamp: string;
+    score: {
+      logic_score: number;
+      argument_score: number;
+      response_score: number;
+      persuasion_score: number;
+      teamwork_score: number;
+      overall_score: number;
+      feedback: string;
+    } | null;
+  }>;
+  statistics: Record<string, unknown>;
+  winner: string;
+  summary?: string;
+  student_id?: string;
+  role?: string;
+  stance?: string;
+  final_score?: number;
+  ability_scores?: {
+    logic: number;
+    expression: number;
+    rebuttal: number;
+    teamwork: number;
+    knowledge: number;
+  };
+  feedback?: string;
+  generated_at?: string;
+}
+
+export type FrontendAuthStatus =
+  | 'initializing'
+  | 'authenticated'
+  | 'anonymous'
+  | 'expired'
+  | 'error';
+
+export interface FrontendAuthStateShape<TUser = unknown> {
+  status: FrontendAuthStatus;
+  isAuthenticated: boolean;
+  user: TUser | null;
+  loading: boolean;
+  error: string | null;
+}
+
+export interface AuthStateSource<TUser = unknown> {
+  status?: FrontendAuthStatus;
+  isAuthenticated?: boolean;
+  user?: TUser | null;
+  loading?: boolean;
+  error?: string | null;
+  expired?: boolean;
 }
 
 export interface SupportDocumentSummarySchema {
