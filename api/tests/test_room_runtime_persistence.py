@@ -1,10 +1,15 @@
 import uuid
+import asyncio
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
 from models.debate import Debate
-from services.room_manager import DebatePhase, DebateRoomManager
+import services.flow_controller as flow_controller_module
+import services.room_manager as room_manager_module
+from services.flow_controller import DebateFlowController
+from services.room_manager import DebatePhase, DebateRoomManager, RoomState
 
 
 def _debate() -> Debate:
@@ -75,3 +80,106 @@ async def test_persisted_mic_claim_blocks_fresh_manager(db_session):
     assert second_claim["allowed"] is False
     assert second_claim["reason"] == "occupied"
     assert second_claim["mic_owner_user_id"] == "user-one"
+
+
+@pytest.mark.asyncio
+async def test_resume_flow_repairs_partial_opening_snapshot(db_session, monkeypatch):
+    debate = _debate()
+    db_session.add(debate)
+    db_session.commit()
+    room_id = str(debate.id)
+
+    manager = DebateRoomManager()
+    room_state = await manager.create_room(room_id, room_id, db_session)
+    room_state.current_phase = DebatePhase.OPENING
+    room_state.match_state = "OPENING_PRO"
+    room_state.room_status = "ongoing"
+    room_state.segment_index = 0
+    room_state.segment_id = None
+    room_state.segment_start_time = None
+    room_state.segment_time_remaining = 0
+    room_state.current_speaker = None
+    room_state.speaker_mode = None
+    room_state.speaker_options = []
+    room_state.flow_segments = []
+    assert manager._persist_runtime_state(room_state, db_session)
+
+    restarted_manager = DebateRoomManager()
+    restored = await restarted_manager.create_room(room_id, room_id, db_session)
+    controller = DebateFlowController()
+    monkeypatch.setattr(flow_controller_module, "room_manager", restarted_manager)
+    monkeypatch.setattr(controller, "start_timer", AsyncMock())
+    monkeypatch.setattr(
+        controller,
+        "_sync_upcoming_ai_prethinking",
+        AsyncMock(),
+    )
+
+    assert await controller.resume_flow(room_id) is True
+
+    assert controller.segment_index[room_id] == 0
+    assert restored.segment_id == "opening_positive_1"
+    assert restored.current_speaker == "debater_1"
+    assert restored.segment_time_remaining == 180
+    assert restored.speaker_mode == "fixed"
+    assert restored.speaker_options == ["debater_1"]
+    assert restored.flow_segments[0]["speaker_roles"] == ["debater_1"]
+    controller.start_timer.assert_awaited_once_with(room_id)
+
+
+@pytest.mark.asyncio
+async def test_empty_room_grace_survives_navigation_reconnect(monkeypatch):
+    manager = DebateRoomManager()
+    room_id = str(uuid.uuid4())
+    manager.rooms[room_id] = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        room_status="ongoing",
+        participants=[{"user_id": "student-one", "role": "debater_1"}],
+    )
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(room_manager_module, "EMPTY_ROOM_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(
+        flow_controller_module.flow_controller,
+        "cleanup_room",
+        cleanup_mock,
+    )
+
+    assert await manager.leave_room(room_id, "student-one") is True
+    assert manager.get_room_state(room_id) is not None
+
+    manager._cancel_empty_room_cleanup(room_id)
+    manager.get_room_state(room_id).participants.append(
+        {"user_id": "student-one", "role": "debater_1"}
+    )
+    await asyncio.sleep(0.08)
+
+    assert manager.get_room_state(room_id) is not None
+    cleanup_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_empty_room_is_cleaned_after_grace(monkeypatch):
+    manager = DebateRoomManager()
+    room_id = str(uuid.uuid4())
+    manager.rooms[room_id] = RoomState(
+        room_id=room_id,
+        debate_id=str(uuid.uuid4()),
+        current_phase=DebatePhase.OPENING,
+        room_status="ongoing",
+        participants=[{"user_id": "student-one", "role": "debater_1"}],
+    )
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(room_manager_module, "EMPTY_ROOM_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(
+        flow_controller_module.flow_controller,
+        "cleanup_room",
+        cleanup_mock,
+    )
+
+    assert await manager.leave_room(room_id, "student-one") is True
+    await asyncio.sleep(0.04)
+
+    assert manager.get_room_state(room_id) is None
+    cleanup_mock.assert_awaited_once_with(room_id)

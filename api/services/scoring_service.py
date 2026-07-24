@@ -6,6 +6,7 @@
 输出无法修复时，只能产出带有明确降级标记的兜底结果，不能用关键词
 或发言长度等确定性规则伪装成正常评分。
 """
+import asyncio
 import uuid
 
 from logging_config import get_logger
@@ -30,6 +31,10 @@ logger = get_logger(__name__)
 class ScoringService:
     """评分服务"""
 
+    # Report reads and the end-of-debate background task can arrive together.
+    # Serialise judge runs per debate in this API process so they cannot charge
+    # twice or race while creating scores/participations.
+    _debate_scoring_locks: Dict[str, asyncio.Lock] = {}
     @staticmethod
     def _uuid_value(value: Any) -> Any:
         if value is None or isinstance(value, uuid.UUID):
@@ -363,6 +368,46 @@ class ScoringService:
         speeches: List[Speech],
         context: List[Dict]
     ) -> Dict:
+        debate_key = str(debate_id)
+        lock = ScoringService._debate_scoring_locks.setdefault(
+            debate_key, asyncio.Lock()
+        )
+        async with lock:
+            speech_ids = [speech.id for speech in speeches if speech.id is not None]
+            if speech_ids:
+                scored_ids = {
+                    str(value)
+                    for value in db.execute(
+                        select(Score.speech_id).where(Score.speech_id.in_(speech_ids))
+                    ).scalars().all()
+                    if value is not None
+                }
+                if all(str(speech_id) in scored_ids for speech_id in speech_ids):
+                    debate = db.execute(
+                        select(Debate).where(
+                            Debate.id == ScoringService._uuid_value(debate_id)
+                        )
+                    ).scalar_one_or_none()
+                    existing_report = (
+                        debate.report if debate and isinstance(debate.report, dict) else {}
+                    )
+                    global_report = existing_report.get("global_report")
+                    return global_report if isinstance(global_report, dict) else existing_report
+
+            return await ScoringService._batch_score_debate_unlocked(
+                db=db,
+                debate_id=debate_id,
+                speeches=speeches,
+                context=context,
+            )
+
+    @staticmethod
+    async def _batch_score_debate_unlocked(
+        db: Session,
+        debate_id: str,
+        speeches: List[Speech],
+        context: List[Dict]
+    ) -> Dict:
         """
         批量评分整场辩论
         
@@ -635,8 +680,21 @@ class ScoringService:
             speech for speech in speeches if str(speech.id) not in scored_speech_ids
         ]
 
+        debate = db.execute(
+            select(Debate).where(Debate.id == debate_uuid)
+        ).scalar_one_or_none()
+        existing_report = (
+            debate.report if debate and isinstance(debate.report, dict) else {}
+        )
+        room_meta = existing_report.get("__room_meta")
+        room_meta = room_meta if isinstance(room_meta, dict) else {}
+        report_job = room_meta.get("report_job")
+        report_job = report_job if isinstance(report_job, dict) else {}
+        report_job_status = str(report_job.get("status") or "")
+        scoring_owned_by_background = report_job_status in {"queued", "running"}
+
         generated = False
-        if missing_speeches:
+        if missing_speeches and not scoring_owned_by_background:
             context = [
                 {
                     "speech_id": str(speech.id),
@@ -671,7 +729,16 @@ class ScoringService:
             "speech_count": len(speeches),
             "scored_count": len(refreshed_scored_ids),
             "missing_score_count": missing_score_count,
-            "report_status": "ready" if missing_score_count == 0 else "processing",
+            "report_status": (
+                "ready"
+                if missing_score_count == 0
+                else "processing"
+                if scoring_owned_by_background
+                else "failed"
+                if report_job_status == "failed"
+                else "processing"
+            ),
+            "report_job_status": report_job_status or None,
         }
         ScoringService._merge_report_score_status(db, debate_uuid, status)
         return status

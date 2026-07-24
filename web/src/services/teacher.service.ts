@@ -35,6 +35,7 @@ export interface TeacherDebate {
   class_id?: string;
   student_ids?: string[];
   grouping?: DebateGroupingItem[];
+  config_meta?: DebateConfigMeta;
 }
 
 export interface Class {
@@ -155,6 +156,7 @@ export interface TeacherReservation {
   revoked_count: number;
   cancelled_at?: string | null;
   cancel_reason?: string | null;
+  config_meta?: DebateConfigMeta;
 }
 
 export interface CreateReservationParams {

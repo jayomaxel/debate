@@ -33,6 +33,8 @@ class RAGService:
     _STREAM_FAILED_NOTE = "生成遇到错误，可稍后重试"
     _STREAM_FAILED_MESSAGE = "回答生成失败，请稍后重试。"
     _STREAM_EMPTY_ANSWER_MESSAGE = "未生成有效回答，请重试。"
+    _MODEL_TIMEOUT_SECONDS = float(os.getenv("KB_MODEL_TIMEOUT_SECONDS", "45"))
+    _MODEL_MAX_RETRIES = int(os.getenv("KB_MODEL_MAX_RETRIES", "1"))
     
     def __init__(self, db: Session):
         """
@@ -70,6 +72,14 @@ class RAGService:
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
 
+    @staticmethod
+    def _next_stream_item(stream_iterator):
+        """Read one item in a worker thread without leaking StopIteration."""
+        try:
+            return True, next(stream_iterator)
+        except StopIteration:
+            return False, None
+
     def _detect_embedding_column_is_vector(self) -> bool:
         try:
             result = self.db.execute(
@@ -100,7 +110,10 @@ class RAGService:
     ) -> Optional[uuid.UUID]:
         """先保存一条占位对话，避免流式过程中断后整条记录丢失。"""
         try:
-            conversation_id = uuid.uuid4()
+            # UUID1 gives a deterministic tie-breaker on databases that store
+            # DateTime with coarse precision (several messages can share the
+            # same created_at value).
+            conversation_id = uuid.uuid1()
             conversation = KBConversation(
                 id=conversation_id,
                 user_id=uuid.UUID(user_id),
@@ -219,7 +232,9 @@ class RAGService:
             
             self.openai_client = OpenAI(
                 api_key=vector_config.api_key,
-                base_url=base_url
+                base_url=base_url,
+                timeout=self._MODEL_TIMEOUT_SECONDS,
+                max_retries=self._MODEL_MAX_RETRIES,
             )
             self.embedding_model = vector_config.model_name
             self.embedding_dimension = int(vector_config.embedding_dimension or 0)
@@ -387,11 +402,68 @@ class RAGService:
             # 重新抛出验证错误
             raise
         except Exception as e:
+            # A pgvector dimension/type error aborts the transaction. Roll it
+            # back so the request can still use the model without KB context.
+            self.db.rollback()
             logger.error(
                 f"向量相似度搜索失败: {e}",
                 exc_info=True
             )
             raise RuntimeError(f"向量相似度搜索失败: {str(e)}")
+
+    def search_text_chunks(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Best-effort lexical fallback when stored/query vector sizes differ."""
+        limit = max(1, int(top_k or self.top_k))
+        normalized_question = re.sub(r"\s+", "", str(question or "").lower())
+        if not normalized_question:
+            return []
+
+        latin_tokens = re.findall(r"[a-z0-9_]{2,}", normalized_question)
+        chinese_text = "".join(re.findall(r"[\u4e00-\u9fff]", normalized_question))
+        chinese_tokens = {
+            chinese_text[index:index + 2]
+            for index in range(max(0, len(chinese_text) - 1))
+        }
+        tokens = set(latin_tokens) | chinese_tokens
+        if not tokens:
+            tokens = {normalized_question}
+
+        rows = (
+            self.db.query(KBDocumentChunk, KBDocument)
+            .join(KBDocument, KBDocumentChunk.document_id == KBDocument.id)
+            .filter(KBDocument.upload_status == "completed")
+            .order_by(KBDocumentChunk.created_at.desc())
+            .limit(max(100, limit * 20))
+            .all()
+        )
+        ranked: List[tuple[float, KBDocumentChunk, KBDocument]] = []
+        for chunk, document in rows:
+            content = str(chunk.content or "")
+            normalized_content = re.sub(r"\s+", "", content.lower())
+            matches = sum(1 for token in tokens if token and token in normalized_content)
+            if matches <= 0:
+                continue
+            score = min(0.69, 0.35 + (matches / max(1, len(tokens))) * 0.34)
+            ranked.append((score, chunk, document))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [
+            {
+                "chunk_id": str(chunk.id),
+                "document_id": str(document.id),
+                "document_name": document.filename,
+                "content": chunk.content,
+                "chunk_index": chunk.chunk_index,
+                "token_count": chunk.token_count,
+                "similarity_score": score,
+                "retrieval_mode": "lexical_fallback",
+            }
+            for score, chunk, document in ranked[:limit]
+        ]
     
     async def generate_answer(
         self,
@@ -495,17 +567,20 @@ class RAGService:
 
                     llm_client = OpenAI(
                         api_key=model_config.api_key,
-                        base_url=llm_base_url
+                        base_url=llm_base_url,
+                        timeout=self._MODEL_TIMEOUT_SECONDS,
+                        max_retries=self._MODEL_MAX_RETRIES,
                     )
                 
-                response = llm_client.chat.completions.create(
+                response = await asyncio.to_thread(
+                    llm_client.chat.completions.create,
                     model=model_config.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
                     temperature=model_config.temperature,
-                    max_tokens=model_config.max_tokens
+                    max_tokens=model_config.max_tokens,
                 )
                 
                 # 提取答案
@@ -701,11 +776,13 @@ class RAGService:
                 # 获取OpenAI客户端（使用向量配置）
                 openai_client = await self._get_openai_client()
                 
-                response = openai_client.embeddings.create(
+                response = await asyncio.to_thread(
+                    openai_client.embeddings.create,
                     model=self.embedding_model,
-                    input=question
+                    input=question,
                 )
                 query_embedding = response.data[0].embedding
+                self.embedding_dimension = len(query_embedding)
                 logger.info(
                     f"问题嵌入向量生成成功: 维度={len(query_embedding)}"
                 )
@@ -714,7 +791,7 @@ class RAGService:
                     f"生成问题嵌入向量失败: {e}",
                     exc_info=True
                 )
-                raise RuntimeError(f"生成问题嵌入向量失败: {str(e)}")
+                query_embedding = None
             
             # 步骤2: 搜索相似的文档块
             try:
@@ -722,11 +799,14 @@ class RAGService:
                     f"搜索相似文档块: top_k={self.top_k}, "
                     f"threshold={self.similarity_threshold}"
                 )
-                similar_chunks = await self.search_similar_chunks(
-                    query_embedding=query_embedding,
-                    top_k=self.top_k,
-                    similarity_threshold=self.similarity_threshold
-                )
+                if query_embedding is None:
+                    similar_chunks = self.search_text_chunks(question, self.top_k)
+                else:
+                    similar_chunks = await self.search_similar_chunks(
+                        query_embedding=query_embedding,
+                        top_k=self.top_k,
+                        similarity_threshold=self.similarity_threshold
+                    )
                 logger.info(f"找到 {len(similar_chunks)} 个相似文档块")
             except Exception as e:
                 logger.error(
@@ -734,8 +814,9 @@ class RAGService:
                     exc_info=True
                 )
                 # 搜索失败时，继续使用空上下文生成答案
-                similar_chunks = []
-                logger.warning("搜索失败，将使用一般知识回答")
+                self.db.rollback()
+                similar_chunks = self.search_text_chunks(question, self.top_k)
+                logger.warning("向量搜索失败，已切换到文本检索")
             
             # 步骤3: 使用LLM生成答案
             try:
@@ -801,7 +882,7 @@ class RAGService:
             # 步骤5: 保存对话历史
             try:
                 conversation = KBConversation(
-                    id=uuid.uuid4(),
+                    id=uuid.uuid1(),
                     user_id=uuid.UUID(user_id),
                     session_id=session_id,
                     question=question,
@@ -901,7 +982,7 @@ class RAGService:
                     KBConversation.user_id == uuid.UUID(user_id),
                     KBConversation.session_id == session_id
                 )
-                .order_by(KBConversation.created_at.desc())
+                .order_by(KBConversation.created_at.desc(), KBConversation.id.desc())
                 .limit(limit)
                 .all()
             )
@@ -909,10 +990,16 @@ class RAGService:
             # 格式化结果
             history = []
             for conv in conversations:
+                answer = str(conv.answer or "").strip()
+                if not answer:
+                    # Older interrupted SSE requests left an empty assistant
+                    # bubble in history. Return an explicit recoverable state
+                    # instead of rendering a blank message forever.
+                    answer = self._build_stream_answer_for_storage("", "failed")
                 history.append({
                     "id": str(conv.id),
                     "question": conv.question,
-                    "answer": conv.answer,
+                    "answer": answer,
                     "sources": conv.sources or [],  # JSONB字段可能为None
                     "created_at": conv.created_at.isoformat()
                 })
@@ -1039,29 +1126,62 @@ class RAGService:
                 yield json.dumps({"type": "error", "message": "问题不能为空"}, ensure_ascii=False)
                 return
             
-            # 步骤1: 生成问题的嵌入向量
-            openai_client = await self._get_openai_client()
-            response = openai_client.embeddings.create(
-                model=self.embedding_model,
-                input=question
-            )
-            query_embedding = response.data[0].embedding
-            
-            # 步骤2: 搜索相似的文档块
-            similar_chunks = await self.search_similar_chunks(
-                query_embedding=query_embedding,
-                top_k=self.top_k,
-                similarity_threshold=self.similarity_threshold
-            )
-            
-            # 步骤3: 格式化来源引用并提前保存占位对话
-            sources = self.format_source_citations(similar_chunks)
+            # Save before external calls so vector/model failures do not make
+            # the user's question disappear from history.
             conversation_id = self._create_stream_conversation_record(
                 question=question,
                 user_id=user_id,
                 session_id=session_id,
-                sources=sources
+                sources=[],
             )
+
+            # Retrieval is best effort. Provider changes can yield 1024-d
+            # embeddings while stored rows are 1536-d; answer generally instead
+            # of aborting the assistant request.
+            try:
+                openai_client = await self._get_openai_client()
+                response = await asyncio.to_thread(
+                    openai_client.embeddings.create,
+                    model=self.embedding_model,
+                    input=question,
+                )
+                query_embedding = response.data[0].embedding
+                self.embedding_dimension = len(query_embedding)
+                similar_chunks = await self.search_similar_chunks(
+                    query_embedding=query_embedding,
+                    top_k=self.top_k,
+                    similarity_threshold=self.similarity_threshold,
+                )
+                sources = self.format_source_citations(similar_chunks)
+                self._update_stream_conversation_record(
+                    conversation_id=conversation_id,
+                    answer="",
+                    sources=sources,
+                    status="progress",
+                )
+            except Exception as retrieval_error:
+                self.db.rollback()
+                try:
+                    similar_chunks = self.search_text_chunks(question, self.top_k)
+                    sources = self.format_source_citations(similar_chunks)
+                    self._update_stream_conversation_record(
+                        conversation_id=conversation_id,
+                        answer="",
+                        sources=sources,
+                        status="progress",
+                    )
+                except Exception as lexical_error:
+                    self.db.rollback()
+                    similar_chunks = []
+                    sources = []
+                    logger.warning("文本检索降级也不可用: %s", lexical_error)
+                logger.warning(
+                    "知识库检索不可用，降级为通用问答: user_id=%s, session_id=%s, error=%s",
+                    user_id,
+                    session_id,
+                    retrieval_error,
+                )
+
             yield json.dumps({"type": "sources", "data": sources}, ensure_ascii=False)
             
             # 步骤4: 准备LLM调用
@@ -1115,10 +1235,13 @@ class RAGService:
             
             llm_client = OpenAI(
                 api_key=model_config.api_key,
-                base_url=llm_base_url
+                base_url=llm_base_url,
+                timeout=self._MODEL_TIMEOUT_SECONDS,
+                max_retries=self._MODEL_MAX_RETRIES,
             )
             
-            stream = llm_client.chat.completions.create(
+            stream = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model=model_config.model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1126,10 +1249,17 @@ class RAGService:
                 ],
                 temperature=model_config.temperature,
                 max_tokens=model_config.max_tokens,
-                stream=True
+                stream=True,
             )
-            
-            for chunk in stream:
+
+            stream_iterator = iter(stream)
+            while True:
+                has_item, chunk = await asyncio.to_thread(
+                    self._next_stream_item,
+                    stream_iterator,
+                )
+                if not has_item:
+                    break
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = self._sanitize_answer_chunk(
                         chunk.choices[0].delta.content
@@ -1148,6 +1278,9 @@ class RAGService:
                             status="progress"
                         )
                         last_saved_length = len(full_answer)
+
+            if not full_answer.strip():
+                raise RuntimeError("模型未返回有效回答")
             
             # 步骤6: 完成后更新最终答案
             self._update_stream_conversation_record(
@@ -1160,8 +1293,6 @@ class RAGService:
             yield json.dumps({"type": "done", "id": done_id}, ensure_ascii=False)
 
         except asyncio.CancelledError:
-            system_prompt += "\n7. 只能输出纯文本，不要使用 Markdown 格式。\n8. 不要输出星号、反引号、井号或项目符号。"
-            user_prompt += "\n\n请直接用纯文本回答，不要使用 Markdown，不要输出星号或项目符号。"
             logger.info(
                 f"流式回答被中断: user_id={user_id}, session_id={session_id}"
             )

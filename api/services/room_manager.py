@@ -26,6 +26,7 @@ REPORT_JOB_META_KEY = "report_job"
 ROOM_ROLE_ORDER = ("debater_1", "debater_2", "debater_3", "debater_4")
 WAITING_CHECKLIST_ITEM_COUNT = 4
 WAITING_CHECKLIST_META_KEY = "waiting_checklists"
+EMPTY_ROOM_GRACE_SECONDS = 15.0
 
 
 class DebatePhase(str, Enum):
@@ -517,6 +518,7 @@ class DebateRoomManager:
         self._room_locks: Dict[str, asyncio.Lock] = {}
         self._runtime_persist_tasks: Dict[str, asyncio.Task] = {}
         self._runtime_persist_dirty: set[str] = set()
+        self._empty_room_cleanup_tasks: Dict[str, asyncio.Task] = {}
 
     def get_room_lock(self, room_id: str) -> asyncio.Lock:
         """Return the per-room lock used by realtime state transitions."""
@@ -525,6 +527,82 @@ class DebateRoomManager:
             lock = asyncio.Lock()
             self._room_locks[room_id] = lock
         return lock
+
+    def _cancel_empty_room_cleanup(self, room_id: str) -> None:
+        task = self._empty_room_cleanup_tasks.pop(room_id, None)
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    def _schedule_empty_room_cleanup(self, room_id: str) -> None:
+        task = self._empty_room_cleanup_tasks.get(room_id)
+        if task is None or task.done():
+            self._empty_room_cleanup_tasks[room_id] = asyncio.create_task(
+                self._cleanup_empty_room_after_grace(room_id)
+            )
+
+    async def _cleanup_empty_room_after_grace(self, room_id: str) -> None:
+        """Keep a transiently empty room alive while clients change pages."""
+        current_task = asyncio.current_task()
+        try:
+            await asyncio.sleep(EMPTY_ROOM_GRACE_SECONDS)
+            room_state = self.rooms.get(room_id)
+            if room_state is None or room_state.participants:
+                return
+
+            # Flush the latest complete segment before releasing memory.
+            import database as db_module
+
+            if db_module.SessionLocal is not None:
+                db = db_module.SessionLocal()
+                try:
+                    self._persist_runtime_state(room_state, db)
+                finally:
+                    db.close()
+
+            if self.rooms.get(room_id) is not room_state or room_state.participants:
+                return
+
+            self.rooms.pop(room_id, None)
+            self._room_locks.pop(room_id, None)
+            self._runtime_persist_dirty.discard(room_id)
+            persist_task = self._runtime_persist_tasks.pop(room_id, None)
+            if persist_task is not None and not persist_task.done():
+                persist_task.cancel()
+
+            from services.flow_controller import flow_controller
+
+            await flow_controller.cleanup_room(room_id)
+            logger.info(
+                "Room %s deleted after %.1fs empty grace period",
+                room_id,
+                EMPTY_ROOM_GRACE_SECONDS,
+            )
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._empty_room_cleanup_tasks.get(room_id) is current_task:
+                self._empty_room_cleanup_tasks.pop(room_id, None)
+
+    async def _resume_running_flow_if_needed(self, room_id: str) -> bool:
+        room_state = self.get_room_state(room_id)
+        if (
+            room_state is None
+            or room_state.current_phase in {DebatePhase.WAITING, DebatePhase.FINISHED}
+            or room_state.room_status != "ongoing"
+        ):
+            return False
+
+        from services.flow_controller import flow_controller
+
+        async with self.get_room_lock(room_id):
+            room_state = self.get_room_state(room_id)
+            if (
+                room_state is None
+                or room_state.current_phase in {DebatePhase.WAITING, DebatePhase.FINISHED}
+                or room_state.room_status != "ongoing"
+            ):
+                return False
+            return await flow_controller.resume_flow(room_id)
 
 
     @staticmethod
@@ -1153,8 +1231,10 @@ class DebateRoomManager:
 
         # 检查用户是否已在房间
         if any(p["user_id"] == user_id for p in room_state.participants):
+            self._cancel_empty_room_cleanup(room_id)
             logger.info(f"User {user_id} already in room {room_id}")
             self._sync_waiting_checklists_with_participants(room_state)
+            await self._resume_running_flow_if_needed(room_id)
             # 即使已在房间，也发送当前状态
             await websocket_manager.send_to_user(
                 user_id, {"type": "state_update", "data": room_state.to_dict()}
@@ -1167,6 +1247,7 @@ class DebateRoomManager:
             if is_teacher_moderator
             else self.build_student_participant(user, participation, debate)
         )
+        self._cancel_empty_room_cleanup(room_id)
         room_state.participants.append(participant_info)
         if participant_info.get("can_moderate"):
             room_state.host_user_id = str(participant_info.get("user_id"))
@@ -1174,6 +1255,7 @@ class DebateRoomManager:
             room_state.moderator_missing = False
         self._sync_waiting_checklists_with_participants(room_state)
         self._persist_waiting_checklists(room_state, db)
+        await self._resume_running_flow_if_needed(room_id)
 
         logger.info(f"User {user_id} joined room {room_id}")
 
@@ -1329,15 +1411,16 @@ class DebateRoomManager:
         # 广播房间状态更新
         await self.broadcast_state_update(room_id)
 
-        # 如果房间为空，删除房间
+        # 页面切换会让所有 websocket 短暂离线；保留宽限期以避免销毁流程。
         if not room_state.participants:
-            del self.rooms[room_id]
-            self._room_locks.pop(room_id, None)
-            self._runtime_persist_dirty.discard(room_id)
-            persist_task = self._runtime_persist_tasks.pop(room_id, None)
-            if persist_task is not None and not persist_task.done():
-                persist_task.cancel()
-            logger.info(f"Room {room_id} deleted (empty)")
+            if db is not None:
+                self._persist_runtime_state(room_state, db)
+            self._schedule_empty_room_cleanup(room_id)
+            logger.info(
+                "Room %s is empty; cleanup scheduled in %.1fs",
+                room_id,
+                EMPTY_ROOM_GRACE_SECONDS,
+            )
 
         return True
 
@@ -1486,6 +1569,9 @@ class DebateRoomManager:
         from services.flow_controller import flow_controller
 
         await flow_controller.start_flow(room_id)
+        # start_flow fills segment/speaker/timer fields. Persist them immediately
+        # so a navigation disconnect cannot leave an unusable partial snapshot.
+        self._persist_runtime_state(room_state, db, debate=debate)
 
         # 广播辩论开始
         await websocket_manager.broadcast_to_room(
@@ -1870,15 +1956,17 @@ class DebateRoomManager:
             )
             
             # 保存报告到数据库，保留房间/预约元数据。
+            # ScoringService already persisted the complete report contract.
+            # Replacing it with global_report alone drops anchors, metadata and
+            # cache/status fields used by both report pages.
             debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one()
+            db.refresh(debate)
             existing_report = debate.report if isinstance(debate.report, dict) else {}
             if isinstance(report_data, dict):
                 debate.report = {
-                    **report_data,
-                    ROOM_META_KEY: existing_report.get(ROOM_META_KEY),
-                } if existing_report.get(ROOM_META_KEY) else report_data
-            else:
-                debate.report = report_data
+                    **existing_report,
+                    "global_report": report_data,
+                }
             db.commit()
             RoleAssignmentLearningService.materialize_debate_samples(db, str(debate_id))
             

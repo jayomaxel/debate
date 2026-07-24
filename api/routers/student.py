@@ -500,6 +500,7 @@ async def join_debate(
 # ==================== 报告相关 ====================
 
 from services.report_service import ReportGenerator
+from utils.markdown_to_pdf import MarkdownToPdfConverter
 from fastapi.responses import Response
 from utils.email_service import EmailService
 
@@ -569,11 +570,15 @@ def _get_report_pdf_cache_response(
     report_meta = debate.report if isinstance(debate.report, dict) else {}
     markdown_hash = report_meta.get("report_markdown_hash")
     cache_is_valid = (
-        (
-            markdown_hash
-            and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+        report_meta.get("report_pdf_renderer_version")
+        == MarkdownToPdfConverter.RENDERER_VERSION
+        and (
+            (
+                markdown_hash
+                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+            )
+            or _legacy_pdf_cache_allowed(debate, report_meta)
         )
-        or _legacy_pdf_cache_allowed(debate, report_meta)
     )
     if not cache_is_valid:
         return None
@@ -621,6 +626,7 @@ async def _get_or_generate_report_markdown(
     db: Session,
     debate: Debate,
     content_str: str,
+    viewer_id: str,
 ) -> str:
     cached = _get_cached_report_markdown(debate)
     if cached:
@@ -632,17 +638,21 @@ async def _get_or_generate_report_markdown(
             db.commit()
         return cached
 
-    markdown_text = await ReportGenerator.generate_markdown_report_async(
+    # PDF/email export must not make a second long-running LLM request. The
+    # semantic judge result and per-speech scores are already persisted; build
+    # a deterministic report from that reviewed data so downloads are fast and
+    # remain available when the model provider is temporarily unavailable.
+    structured_report = ReportGenerator.generate_student_report(
         db=db,
-        debate_topic=debate.topic,
-        content_str=content_str,
+        debate_id=str(debate.id),
+        student_id=viewer_id,
     )
-    if not markdown_text:
+    if not structured_report:
         existing = debate.report if isinstance(debate.report, dict) else {}
         debate.report = {
             **existing,
             "report_markdown_status": "failed",
-            "report_markdown_error": "empty_result",
+            "report_markdown_error": "structured_report_unavailable",
             "report_markdown_failed_at": datetime.utcnow().isoformat(),
         }
         db.commit()
@@ -651,6 +661,7 @@ async def _get_or_generate_report_markdown(
             detail="报告生成失败",
         )
 
+    markdown_text = ReportGenerator.build_structured_markdown(structured_report)
     existing = debate.report if isinstance(debate.report, dict) else {}
     debate.report = {
         **existing,
@@ -762,11 +773,15 @@ async def export_report_pdf(
         cached_path
         and cached_path.exists()
         and (
-            (
-                markdown_hash
-                and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+            report_meta.get("report_pdf_renderer_version")
+            == MarkdownToPdfConverter.RENDERER_VERSION
+            and (
+                (
+                    markdown_hash
+                    and report_meta.get("report_pdf_markdown_hash") == markdown_hash
+                )
+                or _legacy_pdf_cache_allowed(debate, report_meta)
             )
-            or _legacy_pdf_cache_allowed(debate, report_meta)
         )
     ):
         if migrated:
@@ -802,7 +817,12 @@ async def export_report_pdf(
             content += f"{sepeaker_type}【角色】{s.speaker_role}，发言内容：{s.content}"
             content += "\n"
     
-    markdown_text = await _get_or_generate_report_markdown(db=db, debate=debate, content_str=content)
+    markdown_text = await _get_or_generate_report_markdown(
+        db=db,
+        debate=debate,
+        content_str=content,
+        viewer_id=actor_id,
+    )
 
     report_meta = debate.report if isinstance(debate.report, dict) else {}
     markdown_hash = report_meta.get("report_markdown_hash")
@@ -846,6 +866,7 @@ async def export_report_pdf(
     updated_report = {
         **updated_report,
         "report_pdf_status": "ready",
+        "report_pdf_renderer_version": MarkdownToPdfConverter.RENDERER_VERSION,
         "report_pdf_error": None,
         "report_pdf_generated_at": datetime.utcnow().isoformat(),
     }
@@ -989,7 +1010,12 @@ async def send_report_email(
             content += f"{sepeaker_type}【角色】{s.speaker_role}，发言内容：{s.content}"
             content += "\n"
 
-    markdown_text = await _get_or_generate_report_markdown(db=db, debate=debate, content_str=content)
+    markdown_text = await _get_or_generate_report_markdown(
+        db=db,
+        debate=debate,
+        content_str=content,
+        viewer_id=actor_id,
+    )
     
     success = await EmailService.send_report_email(
         db=db,

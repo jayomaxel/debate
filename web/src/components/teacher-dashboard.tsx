@@ -469,6 +469,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
       const descriptionMeta = parseDebateDescription(debateDetails.description);
       const rounds = descriptionMeta.rounds || '3';
+      setStructuredConfig(previous => ({
+        ...previous,
+        ...(debateDetails.config_meta || {}),
+        rounds: Number(debateDetails.config_meta?.rounds || rounds || 3),
+      }));
 
       setDebateConfig({
         topic: debateDetails.topic,
@@ -490,6 +495,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       // Fallback to existing data
       const descriptionMeta = parseDebateDescription(debate.description);
       const rounds = descriptionMeta.rounds || '3';
+      setStructuredConfig(previous => ({
+        ...previous,
+        ...(debate.config_meta || {}),
+        rounds: Number(debate.config_meta?.rounds || rounds || 3),
+      }));
       setDebateConfig({
         topic: debate.topic,
         duration: debate.duration.toString(),
@@ -1813,6 +1823,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                   </div>
                                 </div>
                               </div>
+                              {debate.config_meta?.teaching_design_version_id ? (
+                                <div className='mt-2 text-xs text-slate-500'>
+                                  教学设计版本：{debate.config_meta.teaching_design_version_id}
+                                </div>
+                              ) : null}
                               {debate.invitation_code && (
                                 <div className='mt-2 text-sm text-slate-600'>
                                   邀请码:{' '}

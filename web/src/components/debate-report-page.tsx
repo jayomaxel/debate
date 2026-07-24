@@ -103,7 +103,13 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
       try {
         setLoading(true);
         const data = studentMode
-          ? await StudentService.getReport(debateId)
+          ? await StudentService.getReport(debateId).then((payload) => {
+              const studentPayload = payload as DebateReport & {
+                report_meta?: TeacherReportMeta;
+              };
+              setReportMeta(studentPayload.report_meta || null);
+              return payload;
+            })
           : await TeacherService.getReport(debateId).then((payload) => {
               setReportMeta(payload.report_meta || null);
               setSpeechAnchors(payload.speech_anchors || []);
@@ -134,6 +140,28 @@ const DebateReportPage: React.FC<DebateReportPageProps> = ({
     setReport(payload.report);
     return payload.report;
   }, [debateId]);
+
+  useEffect(() => {
+    if (reportMeta?.report_status !== 'processing') return;
+
+    const timer = window.setInterval(async () => {
+      try {
+        if (studentMode) {
+          const payload = (await StudentService.getReport(debateId)) as DebateReport & {
+            report_meta?: TeacherReportMeta;
+          };
+          setReport(payload);
+          setReportMeta(payload.report_meta || null);
+          return;
+        }
+        await reloadTeacherReport();
+      } catch {
+        // A background report can still be committing; the next poll retries.
+      }
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [debateId, reloadTeacherReport, reportMeta?.report_status, studentMode]);
 
   useEffect(() => {
     if (studentMode) return;

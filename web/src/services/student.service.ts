@@ -409,6 +409,27 @@ export interface ClassComparison {
 }
 
 // 辩论报告（学生端报告查看接口 /api/student/reports/{debate_id}）
+export interface HumanAbilityStatistics {
+  ability_scope: 'human_only';
+  evaluated_student_count: number;
+  valid_human_speech_count: number;
+  excluded_ai_speech_count: number;
+  excluded_demo_record_count: number;
+  has_human_ability_data: boolean;
+  ability_scores: {
+    logical_construction: number;
+    ai_knowledge_application: number;
+    critical_thinking: number;
+    language_expression: number;
+    ai_ethics_literacy: number;
+  } | null;
+  overall_score: number | null;
+}
+
+export interface DebateReportStatistics extends Record<string, unknown> {
+  human_ability?: HumanAbilityStatistics;
+}
+
 export interface DebateReport {
   debate_id: string;
   topic: string;
@@ -457,9 +478,16 @@ export interface DebateReport {
       feedback: string;
     } | null;
   }>;
-  statistics: Record<string, unknown>;
+  statistics: DebateReportStatistics;
   winner: string;
   summary?: string;
+  report_meta?: {
+    report_status?: 'ready' | 'processing' | 'empty' | 'failed' | string;
+    report_job_status?: string | null;
+    score_missing_count?: number;
+    report_quality?: string;
+    [key: string]: unknown;
+  };
 }
 
 // 知识库
@@ -921,7 +949,9 @@ class StudentService {
    */
   static async getReport(debateId: string): Promise<DebateReport> {
     try {
-      return await api.get<DebateReport>(`/api/student/reports/${debateId}`);
+      return await api.get<DebateReport>(`/api/student/reports/${debateId}`, {
+        timeout: 55000,
+      });
     } catch (error) {
       console.error('[StudentService] Get report failed:', error);
       throw error;
@@ -935,6 +965,7 @@ class StudentService {
     try {
       const response = await api.get<Blob>(`/api/student/reports/${debateId}/export/pdf`, {
         responseType: 'blob',
+        timeout: 60000,
       });
 
       // 创建下载链接

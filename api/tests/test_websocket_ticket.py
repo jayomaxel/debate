@@ -58,7 +58,7 @@ def ws_client(db_session, monkeypatch):
     monkeypatch.setattr(
         websocket_router.websocket_manager,
         "is_user_connected",
-        lambda user_id: False,
+        lambda user_id, room_id=None: False,
     )
     monkeypatch.setattr(
         websocket_router.room_manager,

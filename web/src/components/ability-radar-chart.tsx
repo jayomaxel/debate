@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Award, Target, TrendingUp } from 'lucide-react';
@@ -19,6 +19,9 @@ interface AbilityRadarChartProps {
   showComparison?: boolean;
   comparisonScores?: number[];
   studentMode?: boolean;
+  scopeDescription?: string;
+  dataSummary?: string;
+  emptyDescription?: string;
 }
 
 const themeCard = (studentMode: boolean) =>
@@ -32,6 +35,9 @@ const AbilityRadarChart: React.FC<AbilityRadarChartProps> = ({
   showComparison = false,
   comparisonScores = [],
   studentMode = false,
+  scopeDescription,
+  dataSummary,
+  emptyDescription = '本场没有可用于能力评估的人类有效发言。',
 }) => {
   const format2 = (value: number) => {
     const n = Number.isFinite(value) ? value : 0;
@@ -240,10 +246,12 @@ const AbilityRadarChart: React.FC<AbilityRadarChartProps> = ({
             </div>
             <Badge className="student-pill">暂无数据</Badge>
           </CardTitle>
+          {scopeDescription ? <CardDescription>{scopeDescription}</CardDescription> : null}
         </CardHeader>
         <CardContent>
           <div className="py-10 text-center text-sm text-slate-500">
-            暂无能力评估数据
+            <div className="font-medium text-slate-700">暂无人类辩手能力数据</div>
+            <div className="mt-2">{emptyDescription}</div>
           </div>
         </CardContent>
       </Card>
@@ -269,6 +277,8 @@ const AbilityRadarChart: React.FC<AbilityRadarChartProps> = ({
             </div>
           </div>
         </CardTitle>
+        {scopeDescription ? <CardDescription>{scopeDescription}</CardDescription> : null}
+        {dataSummary ? <div className="text-xs text-slate-500">{dataSummary}</div> : null}
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="flex justify-center">{renderRadarVisualization()}</div>

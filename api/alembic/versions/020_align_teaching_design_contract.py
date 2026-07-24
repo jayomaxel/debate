@@ -1,7 +1,7 @@
 '''align teaching design storage with the frozen contract
 
-Revision ID: 018
-Revises: 017
+Revision ID: 020
+Revises: 019
 Create Date: 2026-07-18
 '''
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '018'
-down_revision = '017'
+revision = '020'
+down_revision = '019'
 branch_labels = None
 depends_on = None
 

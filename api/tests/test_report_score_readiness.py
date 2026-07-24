@@ -13,6 +13,62 @@ from services.scoring_service import ScoringService
 
 
 @pytest.mark.asyncio
+async def test_report_read_does_not_duplicate_running_background_score_job(
+    db_session, monkeypatch
+):
+    student = User(
+        id=uuid.uuid4(),
+        account="background_report_student",
+        name="Background Report Student",
+        email="background_report_student@test.com",
+        password_hash="hashed_password",
+        user_type="student",
+        created_at=datetime.utcnow(),
+    )
+    debate = Debate(
+        id=uuid.uuid4(),
+        topic="Background report ownership",
+        description="",
+        duration=5,
+        invitation_code="RPTBG1",
+        status="completed",
+        report={
+            "__room_meta": {
+                "report_job": {"status": "running", "attempts": 1}
+            }
+        },
+    )
+    speech = Speech(
+        id=uuid.uuid4(),
+        debate_id=debate.id,
+        speaker_id=student.id,
+        speaker_type="human",
+        speaker_role="debater_1",
+        phase="opening",
+        content="This speech is waiting for the background judge task.",
+        duration=10,
+        is_valid_for_scoring=True,
+        timestamp=datetime.utcnow(),
+    )
+    db_session.add_all([student, debate, speech])
+    db_session.commit()
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("report GET must not start a duplicate judge run")
+
+    monkeypatch.setattr(ScoringService, "batch_score_debate", fail_if_called)
+
+    status = await ScoringService.ensure_debate_scored(
+        db_session, str(debate.id)
+    )
+
+    assert status["generated"] is False
+    assert status["ready"] is False
+    assert status["report_status"] == "processing"
+    assert status["report_job_status"] == "running"
+
+
+@pytest.mark.asyncio
 async def test_report_readiness_scores_missing_valid_speeches(db_session):
     student = User(
         id=uuid.uuid4(),

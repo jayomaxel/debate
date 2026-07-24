@@ -2,9 +2,12 @@
 AI辩手Agent
 负责生成AI辩手的发言内容
 """
+import asyncio
 import json
+import os
 import time
 
+import httpx
 from logging_config import get_logger
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -27,7 +30,14 @@ class AIDebaterAgent:
     # 尽量在这些中文标点附近截断，减少生硬断句。
     _TRUNCATE_PUNCTUATION = "。！？；;.!?\n"
     # LLM HTTP 客户端超时时间，配合连接池按 timeout 分桶复用。
-    LLM_HTTP_TIMEOUT_SECONDS = 30.0
+    # A single provider request has a bounded, deploy-time configurable timeout.
+    # The flow controller deliberately waits a little longer than this value so
+    # it never cancels a healthy request first and starts a competing fallback.
+    LLM_HTTP_TIMEOUT_SECONDS = float(
+        os.getenv("DEBATER_LLM_TIMEOUT_SECONDS", "45")
+    )
+    LLM_CONNECT_RETRY_COUNT = 2
+    LLM_CONNECT_RETRY_BACKOFF_SECONDS = 0.4
 
     def __init__(self, position: int, db: Session):
         """
@@ -153,7 +163,7 @@ class AIDebaterAgent:
             role=role,
             speaker_role=f"debater_{self.position}",
             stance=normalized_stance,
-            history=list(context or []),
+            history=list(context or [])[-8:],
             knowledge_snippets=list(knowledge_snippets or []),
         )
         if task_type:
@@ -285,6 +295,37 @@ class AIDebaterAgent:
             logger.error(f"调用Coze Bot失败: {e}", exc_info=True)
             return f"[AI辩手{self.position}暂时无法回应]"
 
+    async def _call_llm_once_with_connect_retry(
+        self,
+        endpoint: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+    ) -> str:
+        """Retry only transient connection setup failures with a small bound."""
+        max_attempts = self.LLM_CONNECT_RETRY_COUNT + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await self._call_llm_once(
+                    endpoint=endpoint,
+                    headers=headers,
+                    payload=payload,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt >= max_attempts:
+                    raise
+                delay_seconds = self.LLM_CONNECT_RETRY_BACKOFF_SECONDS * attempt
+                logger.warning(
+                    "LLM connection failed; retrying position=%s attempt=%s/%s delay=%.1fs error=%s",
+                    self.position,
+                    attempt + 1,
+                    max_attempts,
+                    delay_seconds,
+                    exc,
+                )
+                await asyncio.sleep(delay_seconds)
+
+        raise RuntimeError("LLM connection retry loop exited unexpectedly")
+
     async def _call_llm(
         self,
         prompt: str,
@@ -308,11 +349,13 @@ class AIDebaterAgent:
                     stream_callback=stream_callback,
                 )
 
-            return await self._call_llm_once(
+            return await self._call_llm_once_with_connect_retry(
                 endpoint=endpoint,
                 headers=headers,
                 payload=payload,
             )
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            raise
         except Exception as e:
             logger.error(f"调用LLM失败: {e}", exc_info=True)
             return f"[AI辩手{self.position}暂时无法回应]"
@@ -705,6 +748,11 @@ class AIDebaterAgent:
                 "voice_id": voice_id
             }
             
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            # Preserve the timeout signal so the flow controller can stop the
+            # turn once and publish its deterministic fallback. Swallowing the
+            # exception here produced an empty draft and triggered retries.
+            raise
         except Exception as e:
             logger.error(f"AI辩手{self.position}生成语音失败: {e}", exc_info=True)
             return {
@@ -746,17 +794,13 @@ class AIDebaterAgent:
             context=context,
         )
 
-        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        if context:
-            for msg in context[-20:]:
-                role = msg.get("role") or "user"
-                content = msg.get("content") or ""
-                if not content:
-                    continue
-                if role not in ("system", "user", "assistant"):
-                    role = "user"
-                messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": prompt})
+        # The Prompt Pack already contains the trimmed debate history. Sending
+        # the same transcript again as chat messages doubled the request size,
+        # slowed first-token latency and made provider timeouts much more likely.
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
 
         payload = {
             "model": model_name,
@@ -1014,8 +1058,12 @@ class AIDebaterAgent:
                     },
                 )
                 return fallback_text
+            if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+                # A second synchronous request would double the blocked turn.
+                # Let the flow controller produce its context-aware fallback.
+                raise
 
-        return await self._call_llm_once(
+        return await self._call_llm_once_with_connect_retry(
             endpoint=endpoint,
             headers=headers,
             payload=payload,

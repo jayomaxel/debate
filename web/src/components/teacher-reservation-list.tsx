@@ -133,6 +133,20 @@ const TeacherReservationList: React.FC<TeacherReservationListProps> = ({
                   <span>房间：{detail.visibility === 'private' ? '私密' : '公开'}</span>
                 </div>
                 {detail.description && <p className='mt-3 text-sm text-slate-600'>{detail.description}</p>}
+                {detail.config_meta?.teaching_design_version_id && (
+                  <div className='mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600'>
+                    <div>教学设计版本：{detail.config_meta.teaching_design_version_id}</div>
+                    {detail.config_meta.activity_focus?.chapter_focus && (
+                      <div>章节重点：{detail.config_meta.activity_focus.chapter_focus}</div>
+                    )}
+                    {detail.config_meta.activity_focus?.training_focus && (
+                      <div>训练目标：{detail.config_meta.activity_focus.training_focus}</div>
+                    )}
+                    {detail.config_meta.activity_focus?.classroom_scene && (
+                      <div>课堂场景：{detail.config_meta.activity_focus.classroom_scene}</div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className='grid gap-2 md:grid-cols-2'>

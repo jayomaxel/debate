@@ -205,3 +205,29 @@ def test_judge_batch_marks_omitted_speech_as_partial(monkeypatch):
     scores_by_speech = {item["speech_id"]: item["scores"] for item in result["speech_scores"]}
     assert result["report_meta"]["scoring_quality"] == "partial"
     assert scores_by_speech["s2"]["report_meta"]["scoring_source"] == "fallback"
+
+
+def test_judge_empty_response_does_not_make_a_second_model_call(monkeypatch):
+    calls = []
+
+    async def fake_call_agent(self, prompt):
+        calls.append(prompt)
+        return ""
+
+    monkeypatch.setattr(JudgeAgent, "_call_agent", fake_call_agent)
+    result = asyncio.run(
+        JudgeAgent(SimpleNamespace()).batch_evaluate_debate(
+            [
+                {
+                    "speech_id": "s1",
+                    "content": "有效的人类发言",
+                    "speaker_role": "debater_1",
+                }
+            ]
+        )
+    )
+
+    assert len(calls) == 1
+    assert result["report_meta"]["scoring_quality"] == "fallback"
+    assert result["report_meta"]["retry_count"] == 0
+    assert result["speech_scores"][0]["speech_id"] == "s1"

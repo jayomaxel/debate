@@ -17,6 +17,10 @@ logger = get_logger(__name__)
 
 class MarkdownToPdfConverter:
     """Markdown转PDF转换器"""
+
+    # Bump when fonts/rendering behavior changes so previously cached PDFs are
+    # regenerated instead of continuing to serve broken glyphs.
+    RENDERER_VERSION = "weasyprint-noto-cjk-v2"
     
     # 默认CSS样式
     DEFAULT_CSS = """

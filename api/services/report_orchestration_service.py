@@ -19,6 +19,7 @@ from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import ReportGenerator
 from services.scoring_service import ScoringService
 from services.score_validation_service import ScoreValidationService
+from utils.markdown_to_pdf import MarkdownToPdfConverter
 
 
 class ReportOrchestrationService:
@@ -105,6 +106,12 @@ class ReportOrchestrationService:
         )
 
         if pdf_hash and markdown_hash and pdf_hash != markdown_hash:
+            return "stale"
+        if (
+            has_pdf_reference
+            and report_data.get("report_pdf_renderer_version")
+            != MarkdownToPdfConverter.RENDERER_VERSION
+        ):
             return "stale"
         if not pdf_hash and not has_pdf_reference:
             return "absent"
