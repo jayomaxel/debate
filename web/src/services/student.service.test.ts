@@ -1228,7 +1228,22 @@ describe('Student Service - Unit Tests', () => {
       // Assert
       expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}`);
       expect(api.get).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(mockReport);
+      expect(result).toMatchObject({
+        debate_id: mockReport.debate_id,
+        student_id: mockReport.student_id,
+        topic: mockReport.topic,
+        role: mockReport.role,
+        stance: mockReport.stance,
+        final_score: mockReport.final_score,
+        ability_scores: mockReport.ability_scores,
+        feedback: mockReport.feedback,
+        generated_at: mockReport.generated_at,
+      });
+      expect(result.participants[0]).toMatchObject({
+        user_id: 'student-456',
+        role: '一辩',
+        stance: 'affirmative',
+      });
       expect(result.debate_id).toBe(debateId);
     });
 

@@ -1730,8 +1730,6 @@ class DebateService:
             "学生列表": students_cn,
         }
 
-        print(f"students_cn:{students_cn}")
-
         payload = {
             "model": model_name,
             "messages": [

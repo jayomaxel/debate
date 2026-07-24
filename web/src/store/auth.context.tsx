@@ -6,14 +6,12 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AuthService, { type LoginParams } from '@/services/auth.service';
 import TokenManager, { type UserInfo } from '@/lib/token-manager';
+import { toAuthStateShape } from '@/lib/frontend-adapters';
+import type { FrontendAuthStateShape } from '@/lib/frontend-contracts';
 
 // ==================== 接口定义 ====================
 
-export interface AuthState {
-  isAuthenticated: boolean;
-  user: UserInfo | null;
-  loading: boolean;
-}
+export type AuthState = FrontendAuthStateShape<UserInfo>;
 
 export interface AuthActions {
   login: (params: LoginParams) => Promise<void>;
@@ -35,35 +33,30 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [state, setState] = useState<AuthState>({
-    isAuthenticated: false,
-    user: null,
-    loading: true,
-  });
+  const [state, setState] = useState<AuthState>(() =>
+    toAuthStateShape<UserInfo>({ status: 'initializing' })
+  );
 
   /**
    * 检查认证状态
    */
   const checkAuth = useCallback(async () => {
+    setState(toAuthStateShape<UserInfo>({ status: 'initializing' }));
     try {
       const refreshToken = TokenManager.getRefreshToken();
       if (refreshToken) {
         try {
           const refreshed = await AuthService.refreshToken();
-          setState({
+          setState(toAuthStateShape({
+            status: 'authenticated',
             isAuthenticated: true,
             user: refreshed.user || AuthService.getCurrentUser(),
-            loading: false,
-          });
+          }));
           return;
         } catch (refreshError) {
           console.error('[AuthContext] Session restore failed:', refreshError);
           AuthService.logout({ redirect: false });
-          setState({
-            isAuthenticated: false,
-            user: null,
-            loading: false,
-          });
+          setState(toAuthStateShape<UserInfo>({ status: 'expired' }));
           return;
         }
       }
@@ -71,18 +64,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const isAuth = AuthService.isAuthenticated();
       const user = AuthService.getCurrentUser();
 
-      setState({
+      setState(toAuthStateShape({
+        status: isAuth && user ? 'authenticated' : 'anonymous',
         isAuthenticated: isAuth,
         user: user,
-        loading: false,
-      });
+      }));
     } catch (error) {
       console.error('[AuthContext] Check auth failed:', error);
-      setState({
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-      });
+      setState(toAuthStateShape<UserInfo>({
+        status: 'error',
+        error: error instanceof Error ? error.message : '认证状态检查失败',
+      }));
     }
   }, []);
 
@@ -91,19 +83,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const login = useCallback(async (params: LoginParams) => {
     try {
-      setState((prev) => ({ ...prev, loading: true }));
+      setState(toAuthStateShape<UserInfo>({ status: 'initializing' }));
 
       const result = await AuthService.login(params);
 
-      setState({
+      setState(toAuthStateShape({
+        status: 'authenticated',
         isAuthenticated: true,
         user: result.user,
-        loading: false,
-      });
+      }));
     } catch (error) {
-      setState((prev) => ({
-        ...prev,
-        loading: false,
+      setState(toAuthStateShape<UserInfo>({
+        status: 'error',
+        error: error instanceof Error ? error.message : '登录失败',
       }));
       throw error;
     }
@@ -114,11 +106,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
    */
   const logout = useCallback(() => {
     AuthService.logout({ redirect: false });
-    setState({
-      isAuthenticated: false,
-      user: null,
-      loading: false,
-    });
+    setState(toAuthStateShape<UserInfo>({ status: 'anonymous' }));
   }, []);
 
   /**
@@ -160,11 +148,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
 
     const handleAuthExpired = () => {
-      setState({
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-      });
+      setState(toAuthStateShape<UserInfo>({ status: 'expired' }));
     };
 
     window.addEventListener('storage', handleStorageChange);

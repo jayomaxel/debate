@@ -184,11 +184,31 @@ class AIDebaterAgent:
     ) -> str:
         prompt_phase = self._extract_prompt_pack_field(rendered_prompt, "phase", phase)
         prompt_stance = self._extract_prompt_pack_field(rendered_prompt, "stance", "")
+        prompt_task_type = self._extract_prompt_pack_field(
+            rendered_prompt, "task_type", ""
+        )
         if prompt_stance == "pro":
             stance = "positive"
         elif prompt_stance == "con":
             stance = "negative"
         phase = prompt_phase
+        task_action_contract = {
+            "question_response": (
+                "This is a debate answer, not a summary. Answer the opponent's question first, "
+                "then explain the decisive reason, then return to the assigned stance. "
+                "Repeating the question without challenging or resolving it is invalid."
+            ),
+            "rebuttal": (
+                "This is a rebuttal task. The opponent argument is the target. "
+                "You must identify its claim, directly challenge a concrete defect, explain the reason, "
+                "rebuild the assigned side, and compare the impact. A paraphrase plus a summary is invalid."
+            ),
+            "free_debate_speech": (
+                "This is an active debate turn. When an opponent argument is supplied, attack that argument "
+                "first and make the attack visible in the speech. Do not repeat the opponent speech as a recap. "
+                "A valid response must contain a direct challenge and a reasoned comparison."
+            ),
+        }.get(prompt_task_type, "")
         role_focus = {
             1: "定义、判断标准、证明责任与核心框架",
             2: "盘问设计、证据检验与关键承诺锁定",
@@ -199,6 +219,7 @@ class AIDebaterAgent:
         return "\n".join(
             [
                 PromptPackService.render_agent_system_prompt("debater"),
+                task_action_contract,
                 f"当前身份：{stance_text}{self.position}辩。",
                 f"当前阶段：{phase}；辩位重点：{role_focus}。",
                 f"最终回复不得超过 {self.MAX_REPLY_CHARS} 个中文字符。",
@@ -259,17 +280,24 @@ class AIDebaterAgent:
             history = list(context or [])
             history = history[-10:]
             raw_messages: List[Dict] = []
-            for msg in history:
-                role = (msg.get("role") or "user").strip().lower()
-                if role not in ("user", "assistant"):
-                    role = "user"
-                raw_messages.append(
-                    {
-                        "role": role,
-                        "content": (msg.get("content") or ""),
-                        "conversation_id": msg.get("conversation_id", None),
-                    }
-                )
+            task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
+            history_is_embedded_in_task = task_type in {
+                "question_response",
+                "rebuttal",
+                "free_debate_speech",
+            }
+            if not history_is_embedded_in_task:
+                for msg in history:
+                    role = (msg.get("role") or "user").strip().lower()
+                    if role not in ("user", "assistant"):
+                        role = "user"
+                    raw_messages.append(
+                        {
+                            "role": role,
+                            "content": (msg.get("content") or ""),
+                            "conversation_id": msg.get("conversation_id", None),
+                        }
+                    )
             raw_messages.append({"role": "user", "content": prompt, "conversation_id": None})
 
             params = coze.build_chat_coze_params(
@@ -494,8 +522,12 @@ class AIDebaterAgent:
                 "question": question,
                 "requirements": [
                     "answer the core question directly",
+                    "do not repeat the question or provide a question summary as the answer",
+                    "state whether the opponent's premise or conclusion is valid, invalid, or conditional",
+                    "identify one concrete flaw or limiting condition in the opponent reasoning",
                     "defend the assigned stance",
                     "provide sufficient reasoning",
+                    "end by comparing the result with the assigned stance",
                     "keep language concise and forceful",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
@@ -523,10 +555,14 @@ class AIDebaterAgent:
             task_data={
                 "opponent_argument": opponent_argument,
                 "requirements": [
-                    "identify the issue in the opponent argument",
-                    "provide rebuttal reasoning",
-                    "strengthen the assigned stance",
-                    "avoid copying the opponent wording wholesale",
+                    "treat opponent_argument as the target that must be rebutted",
+                    "identify the opponent's central claim briefly, without quoting the whole argument",
+                    "directly state one concrete defect in the claim, premise, mechanism, evidence, or impact",
+                    "explain why that defect breaks or limits the opponent conclusion",
+                    "rebuild the assigned stance with a mechanism, evidence, or alternative explanation",
+                    "compare the consequences and explain why the assigned stance is stronger",
+                    "never produce only a paraphrase, recap, or one-line summary of the opponent argument",
+                    "never attack a claim that does not appear in opponent_argument",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
             },
@@ -562,6 +598,24 @@ class AIDebaterAgent:
             },
         )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
+
+    @staticmethod
+    def _latest_opponent_argument(recent_speeches: Optional[List[Dict]]) -> str:
+        """Pick the latest non-AI speech as the explicit free-debate target."""
+        items = list(recent_speeches or [])
+        for item in reversed(items):
+            if not isinstance(item, dict):
+                continue
+            speaker = str(
+                item.get("speaker") or item.get("speaker_role") or ""
+            ).strip().lower()
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            if speaker.startswith("ai_") or speaker in {"assistant", "ai"}:
+                continue
+            return content
+        return ""
     
     async def generate_free_debate_speech(
         self,
@@ -582,10 +636,15 @@ class AIDebaterAgent:
             task_type="free_debate_speech",
             task_data={
                 "recent_speeches": list(recent_speeches or [])[-5:],
+                "opponent_argument": self._latest_opponent_argument(recent_speeches),
                 "requirements": [
-                    "rebut recent opponent points when useful",
+                    "when opponent_argument is available, rebut it before adding any new point",
+                    "do not repeat the opponent speech or summarize it as the main response",
+                    "open with a direct challenge or answer to the opponent's claim",
+                    "complete one rebuttal using a concrete reason, mechanism, evidence, boundary, or proof burden",
                     "add supporting reasoning for the assigned side",
-                    "introduce a new angle only when it helps the current clash",
+                    "introduce a new angle only when it directly helps the current clash",
+                    "close with a comparison of impact or proof burden",
                     "keep language concise and forceful",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
@@ -794,6 +853,7 @@ class AIDebaterAgent:
             context=context,
         )
 
+<<<<<<< HEAD
         # The Prompt Pack already contains the trimmed debate history. Sending
         # the same transcript again as chat messages doubled the request size,
         # slowed first-token latency and made provider timeouts much more likely.
@@ -801,6 +861,25 @@ class AIDebaterAgent:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
+=======
+        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
+        history_is_embedded_in_task = task_type in {
+            "question_response",
+            "rebuttal",
+            "free_debate_speech",
+        }
+        if context and not history_is_embedded_in_task:
+            for msg in context[-20:]:
+                role = msg.get("role") or "user"
+                content = msg.get("content") or ""
+                if not content:
+                    continue
+                if role not in ("system", "user", "assistant"):
+                    role = "user"
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+>>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
 
         payload = {
             "model": model_name,

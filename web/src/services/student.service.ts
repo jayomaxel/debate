@@ -4,6 +4,8 @@
  */
 
 import { api } from '../lib/api';
+import { toReportViewModel } from '../lib/frontend-adapters';
+import type { FrontendReportViewModel, ReportContract } from '../lib/frontend-contracts';
 
 const REPORT_PDF_DOWNLOAD_FILENAME = 'debate-report.pdf';
 
@@ -408,6 +410,7 @@ export interface ClassComparison {
   sample_size: number;
 }
 
+<<<<<<< HEAD
 // 辩论报告（学生端报告查看接口 /api/student/reports/{debate_id}）
 export interface HumanAbilityStatistics {
   ability_scope: 'human_only';
@@ -489,6 +492,10 @@ export interface DebateReport {
     [key: string]: unknown;
   };
 }
+=======
+// 页面只消费适配后的报告 ViewModel。
+export type DebateReport = FrontendReportViewModel;
+>>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
 
 // 知识库
 export interface KBSource {
@@ -949,9 +956,14 @@ class StudentService {
    */
   static async getReport(debateId: string): Promise<DebateReport> {
     try {
+<<<<<<< HEAD
       return await api.get<DebateReport>(`/api/student/reports/${debateId}`, {
         timeout: 55000,
       });
+=======
+      const response = await api.get<ReportContract>(`/api/student/reports/${debateId}`);
+      return toReportViewModel(response);
+>>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
     } catch (error) {
       console.error('[StudentService] Get report failed:', error);
       throw error;

@@ -4,9 +4,11 @@
  */
 
 import { api } from '../lib/api';
+import { toReportViewModel } from '../lib/frontend-adapters';
 import type { DebateReport } from './student.service';
 import type {
   DebateConfigMeta,
+  ReportContract,
   RoleAssignmentInput,
   RoleAssignmentPreviewContract,
   TopicRecommendationAnalyticsContract,
@@ -343,6 +345,12 @@ export interface TeachingSummaryResult {
 
 export interface TeacherReportPayload {
   report: DebateReport;
+  report_meta: TeacherReportMeta;
+  speech_anchors: TeacherSpeechAnchor[];
+}
+
+interface TeacherReportPayloadContract {
+  report: ReportContract;
   report_meta: TeacherReportMeta;
   speech_anchors: TeacherSpeechAnchor[];
 }
@@ -744,7 +752,13 @@ class TeacherService {
 
   static async getReport(debateId: string): Promise<TeacherReportPayload> {
     try {
-      return await api.get<TeacherReportPayload>(`/api/teacher/debates/${debateId}/report`);
+      const response = await api.get<TeacherReportPayloadContract>(
+        `/api/teacher/debates/${debateId}/report`
+      );
+      return {
+        ...response,
+        report: toReportViewModel(response.report),
+      };
     } catch (error) {
       console.error('[TeacherService] Get report failed:', error);
       throw error;
