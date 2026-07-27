@@ -410,92 +410,8 @@ export interface ClassComparison {
   sample_size: number;
 }
 
-<<<<<<< HEAD
-// 辩论报告（学生端报告查看接口 /api/student/reports/{debate_id}）
-export interface HumanAbilityStatistics {
-  ability_scope: 'human_only';
-  evaluated_student_count: number;
-  valid_human_speech_count: number;
-  excluded_ai_speech_count: number;
-  excluded_demo_record_count: number;
-  has_human_ability_data: boolean;
-  ability_scores: {
-    logical_construction: number;
-    ai_knowledge_application: number;
-    critical_thinking: number;
-    language_expression: number;
-    ai_ethics_literacy: number;
-  } | null;
-  overall_score: number | null;
-}
-
-export interface DebateReportStatistics extends Record<string, unknown> {
-  human_ability?: HumanAbilityStatistics;
-}
-
-export interface DebateReport {
-  debate_id: string;
-  topic: string;
-  start_time: string | null;
-  end_time: string | null;
-  duration: number;
-  participants: Array<{
-    user_id: string;
-    name: string;
-    role: string;
-    stance: string;
-    is_ai?: boolean;
-    has_speech?: boolean;
-    score_status?: 'ready' | 'no_speech' | 'processing' | 'failed' | string;
-    speech_count?: number;
-    final_score: {
-      logic_score: number;
-      argument_score: number;
-      response_score: number;
-      persuasion_score: number;
-      teamwork_score: number;
-      overall_score: number;
-      speech_count: number;
-      total_duration?: number;
-    };
-  }>;
-  speeches: Array<{
-    id: string;
-    speaker_user_id?: string | null;
-    speaker_type?: string;
-    speaker_role?: string;
-    speaker_name?: string;
-    stance?: string | null;
-    role?: string | null;
-    phase: string;
-    content: string;
-    duration: number;
-    timestamp: string;
-    score: {
-      logic_score: number;
-      argument_score: number;
-      response_score: number;
-      persuasion_score: number;
-      teamwork_score: number;
-      overall_score: number;
-      feedback: string;
-    } | null;
-  }>;
-  statistics: DebateReportStatistics;
-  winner: string;
-  summary?: string;
-  report_meta?: {
-    report_status?: 'ready' | 'processing' | 'empty' | 'failed' | string;
-    report_job_status?: string | null;
-    score_missing_count?: number;
-    report_quality?: string;
-    [key: string]: unknown;
-  };
-}
-=======
 // 页面只消费适配后的报告 ViewModel。
 export type DebateReport = FrontendReportViewModel;
->>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
 
 // 知识库
 export interface KBSource {
@@ -956,14 +872,8 @@ class StudentService {
    */
   static async getReport(debateId: string): Promise<DebateReport> {
     try {
-<<<<<<< HEAD
-      return await api.get<DebateReport>(`/api/student/reports/${debateId}`, {
-        timeout: 55000,
-      });
-=======
       const response = await api.get<ReportContract>(`/api/student/reports/${debateId}`);
       return toReportViewModel(response);
->>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
     } catch (error) {
       console.error('[StudentService] Get report failed:', error);
       throw error;

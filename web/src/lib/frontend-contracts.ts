@@ -323,6 +323,31 @@ export interface ReportSpeechContract {
   score?: ReportScoreContract | null;
 }
 
+export interface HumanAbilityStatistics {
+  ability_scope: 'human_only';
+  evaluated_student_count: number;
+  valid_human_speech_count: number;
+  excluded_ai_speech_count: number;
+  excluded_demo_record_count: number;
+  has_human_ability_data: boolean;
+  ability_scores: {
+    logical_construction: number;
+    ai_knowledge_application: number;
+    critical_thinking: number;
+    language_expression: number;
+    ai_ethics_literacy: number;
+  } | null;
+  overall_score: number | null;
+}
+
+export interface ReportMetaContract {
+  report_status?: 'ready' | 'processing' | 'empty' | 'failed' | string;
+  report_job_status?: string | null;
+  score_missing_count?: number;
+  report_quality?: string;
+  [key: string]: unknown;
+}
+
 export interface ReportContract {
   debate_id: string;
   student_id?: string | null;
@@ -347,6 +372,7 @@ export interface ReportContract {
   } | null;
   feedback?: string | null;
   generated_at?: string | null;
+  report_meta?: ReportMetaContract | null;
 }
 
 export interface FrontendReportViewModel {
@@ -397,7 +423,9 @@ export interface FrontendReportViewModel {
       feedback: string;
     } | null;
   }>;
-  statistics: Record<string, unknown>;
+  statistics: Record<string, unknown> & {
+    human_ability?: HumanAbilityStatistics;
+  };
   winner: string;
   summary?: string;
   student_id?: string;
@@ -413,6 +441,7 @@ export interface FrontendReportViewModel {
   };
   feedback?: string;
   generated_at?: string;
+  report_meta?: ReportMetaContract;
 }
 
 export type FrontendAuthStatus =

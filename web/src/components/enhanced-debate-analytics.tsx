@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../store/auth.context';
 import StudentService, { type DebateReport } from '../services/student.service';
+import TeacherService from '../services/teacher.service';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -59,6 +60,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
   const [loading, setLoading] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [reportDownloadPending, setReportDownloadPending] = useState(false);
   const [selectedParticipantId, setSelectedParticipantId] = useState('all');
   const isStudentMode = userType === 'student';
 
@@ -72,7 +74,9 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
         let lastError: unknown;
         for (let attempt = 0; attempt < 4; attempt += 1) {
           try {
-            data = await StudentService.getReport(debateId);
+            data = isStudentMode
+              ? await StudentService.getReport(debateId)
+              : (await TeacherService.getReport(debateId)).report;
             const status = data.report_meta?.report_status;
             if (status !== 'processing') {
               break;
@@ -114,8 +118,18 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
       if (activeView !== 'history') return;
       try {
         setHistoryLoading(true);
-        const data = await StudentService.getHistory(50, 0);
-        setHistoryItems((data as any)?.list || []);
+        if (isStudentMode) {
+          const data = await StudentService.getHistory(50, 0);
+          setHistoryItems((data as any)?.list || []);
+        } else {
+          const debates = await TeacherService.getDebates();
+          setHistoryItems(
+            debates.map((item) => ({
+              ...item,
+              debate_id: item.id,
+            })),
+          );
+        }
       } catch (error) {
         toast({
           title: '获取历史记录失败',
@@ -127,7 +141,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
       }
     };
     fetchHistory();
-  }, [activeView, toast]);
+  }, [activeView, isStudentMode, toast]);
 
   if (loading) {
     return (
@@ -145,12 +159,33 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
   }
 
   const handleDownloadReport = async (format: 'pdf' | 'excel') => {
-    if (!report) return;
-    if (format === 'pdf') {
-      await StudentService.exportReportPDF(report.debate_id);
+    if (!report || reportDownloadPending) return;
+
+    if (format === 'pdf' && report.speeches.length === 0) {
+      toast({
+        title: '暂无可下载的 PDF 报告',
+        description: '本场辩论没有发言记录，因此不会生成 PDF。',
+        variant: 'destructive',
+      });
       return;
     }
-    await StudentService.exportReportExcel(report.debate_id);
+
+    try {
+      setReportDownloadPending(true);
+      if (format === 'pdf') {
+        await StudentService.exportReportPDF(report.debate_id);
+      } else {
+        await StudentService.exportReportExcel(report.debate_id);
+      }
+    } catch (error) {
+      toast({
+        title: '报告下载失败',
+        description: '无法生成或下载报告，请稍后重试。',
+        variant: 'destructive',
+      });
+    } finally {
+      setReportDownloadPending(false);
+    }
   };
 
   const handleEmailReport = async () => {
@@ -270,7 +305,7 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-slate-900">辩论历史记录</h2>
               <Badge className={isStudentMode ? 'student-pill' : ''}>
-                {safeStudentStats.totalDebates} 场辩论
+                {isStudentMode ? safeStudentStats.totalDebates : historyItems.length} 场辩论
               </Badge>
             </div>
 
@@ -303,7 +338,9 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
                     onClick={async () => {
                       try {
                         setLoading(true);
-                        const data = await StudentService.getReport(item.debate_id);
+                        const data = isStudentMode
+                          ? await StudentService.getReport(item.debate_id)
+                          : (await TeacherService.getReport(item.debate_id)).report;
                         setReport(data);
                         const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
                         setSelectedParticipantId(
