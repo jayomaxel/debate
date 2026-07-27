@@ -853,15 +853,6 @@ class AIDebaterAgent:
             context=context,
         )
 
-<<<<<<< HEAD
-        # The Prompt Pack already contains the trimmed debate history. Sending
-        # the same transcript again as chat messages doubled the request size,
-        # slowed first-token latency and made provider timeouts much more likely.
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-=======
         messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
         task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
         history_is_embedded_in_task = task_type in {
@@ -879,7 +870,6 @@ class AIDebaterAgent:
                     role = "user"
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": prompt})
->>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
 
         payload = {
             "model": model_name,

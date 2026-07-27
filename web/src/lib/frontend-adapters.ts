@@ -169,6 +169,7 @@ export const toReportViewModel = (
       : undefined,
     feedback: source.feedback || undefined,
     generated_at: source.generated_at || undefined,
+    report_meta: source.report_meta ? { ...source.report_meta } : undefined,
   };
 };
 
