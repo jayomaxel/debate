@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 import http.client
 import json
 import os
@@ -139,10 +140,28 @@ async def test_two_uvicorn_instances_survive_owner_failure_with_shared_state():
 
     setup_manager = DebateRoomManager()
     setup_state = await setup_manager.create_room(room_id, room_id, db)
+    segment_started_at = datetime.utcnow() + timedelta(hours=8)
+    free_debate_segment = {
+        "id": "free_debate",
+        "title": "Free debate",
+        "phase": DebatePhase.FREE_DEBATE,
+        "duration": 480,
+        "mode": "free",
+        "speaker_roles": ["debater_1", "debater_2"],
+    }
     setup_state.current_phase = DebatePhase.FREE_DEBATE
-    setup_state.current_segment_id = "free_debate"
-    setup_state.current_segment_title = "Free debate"
+    setup_state.phase_start_time = segment_started_at
+    setup_state.match_state = "FREE_DEBATE"
+    setup_state.segment_index = 0
+    setup_state.segment_id = "free_debate"
+    setup_state.segment_title = "Free debate"
+    setup_state.segment_start_time = segment_started_at
+    setup_state.time_remaining = 480
+    setup_state.segment_time_remaining = 480
     setup_state.speaker_mode = "free"
+    setup_state.speaker_options = ["debater_1", "debater_2"]
+    setup_state.flow_segments = [free_debate_segment]
+    setup_state.timer_status = "running"
     assert setup_manager._persist_runtime_state(setup_state, db)
 
     first_ticket = AuthService.issue_ws_ticket(user=first_user, room_id=room_id)["ticket"]
