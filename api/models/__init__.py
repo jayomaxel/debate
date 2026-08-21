@@ -26,6 +26,8 @@ from .teaching_design import (
     TopicRecommendationRun,
     TopicRecommendationItem,
 )
+from .background_job import BackgroundJob
+from .debate_runtime_state import DebateRuntimeState
 
 __all__ = [
     "User",
@@ -53,4 +55,6 @@ __all__ = [
     "ClassTeachingDesignVersion",
     "TopicRecommendationRun",
     "TopicRecommendationItem",
+    "BackgroundJob",
+    "DebateRuntimeState",
 ]

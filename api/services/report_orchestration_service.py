@@ -15,9 +15,11 @@ from sqlalchemy.orm import Session
 from models.debate import Debate
 from models.score import Score
 from models.speech import Speech
+from schemas.operations import ReportStatus
 from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import ReportGenerator
 from services.scoring_service import ScoringService
+from services.score_eligibility_service import ScoreEligibilityService
 from services.score_validation_service import ScoreValidationService
 from utils.markdown_to_pdf import MarkdownToPdfConverter
 
@@ -25,6 +27,7 @@ from utils.markdown_to_pdf import MarkdownToPdfConverter
 class ReportOrchestrationService:
     """B-side report workflow orchestration around the core report generator."""
 
+    PDF_RENDERER_VERSION = "weasyprint-v1"
     REPORT_QUALITY_VALUES = ("validated", "partial", "fallback")
     LEGACY_REPORT_QUALITY_VALUES = ("repaired",)
     SCORE_FALLBACK_MARKER = "评分系统暂时不可用"
@@ -54,6 +57,7 @@ class ReportOrchestrationService:
         markdown_status = str(report_meta.get("report_markdown_status") or "")
         pdf_status = str(report_meta.get("report_pdf_status") or "")
         score_fallback_detected = bool(report_meta.get("score_fallback_detected"))
+        score_ineligible_count = int(report_meta.get("score_ineligible_count") or 0)
 
         if speech_count <= 0 or report_status == "empty":
             return "fallback"
@@ -63,6 +67,7 @@ class ReportOrchestrationService:
             or markdown_status == "failed"
             or pdf_status == "failed"
             or score_fallback_detected
+            or score_ineligible_count > 0
         ):
             return "partial"
         if explicit_quality in {"partial", "fallback"}:
@@ -72,6 +77,20 @@ class ReportOrchestrationService:
     @staticmethod
     def _compute_markdown_hash(markdown_text: str, score_revision: int = 0) -> str:
         payload = f"score_revision:{int(score_revision or 0)}\n{markdown_text}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def compute_pdf_cache_key(
+        debate_id: str,
+        score_revision: int,
+        markdown_hash: str,
+    ) -> str:
+        payload = (
+            f"debate_id:{debate_id}\n"
+            f"score_revision:{int(score_revision or 0)}\n"
+            f"markdown_hash:{markdown_hash}\n"
+            f"renderer_version:{ReportOrchestrationService.PDF_RENDERER_VERSION}"
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -99,6 +118,9 @@ class ReportOrchestrationService:
 
         markdown_hash = report_data.get("report_markdown_hash")
         pdf_hash = report_data.get("report_pdf_markdown_hash")
+        pdf_cache_key = report_data.get("report_pdf_cache_key")
+        score_revision = int(report_data.get("score_revision") or 0)
+        recalculation_count = int(report_data.get("report_recalculation_count") or 0)
         pdf_storage = report_data.get(ReportFileStorageService.PDF_STORAGE_META_KEY)
         has_pdf_reference = bool(
             (isinstance(pdf_storage, dict) and pdf_storage.get("storage_key"))
@@ -106,6 +128,18 @@ class ReportOrchestrationService:
         )
 
         if pdf_hash and markdown_hash and pdf_hash != markdown_hash:
+            return "stale"
+        if pdf_cache_key and not markdown_hash:
+            return "stale"
+        if pdf_cache_key and markdown_hash:
+            expected_cache_key = ReportOrchestrationService.compute_pdf_cache_key(
+                str(debate.id),
+                score_revision,
+                str(markdown_hash),
+            )
+            if pdf_cache_key != expected_cache_key:
+                return "stale"
+        if recalculation_count > 0 and has_pdf_reference and not (pdf_hash and markdown_hash):
             return "stale"
         if (
             has_pdf_reference
@@ -130,6 +164,8 @@ class ReportOrchestrationService:
             flags.append("missing_scores")
         if meta.get("score_fallback_detected"):
             flags.append("score_fallback_detected")
+        if int(meta.get("score_ineligible_count") or 0) > 0:
+            flags.append("scores_excluded_from_analytics")
         if meta.get("legacy_report_quality") == "repaired":
             flags.append("legacy_repaired_quality")
         if meta.get("report_markdown_status") == "failed":
@@ -238,8 +274,12 @@ class ReportOrchestrationService:
         fallback_scores = [
             score
             for score in scores
-            if ReportOrchestrationService.SCORE_FALLBACK_MARKER
+            if score.status == "fallback"
+            or ReportOrchestrationService.SCORE_FALLBACK_MARKER
             in str(getattr(score, "feedback", "") or "")
+        ]
+        ineligible_scores = [
+            score for score in scores if not ScoreEligibilityService.is_eligible(score)
         ]
         speech_count = len(valid_speeches)
         scored_count = len(scored_speech_ids)
@@ -286,6 +326,7 @@ class ReportOrchestrationService:
                 report_data.get("score_fallback_generated") or fallback_scores
             ),
             "score_fallback_count": len(fallback_scores),
+            "score_ineligible_count": len(ineligible_scores),
             "scoring_source": score_contract_meta.get("scoring_source"),
             "scoring_quality": score_contract_meta.get("scoring_quality"),
             "provider": score_contract_meta.get("provider"),
@@ -370,7 +411,10 @@ class ReportOrchestrationService:
                     "timestamp": speech.get("timestamp"),
                     "summary": content[:120] + ("..." if len(content) > 120 else ""),
                     "overall_score": score.get("overall_score") if score else None,
-                    "score_status": "ready" if score else "missing",
+                    "score_status": score.get("status") if score else "missing",
+                    "scoring_source": score.get("scoring_source") if score else None,
+                    "scoring_quality": score.get("scoring_quality") if score else None,
+                    "eligible_for_analytics": bool(score.get("eligible_for_analytics")) if score else False,
                     "evidence_source": source_info.get("evidence_source"),
                     "source_label": source_info.get("source_label"),
                 }
@@ -391,6 +435,7 @@ class ReportOrchestrationService:
             "score_revision": int(report_meta.get("score_revision") or 0),
             "score_generation_mode": report_meta.get("score_generation_mode"),
             "score_fallback_detected": bool(report_meta.get("score_fallback_detected")),
+            "score_ineligible_count": int(report_meta.get("score_ineligible_count") or 0),
             "report_status": report_meta.get("report_status"),
             "report_quality": report_meta.get("report_quality"),
         }
@@ -560,6 +605,8 @@ class ReportOrchestrationService:
                 "report_markdown",
                 "report_markdown_hash",
                 "report_pdf_markdown_hash",
+                "report_pdf_cache_key",
+                "report_pdf_renderer_version",
                 ReportFileStorageService.PDF_STORAGE_META_KEY,
                 "report_quality",
             }
@@ -593,8 +640,6 @@ class ReportOrchestrationService:
         if not debate:
             raise ValueError("debate not found")
 
-        await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
-        db.refresh(debate)
         report = ReportGenerator.generate_student_report(
             db=db,
             debate_id=debate_id,
@@ -620,19 +665,39 @@ class ReportOrchestrationService:
         db: Session,
         debate_id: str,
     ) -> Dict[str, Any]:
-        score_status = await ScoringService.ensure_debate_scored(db=db, debate_id=debate_id)
+        debate_uuid = ReportOrchestrationService._uuid_or_none(debate_id)
+        debate = db.query(Debate).filter(Debate.id == debate_uuid).first() if debate_uuid else None
+        if not debate:
+            raise ValueError("debate not found")
+        from services.report_state_service import ReportStateService
+        from services.room_manager import room_manager
+
+        current_state = ReportStateService.resolve(db, debate)
+        if current_state.report_status == ReportStatus.PROCESSING:
+            return {
+                "debate_id": debate_id,
+                "mode": "queued",
+                "operation_state": current_state.model_dump(mode="json"),
+                "report_meta": ReportOrchestrationService.build_report_meta(db, debate),
+                "reused_job": True,
+            }
+
         report_meta = ReportOrchestrationService.clear_report_cache_for_recalculation(
             db=db,
             debate_id=debate_id,
         )
-        teaching_summary = ReportOrchestrationService.build_teaching_summary(
-            db=db,
-            debate_id=debate_id,
-        )
+        db.refresh(debate)
+
+        # Recalculation creates a new revision even when every speech is already
+        # scored. The revision is part of the durable job's dedupe key, so this
+        # queues exactly one fresh report build for this recalculation.
+        room_manager.enqueue_report_job(db, debate.id, debate_id)
+        db.refresh(debate)
+        state = ReportStateService.resolve(db, debate)
         return {
             "debate_id": debate_id,
-            "mode": "lightweight",
-            "score_status": score_status,
+            "mode": "queued",
+            "operation_state": state.model_dump(mode="json"),
             "report_meta": report_meta,
-            "teaching_summary": teaching_summary,
+            "reused_job": False,
         }

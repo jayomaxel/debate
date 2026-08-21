@@ -982,11 +982,13 @@ class ConfigService:
         更新向量模型配置。
         """
         try:
-            from services.kb_vector_schema_service import KBVectorSchemaService
-
             config = self.db.execute(
                 select(VectorConfigModel).limit(1)
             ).scalar_one_or_none()
+            previous_model = str(config.model_name) if config is not None else None
+            previous_dimension = (
+                int(config.embedding_dimension or 0) if config is not None else None
+            )
 
             if not config:
                 config = VectorConfigModel(
@@ -1013,12 +1015,27 @@ class ConfigService:
                 logger.info(f"更新向量配置: {config.model_name}")
 
             self.db.flush()
-            KBVectorSchemaService.ensure_schema_matches_dimension(
-                db=self.db,
-                target_dimension=int(config.embedding_dimension or 1536),
+            rebuild_required = config is not None and previous_model is not None and (
+                previous_model != str(config.model_name)
+                or previous_dimension != int(config.embedding_dimension or 0)
             )
-            self.db.commit()
+            rebuild_job = None
+            rebuild_created = False
+            if rebuild_required and self.db.get_bind().dialect.name == "postgresql":
+                from services.kb_vector_rebuild_service import KBVectorRebuildService
+
+                rebuild_job, rebuild_created = KBVectorRebuildService.enqueue(
+                    self.db,
+                    target_model=str(config.model_name),
+                    target_dimension=int(config.embedding_dimension or 0),
+                    requested_by="vector_config_update",
+                    reason="vector_config_changed",
+                )
+            else:
+                self.db.commit()
             self.db.refresh(config)
+            config._vector_rebuild_job_id = str(rebuild_job.id) if rebuild_job else None
+            config._vector_rebuild_created = rebuild_created
             self._set_cached_config(config)
             return config
 

@@ -13,6 +13,7 @@ from models.user import User
 from models.class_model import Class
 from models.debate import Debate, DebateParticipation
 from models.score import Score
+from services.score_eligibility_service import ScoreEligibilityService
 from models.speech import Speech
 
 logger = get_logger(__name__)
@@ -173,7 +174,7 @@ class AnalyticsService:
             ).join(
                 DebateParticipation, User.id == DebateParticipation.user_id
             ).filter(
-                User.class_id == class_id
+                User.class_id == class_id,
             ).group_by(User.id, User.name).all()
             
             # 计算平均参与次数
@@ -187,7 +188,8 @@ class AnalyticsService:
             ).join(
                 User, DebateParticipation.user_id == User.id
             ).filter(
-                User.class_id == class_id
+                User.class_id == class_id,
+                ScoreEligibilityService.sql_filter(),
             ).scalar() or 0
             
             # 获取最近7天的活跃度
@@ -240,7 +242,7 @@ class AnalyticsService:
             
             # 获取参与次数
             participation_count = self.db.query(DebateParticipation).filter(
-                DebateParticipation.user_id == student_id
+                DebateParticipation.user_id == student_id,
             ).count()
             
             # 获取完成的辩论次数
@@ -259,7 +261,8 @@ class AnalyticsService:
             ).join(
                 DebateParticipation, Score.participation_id == DebateParticipation.id
             ).filter(
-                DebateParticipation.user_id == student_id
+                DebateParticipation.user_id == student_id,
+                ScoreEligibilityService.sql_filter(),
             ).scalar() or 0
             
             # 获取五维能力平均分
@@ -272,7 +275,8 @@ class AnalyticsService:
             ).join(
                 DebateParticipation, Score.participation_id == DebateParticipation.id
             ).filter(
-                DebateParticipation.user_id == student_id
+                DebateParticipation.user_id == student_id,
+                ScoreEligibilityService.sql_filter(),
             ).first()
             
             # 获取发言统计
@@ -422,7 +426,8 @@ class AnalyticsService:
             ).join(
                 Score, DebateParticipation.id == Score.participation_id
             ).filter(
-                User.class_id == class_id
+                User.class_id == class_id,
+                ScoreEligibilityService.sql_filter(),
             ).group_by(User.id, User.name).all()
             
             # 计算班级总平均分
@@ -492,7 +497,8 @@ class AnalyticsService:
             ).join(
                 Score, DebateParticipation.id == Score.participation_id
             ).filter(
-                DebateParticipation.user_id == student_id
+                DebateParticipation.user_id == student_id,
+                ScoreEligibilityService.sql_filter(),
             ).order_by(Debate.start_time.desc()).limit(limit).all()
             
             # 反转顺序（从旧到新）

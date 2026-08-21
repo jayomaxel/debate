@@ -12,6 +12,7 @@ from models.user import User
 from models.achievement import Achievement
 from models.debate import Debate, DebateParticipation
 from models.score import Score
+from services.score_eligibility_service import ScoreEligibilityService
 
 logger = get_logger(__name__)
 
@@ -193,7 +194,8 @@ class AchievementService:
                     ).join(
                         DebateParticipation, Score.participation_id == DebateParticipation.id
                     ).filter(
-                        DebateParticipation.user_id == user_id
+                        DebateParticipation.user_id == user_id,
+                        ScoreEligibilityService.sql_filter(),
                     ).scalar()
                     
                     if max_score and max_score >= 90:
@@ -207,7 +209,8 @@ class AchievementService:
                 ).filter(
                     and_(
                         DebateParticipation.user_id == user_id,
-                        Score.overall_score >= 100
+                        Score.overall_score >= 100,
+                        ScoreEligibilityService.sql_filter(),
                     )
                 ).first()
                 
@@ -222,7 +225,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar()
                 
                 if avg_score and avg_score >= 85:
@@ -278,7 +282,8 @@ class AchievementService:
             ).filter(
                 and_(
                     DebateParticipation.user_id == user_id,
-                    Debate.status == "completed"
+                    Debate.status == "completed",
+                    ScoreEligibilityService.sql_filter(),
                 )
             ).order_by(Debate.end_time.desc()).limit(10).all()
             
@@ -296,7 +301,8 @@ class AchievementService:
                 ).filter(
                     and_(
                         DebateParticipation.debate_id == debate.id,
-                        DebateParticipation.stance == debate.stance
+                        DebateParticipation.stance == debate.stance,
+                        ScoreEligibilityService.sql_filter(),
                     )
                 ).scalar() or 0
                 
@@ -308,7 +314,8 @@ class AchievementService:
                 ).filter(
                     and_(
                         DebateParticipation.debate_id == debate.id,
-                        DebateParticipation.stance != debate.stance
+                        DebateParticipation.stance != debate.stance,
+                        ScoreEligibilityService.sql_filter(),
                     )
                 ).scalar() or 0
                 
@@ -342,7 +349,8 @@ class AchievementService:
             ).join(
                 Score, DebateParticipation.id == Score.participation_id
             ).filter(
-                DebateParticipation.user_id == user_id
+                DebateParticipation.user_id == user_id,
+                ScoreEligibilityService.sql_filter(),
             ).all()
             
             mvp_count = 0
@@ -354,7 +362,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.debate_id == participation.debate_id
+                    DebateParticipation.debate_id == participation.debate_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar()
                 
                 # 如果学生得分等于最高分，则为MVP
@@ -603,7 +612,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 
                 return f"最高分: {round(max_score, 1)}/90"
@@ -625,7 +635,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 return f"最高分: {round(max_score, 1)}/100"
             
@@ -635,7 +646,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 return f"平均分: {round(avg_score, 1)}/85"
             
@@ -698,7 +710,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 return (round(float(max_score), 1), 90)
 
@@ -720,7 +733,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 return (round(float(max_score), 1), 100)
 
@@ -730,7 +744,8 @@ class AchievementService:
                 ).join(
                     DebateParticipation, Score.participation_id == DebateParticipation.id
                 ).filter(
-                    DebateParticipation.user_id == user_id
+                    DebateParticipation.user_id == user_id,
+                    ScoreEligibilityService.sql_filter(),
                 ).scalar() or 0
                 return (round(float(avg_score), 1), 85)
 

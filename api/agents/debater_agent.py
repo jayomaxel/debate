@@ -481,6 +481,22 @@ class AIDebaterAgent:
                 "不要引用不存在的上一轮发言",
             ])
 
+        requirements = [
+            "ask exactly one specific question",
+            "avoid repeating previous questions",
+            "press definition, evidence, logic, boundary, or unanswered points according to role focus",
+            "do not invent a previous opponent speech when no opponent argument is supplied",
+        ]
+        if not cleaned_arguments:
+            opponent_label = "反方" if str(stance).strip().lower() == "positive" else "正方"
+            requirements.extend(
+                [
+                    "当前没有可引用的对方历史发言，不需要等待对方先发言。",
+                    f"请围绕辩题主动预判{opponent_label}最可能采用的核心前提并提出质询。",
+                    "不得引用不存在的上一轮发言，也不得虚构对方已经表达过的观点。",
+                ]
+            )
+
         prompt = self._build_prompt_pack_prompt(
             topic,
             stance,
@@ -853,15 +869,6 @@ class AIDebaterAgent:
             context=context,
         )
 
-<<<<<<< HEAD
-        # The Prompt Pack already contains the trimmed debate history. Sending
-        # the same transcript again as chat messages doubled the request size,
-        # slowed first-token latency and made provider timeouts much more likely.
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-=======
         messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
         task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
         history_is_embedded_in_task = task_type in {
@@ -879,7 +886,6 @@ class AIDebaterAgent:
                     role = "user"
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": prompt})
->>>>>>> 4463f062add69f94d8b1b5aba23ee2127601b0d3
 
         payload = {
             "model": model_name,

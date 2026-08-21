@@ -58,6 +58,10 @@ def rate_limit_client(monkeypatch):
     async def recalculate_teacher_report(debate_id: str):
         return {"debate_id": debate_id, "ok": True}
 
+    @app.post("/api/teacher/debates/{debate_id}/report/job/retry")
+    async def retry_teacher_report_job(debate_id: str):
+        return {"debate_id": debate_id, "ok": True}
+
     with TestClient(app) as client:
         yield client
 
@@ -140,6 +144,21 @@ def test_report_fetch_generation_is_rate_limited(rate_limit_client):
         assert response.status_code == 200
 
     blocked = rate_limit_client.get("/api/student/reports/debate-1")
+
+    assert blocked.status_code == 429
+    assert blocked.json()["data"]["bucket"] == "report_regeneration"
+
+
+def test_report_job_retry_is_rate_limited(rate_limit_client):
+    for _ in range(6):
+        response = rate_limit_client.post(
+            "/api/teacher/debates/debate-1/report/job/retry"
+        )
+        assert response.status_code == 200
+
+    blocked = rate_limit_client.post(
+        "/api/teacher/debates/debate-1/report/job/retry"
+    )
 
     assert blocked.status_code == 429
     assert blocked.json()["data"]["bucket"] == "report_regeneration"

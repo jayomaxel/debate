@@ -1,0 +1,160 @@
+name: debate-e2e
+
+x-api-test-environment: &api-test-environment
+  ENVIRONMENT: test
+  DEBUG: "false"
+  SECRET_KEY: e2e-only-secret-key-with-at-least-32-characters
+  DATABASE_URL: postgresql://e2e:e2e@db:5432/debate_e2e
+  E2E_DATABASE_URL: postgresql://e2e:e2e@db:5432/debate_e2e
+  TEST_PGVECTOR_DATABASE_URL: postgresql://e2e:e2e@db:5432/debate_e2e
+  RUNTIME_TEST_DATABASE_URL: postgresql://e2e:e2e@db:5432/debate_e2e
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "15"
+  REDIS_PASSWORD: ""
+  RUNTIME_TEST_REDIS_HOST: redis
+  RUNTIME_TEST_REDIS_PORT: "6379"
+  RUNTIME_TEST_REDIS_DB: "15"
+  PUBLIC_BASE_URL: http://web
+  ALLOWED_ORIGINS: http://web,http://127.0.0.1:18860
+  UPLOAD_DIR: /app/uploads
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: e2e
+      POSTGRES_PASSWORD: e2e
+      POSTGRES_DB: debate_e2e
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e2e -d debate_e2e"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment: *api-test-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  e2e:
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment: *api-test-environment
+    command: ["python", "-m", "pytest", "-q", "tests/e2e"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - e2e-uploads:/app/uploads
+
+  api-one:
+    profiles: ["stack"]
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      <<: *api-test-environment
+      INSTANCE_ID: e2e-api-one
+      REALTIME_MULTI_INSTANCE: "true"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - e2e-uploads:/app/uploads
+
+  api-two:
+    profiles: ["stack"]
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      <<: *api-test-environment
+      INSTANCE_ID: e2e-api-two
+      REALTIME_MULTI_INSTANCE: "true"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - e2e-uploads:/app/uploads
+
+  web:
+    profiles: ["stack"]
+    image: debate-web-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      API_UPSTREAM: api-one:7860
+    ports:
+      - "127.0.0.1:18860:80"
+    depends_on:
+      api-one:
+        condition: service_healthy
+      api-two:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  runtime-network-e2e:
+    profiles: ["network-e2e"]
+    image: debate-api-e2e:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      <<: *api-test-environment
+      RUNTIME_API_ONE_WS: ws://api-one:7860
+      RUNTIME_API_TWO_WS: ws://api-two:7860
+      RUNTIME_FAILOVER_CONTAINER: debate-e2e-api-one-1
+      RUNTIME_DOCKER_SOCKET: /var/run/docker.sock
+    command:
+      - python
+      - -m
+      - pytest
+      - -q
+      - tests/stack_e2e/test_runtime_network_multi_instance.py
+    depends_on:
+      api-one:
+        condition: service_healthy
+      api-two:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  e2e-uploads:

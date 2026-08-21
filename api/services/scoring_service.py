@@ -24,6 +24,7 @@ from services.mode_policy_service import ModePolicyService
 from services.prompt_pack_service import PromptPackService
 from services.rubric_service import RubricService
 from services.score_validation_service import ScoreValidationService
+from services.score_eligibility_service import ScoreEligibilityService
 
 logger = get_logger(__name__)
 
@@ -317,20 +318,34 @@ class ScoringService:
             if violations:
                 feedback += f"\n[违规扣分: -{violation_penalty}分]"
             
-            # 创建评分记录
-            score = Score(
-                participation_id=participation_uuid,
-                speech_id=speech_uuid,
-                logic_score=score_breakdown.logic_score,
-                argument_score=score_breakdown.argument_score,
-                response_score=score_breakdown.response_score,
-                persuasion_score=score_breakdown.persuasion_score,
-                teamwork_score=score_breakdown.teamwork_score,
-                overall_score=final_score,
-                feedback=feedback
+            provenance = ScoreEligibilityService.provenance_from_report_meta(
+                getattr(score_breakdown, "report_meta", None),
             )
-            
-            db.add(score)
+            score = (
+                db.execute(select(Score).where(Score.speech_id == speech_uuid))
+                .scalars()
+                .first()
+            )
+            if score is None:
+                score = Score(participation_id=participation_uuid, speech_id=speech_uuid)
+                db.add(score)
+            else:
+                ScoreEligibilityService.apply_provenance(
+                    score,
+                    provenance,
+                    audit_reason="speech_score_retry_succeeded",
+                )
+            score.participation_id = participation_uuid
+            score.logic_score = score_breakdown.logic_score
+            score.argument_score = score_breakdown.argument_score
+            score.response_score = score_breakdown.response_score
+            score.persuasion_score = score_breakdown.persuasion_score
+            score.teamwork_score = score_breakdown.teamwork_score
+            score.overall_score = final_score
+            score.feedback = feedback
+            if score.id is None:
+                ScoreEligibilityService.apply_provenance(score, provenance)
+
             db.commit()
             db.refresh(score)
             
@@ -342,20 +357,52 @@ class ScoringService:
             logger.error(f"评分失败: {e}", exc_info=True)
             db.rollback()
             
-            # 返回默认评分
-            score = Score(
-                participation_id=ScoringService._uuid_value(participation_id),
-                speech_id=ScoringService._uuid_value(speech_id),
-                logic_score=60.0,
-                argument_score=60.0,
-                response_score=60.0,
-                persuasion_score=60.0,
-                teamwork_score=60.0,
-                overall_score=60.0,
-                feedback="评分系统暂时不可用（已标记为降级评分）"
+            fallback_provenance = ScoreEligibilityService.provenance_from_report_meta(
+                {
+                    "scoring_source": "fallback",
+                    "scoring_quality": "fallback",
+                    "provider": "llm",
+                    "retry_count": 1,
+                },
+                failure_code="SCORING_PROVIDER_ERROR",
             )
-            
-            db.add(score)
+            speech_uuid = ScoringService._uuid_value(speech_id)
+            score = (
+                db.execute(select(Score).where(Score.speech_id == speech_uuid))
+                .scalars()
+                .first()
+            )
+            if score is not None and ScoreEligibilityService.is_eligible(score):
+                ScoreEligibilityService.record_inactive_attempt(
+                    score,
+                    fallback_provenance,
+                    audit_reason="speech_score_retry_failed",
+                )
+                db.commit()
+                db.refresh(score)
+                return score
+            if score is None:
+                score = Score(
+                    participation_id=ScoringService._uuid_value(participation_id),
+                    speech_id=speech_uuid,
+                )
+                db.add(score)
+            else:
+                ScoreEligibilityService.apply_provenance(
+                    score,
+                    fallback_provenance,
+                    audit_reason="speech_score_retry_failed",
+                )
+            score.logic_score = 70.0
+            score.argument_score = 70.0
+            score.response_score = 70.0
+            score.persuasion_score = 70.0
+            score.teamwork_score = 70.0
+            score.overall_score = 70.0
+            score.feedback = "评分系统暂时不可用"
+            if score.id is None:
+                ScoreEligibilityService.apply_provenance(score, fallback_provenance)
+
             db.commit()
             db.refresh(score)
             
@@ -480,6 +527,9 @@ class ScoringService:
                 score_meta = scores_data.get("report_meta")
                 if isinstance(score_meta, dict):
                     score_quality_states.add(str(score_meta.get("scoring_quality") or ""))
+                score_provenance = ScoreEligibilityService.provenance_from_report_meta(
+                    score_meta if isinstance(score_meta, dict) else scoring_meta,
+                )
                 
                 participation_id = None
                 if speech.speaker_type == "ai":
@@ -568,6 +618,16 @@ class ScoringService:
                 ).scalar_one_or_none()
 
                 if existing_score:
+                    if (
+                        ScoreEligibilityService.is_eligible(existing_score)
+                        and not score_provenance["eligible_for_analytics"]
+                    ):
+                        ScoreEligibilityService.record_inactive_attempt(
+                            existing_score,
+                            score_provenance,
+                            audit_reason="debate_score_retry_degraded",
+                        )
+                        continue
                     existing_score.participation_id = ScoringService._uuid_value(participation_id)
                     existing_score.speech_id = ScoringService._uuid_value(speech.id)
                     existing_score.logic_score = float(scores_data.get("logic_score", 60))
@@ -577,6 +637,11 @@ class ScoringService:
                     existing_score.teamwork_score = float(scores_data.get("teamwork_score", 60))
                     existing_score.overall_score = final_score
                     existing_score.feedback = feedback
+                    ScoreEligibilityService.apply_provenance(
+                        existing_score,
+                        score_provenance,
+                        audit_reason="debate_score_retry",
+                    )
                     continue
 
                 new_score = Score(
@@ -588,7 +653,8 @@ class ScoringService:
                     persuasion_score=float(scores_data.get("persuasion_score", 60)),
                     teamwork_score=float(scores_data.get("teamwork_score", 60)),
                     overall_score=final_score,
-                    feedback=feedback
+                    feedback=feedback,
+                    **score_provenance,
                 )
                 db.add(new_score)
 
@@ -875,7 +941,11 @@ class ScoringService:
         total_duration = sum(max(0, int(s.duration or 0)) for s in participant_speeches)
 
         scores = (
-            db.execute(select(Score).where(Score.participation_id == participation_uuid))
+            db.execute(
+                select(Score)
+                .where(Score.participation_id == participation_uuid)
+                .where(ScoreEligibilityService.sql_filter())
+            )
             .scalars()
             .all()
         )
@@ -931,6 +1001,7 @@ class ScoringService:
             .filter(Speech.debate_id == ScoringService._uuid_value(debate_id))
             .filter(Speech.is_valid_for_scoring.is_(True))
             .filter(Speech.speaker_type == type)
+            .filter(ScoreEligibilityService.sql_filter())
         )
 
         # 分页查询
@@ -1012,7 +1083,11 @@ class ScoringService:
         scores: List[Score] = []
         if speech_ids:
             scores = (
-                db.execute(select(Score).where(Score.speech_id.in_(speech_ids)))
+                db.execute(
+                    select(Score)
+                    .where(Score.speech_id.in_(speech_ids))
+                    .where(ScoreEligibilityService.sql_filter())
+                )
                 .scalars()
                 .all()
             )

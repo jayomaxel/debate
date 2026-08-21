@@ -41,7 +41,6 @@ def test_same_user_in_two_rooms_receives_only_current_room_broadcasts():
 
     asyncio.run(scenario())
 
-
 def test_disconnecting_one_room_keeps_same_users_other_room_connected():
     async def scenario():
         manager = WebSocketManager()
@@ -65,4 +64,3 @@ def test_disconnecting_one_room_keeps_same_users_other_room_connected():
         room_b_socket.send_json.assert_awaited_once()
 
     asyncio.run(scenario())
-

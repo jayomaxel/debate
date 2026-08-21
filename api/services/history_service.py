@@ -370,6 +370,10 @@ class HistoryService:
                         "knowledge": round(float(sc.argument_score), 2),
                         "total": round(float(sc.overall_score), 2),
                         "feedback": sc.feedback,
+                        "status": sc.status,
+                        "scoring_source": sc.scoring_source,
+                        "scoring_quality": sc.scoring_quality,
+                        "eligible_for_analytics": bool(sc.eligible_for_analytics),
                         "created_at": sc.created_at.isoformat() if sc.created_at else None,
                     }
                 )
@@ -388,6 +392,8 @@ class HistoryService:
                     "role": participation.role if participation else None,
                     "stance": participation.stance if participation else None,
                     "score": round(float(my_score.overall_score), 2) if my_score else None,
+                    "score_status": my_score.status if my_score else None,
+                    "score_eligible_for_analytics": bool(my_score.eligible_for_analytics) if my_score else False,
                 },
                 "speeches": speech_items,
                 "scores": scores,

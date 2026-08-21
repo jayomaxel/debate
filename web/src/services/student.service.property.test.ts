@@ -106,6 +106,7 @@ describe('Student Service - Property-Based Tests', () => {
 
         expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}/export/pdf`, {
           responseType: 'blob',
+          timeout: 60000,
         });
         expect(createdLinks).toHaveLength(1);
         expect(createdLinks[0].href).toBe('blob:mock-url');

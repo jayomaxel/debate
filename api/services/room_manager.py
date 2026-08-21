@@ -15,7 +15,9 @@ from sqlalchemy import select
 from models.debate import Debate, DebateParticipation, DebateReservationInvitation
 from models.user import User
 from utils.websocket_manager import websocket_manager
+from services.runtime_state_store import RuntimeSnapshot, RuntimeStateConflict, RuntimeStateStore
 from logging_config import get_logger
+from config import settings
 
 logger = get_logger(__name__)
 
@@ -285,6 +287,8 @@ class RoomState:
                 continue
             if participant.get("can_speak") is False:
                 continue
+            if participant.get("online") is False:
+                continue
             participants_by_role[role] = participant
 
         return participants_by_role
@@ -319,7 +323,7 @@ class RoomState:
                 "updated_at": entry.get("updated_at"),
                 "role": role,
                 "name": (participant or {}).get("name") or entry.get("name"),
-                "online": bool(participant),
+                "online": bool(participant) and participant.get("online") is not False,
             }
 
         for role, participant in self.get_waiting_participants_by_role().items():
@@ -334,7 +338,7 @@ class RoomState:
             }
             existing["role"] = role
             existing["name"] = participant.get("name")
-            existing["online"] = True
+            existing["online"] = participant.get("online") is not False
             serialized[user_id] = existing
 
         return serialized
@@ -528,6 +532,19 @@ class DebateRoomManager:
             self._room_locks[room_id] = lock
         return lock
 
+    @classmethod
+    def _apply_authoritative_snapshot(
+        cls,
+        room_state: RoomState,
+        snapshot: RuntimeSnapshot,
+    ) -> None:
+        restored = cls._runtime_state_kwargs({RUNTIME_STATE_META_KEY: snapshot.state})
+        for field_name, value in restored.items():
+            if hasattr(room_state, field_name):
+                setattr(room_state, field_name, value)
+        room_state._runtime_version = snapshot.version
+        room_state._authoritative_state_enabled = True
+
     def _cancel_empty_room_cleanup(self, room_id: str) -> None:
         task = self._empty_room_cleanup_tasks.pop(room_id, None)
         if task is not None and not task.done() and task is not asyncio.current_task():
@@ -608,7 +625,7 @@ class DebateRoomManager:
     @staticmethod
     def _serialize_runtime_state(room_state: RoomState) -> dict:
         payload = dict(room_state.to_dict())
-        for transient_key in ("room_id", "debate_id", "participants", "waiting_status", "waiting_checklists"):
+        for transient_key in ("room_id", "debate_id", "waiting_status"):
             payload.pop(transient_key, None)
         return payload
 
@@ -668,6 +685,13 @@ class DebateRoomManager:
             meta[RUNTIME_STATE_META_KEY] = self._serialize_runtime_state(room_state)
             report[ROOM_META_KEY] = meta
             debate.report = report
+            if getattr(room_state, "_authoritative_state_enabled", False):
+                snapshot = RuntimeStateStore(db).patch(
+                    room_state.room_id,
+                    self._serialize_runtime_state(room_state),
+                )
+                self._apply_authoritative_snapshot(room_state, snapshot)
+                return True
             if commit:
                 db.commit()
             return True
@@ -680,6 +704,8 @@ class DebateRoomManager:
     def _schedule_runtime_persistence(self, room_id: str) -> None:
         room_state = self.get_room_state(room_id)
         if room_state is None or not getattr(room_state, "_persistence_enabled", False):
+            return
+        if getattr(room_state, "_authoritative_state_enabled", False):
             return
         self._runtime_persist_dirty.add(room_id)
         task = self._runtime_persist_tasks.get(room_id)
@@ -722,6 +748,30 @@ class DebateRoomManager:
             room_state = self.get_room_state(room_id)
             if room_state is None:
                 return {"allowed": False, "reason": "room_missing"}
+
+            if db is not None and getattr(room_state, "_authoritative_state_enabled", False):
+                try:
+                    allowed, snapshot, reason = RuntimeStateStore(db).claim_mic(
+                        room_id,
+                        user_id=user_id,
+                        user_role=user_role,
+                        now=now,
+                        ttl_seconds=ttl_seconds,
+                    )
+                    self._apply_authoritative_snapshot(room_state, snapshot)
+                    if not allowed:
+                        return {
+                            "allowed": False,
+                            "reason": reason,
+                            "mic_owner_user_id": room_state.mic_owner_user_id,
+                            "mic_owner_role": room_state.mic_owner_role,
+                            "expires_at": room_state.mic_expires_at,
+                        }
+                    await self.broadcast_state_update(room_id)
+                    return {"allowed": True, "expires_at": room_state.mic_expires_at}
+                except RuntimeStateConflict:
+                    db.rollback()
+                    return {"allowed": False, "reason": "persistence_failed"}
 
             locked_debate = None
             if db is not None:
@@ -892,6 +942,15 @@ class DebateRoomManager:
         required_roles = set(room_state.get_required_roles())
         normalized: Dict[str, dict] = {}
 
+        if settings.REALTIME_MULTI_INSTANCE:
+            online_user_ids = websocket_manager.get_global_presence_user_ids(
+                room_state.room_id
+            )
+            for participant in room_state.participants or []:
+                participant["online"] = (
+                    str(participant.get("user_id") or "") in online_user_ids
+                )
+
         for raw_user_id, raw_entry in (room_state.waiting_checklists or {}).items():
             user_id = str(raw_user_id or "").strip()
             if not user_id:
@@ -977,6 +1036,54 @@ class DebateRoomManager:
         except Exception as exc:  # pragma: no cover - realtime best-effort sync
             db.rollback()
             logger.warning("Failed to persist waiting checklist state: %s", exc)
+
+    def _persist_participant_membership(
+        self,
+        room_state: RoomState,
+        db: Optional[Session],
+        *,
+        joined: Optional[dict] = None,
+        departed_user_id: Optional[str] = None,
+    ) -> bool:
+        if (
+            db is None
+            or not getattr(room_state, "_authoritative_state_enabled", False)
+        ):
+            return True
+        serialized_room = self._serialize_runtime_state(room_state)
+
+        def mutate(current: dict) -> dict:
+            participants = {
+                str(item.get("user_id")): dict(item)
+                for item in current.get("participants") or []
+                if isinstance(item, dict) and item.get("user_id")
+            }
+            if departed_user_id:
+                participants.pop(str(departed_user_id), None)
+            if joined and joined.get("user_id"):
+                participants[str(joined["user_id"])] = dict(joined)
+            next_state = {**current, "participants": list(participants.values())}
+            for field_name in (
+                "host_user_id",
+                "host_role",
+                "moderator_missing",
+            ):
+                if field_name in serialized_room:
+                    next_state[field_name] = serialized_room[field_name]
+            return next_state
+
+        try:
+            snapshot = RuntimeStateStore(db).mutate(room_state.room_id, mutate)
+            self._apply_authoritative_snapshot(room_state, snapshot)
+            return True
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "Failed to persist participant membership for room %s: %s",
+                room_state.room_id,
+                exc,
+            )
+            return False
 
     def get_waiting_online_count(self, room_id: str) -> int:
         room_state = self.get_room_state(room_id)
@@ -1131,6 +1238,16 @@ class DebateRoomManager:
         )
         room_state._persistence_enabled = True
 
+        try:
+            initial_state = self._serialize_runtime_state(room_state)
+            snapshot = RuntimeStateStore(db).ensure(room_id, str(debate_uuid), initial_state)
+            self._apply_authoritative_snapshot(room_state, snapshot)
+            room_state._runtime_bind = db.get_bind()
+        except Exception as exc:
+            db.rollback()
+            room_state._authoritative_state_enabled = False
+            logger.warning("Authoritative runtime state is unavailable for room %s: %s", room_id, exc)
+
         self._sync_waiting_checklists_with_participants(room_state)
         self.rooms[room_id] = room_state
 
@@ -1253,6 +1370,12 @@ class DebateRoomManager:
             room_state.host_user_id = str(participant_info.get("user_id"))
             room_state.host_role = str(participant_info.get("role"))
             room_state.moderator_missing = False
+        if not self._persist_participant_membership(
+            room_state,
+            db,
+            joined=participant_info,
+        ):
+            return False
         self._sync_waiting_checklists_with_participants(room_state)
         self._persist_waiting_checklists(room_state, db)
         await self._resume_running_flow_if_needed(room_id)
@@ -1301,7 +1424,9 @@ class DebateRoomManager:
         candidates = [
             participant
             for participant in room_state.participants
-            if participant.get("user_type") == "student" and participant.get("can_speak")
+            if participant.get("user_type") == "student"
+            and participant.get("can_speak")
+            and participant.get("online") is not False
         ]
         candidates.sort(key=lambda participant: role_rank.get(str(participant.get("role")), 99))
         if not candidates:
@@ -1401,12 +1526,20 @@ class DebateRoomManager:
         room_state.participants = [
             p for p in room_state.participants if p["user_id"] != user_id
         ]
+        if not self._persist_participant_membership(
+            room_state,
+            db,
+            departed_user_id=user_id,
+        ):
+            return False
         self._sync_waiting_checklists_with_participants(room_state)
         self._persist_waiting_checklists(room_state, db)
 
         logger.info(f"User {user_id} left room {room_id}")
 
         await self.transfer_moderator_if_needed(room_id, departed_participant, db)
+        if db is not None:
+            self._persist_runtime_state(room_state, db)
 
         # 广播房间状态更新
         await self.broadcast_state_update(room_id)
@@ -1455,6 +1588,44 @@ class DebateRoomManager:
         """
         return self.rooms.get(room_id)
 
+    def apply_remote_state(self, room_id: str, payload: dict, version: int) -> bool:
+        """Apply a newer Redis state event to this instance's read-only cache."""
+        room_state = self.rooms.get(room_id)
+        if room_state is None:
+            return False
+        current_version = int(getattr(room_state, "_runtime_version", 0) or 0)
+        if version and version <= current_version:
+            return False
+        restored = self._runtime_state_kwargs({RUNTIME_STATE_META_KEY: payload})
+        for field_name, value in restored.items():
+            if hasattr(room_state, field_name):
+                setattr(room_state, field_name, value)
+        if isinstance(payload.get("participants"), list):
+            room_state.participants = list(payload["participants"])
+        if isinstance(payload.get("waiting_checklists"), dict):
+            room_state.waiting_checklists = dict(payload["waiting_checklists"])
+        room_state._runtime_version = max(current_version, int(version or 0))
+        return True
+
+    def _acquire_transition_lease(self, room_state: RoomState, db: Session) -> bool:
+        """Serialize start/end transitions across workers and refresh local state."""
+        if not (
+            settings.REALTIME_MULTI_INSTANCE
+            and getattr(room_state, "_authoritative_state_enabled", False)
+        ):
+            return True
+        store = RuntimeStateStore(db)
+        acquired = store.acquire_lease(
+            room_state.room_id,
+            owner=websocket_manager.instance_id,
+            now=datetime.now(),
+            ttl_seconds=15,
+        )
+        snapshot = store.load(room_state.room_id)
+        if snapshot is not None:
+            self._apply_authoritative_snapshot(room_state, snapshot)
+        return acquired
+
     async def update_room_state(self, room_id: str, **kwargs) -> bool:
         """
         更新房间状态
@@ -1482,6 +1653,49 @@ class DebateRoomManager:
         if "current_phase" in kwargs and kwargs.get("current_phase") is not None and not kwargs.get("match_state"):
             room_state.match_state = RoomState.phase_to_match_state(kwargs.get("current_phase"), getattr(room_state, "match_state", None))
 
+        if getattr(room_state, "_authoritative_state_enabled", False):
+            runtime_bind = getattr(room_state, "_runtime_bind", None)
+            if runtime_bind is not None:
+                db = Session(bind=runtime_bind)
+                try:
+                    if settings.REALTIME_MULTI_INSTANCE and not RuntimeStateStore(db).acquire_lease(
+                        room_id,
+                        owner=websocket_manager.instance_id,
+                        now=datetime.now(),
+                        ttl_seconds=10,
+                    ):
+                        snapshot = RuntimeStateStore(db).load(room_id)
+                        if snapshot is not None:
+                            self._apply_authoritative_snapshot(room_state, snapshot)
+                        return False
+                    serialized = self._serialize_runtime_state(room_state)
+                    changed_fields = set(kwargs)
+                    if "match_state" in kwargs:
+                        changed_fields.add("current_phase")
+                    if "current_phase" in kwargs:
+                        changed_fields.add("match_state")
+                    snapshot = RuntimeStateStore(db).patch(
+                        room_id,
+                        {
+                            key: serialized[key]
+                            for key in changed_fields
+                            if key in serialized
+                        },
+                    )
+                    self._apply_authoritative_snapshot(room_state, snapshot)
+                except Exception as exc:
+                    db.rollback()
+                    try:
+                        snapshot = RuntimeStateStore(db).load(room_id)
+                        if snapshot is not None:
+                            self._apply_authoritative_snapshot(room_state, snapshot)
+                    except Exception:
+                        db.rollback()
+                    logger.error("Failed authoritative runtime update for room %s: %s", room_id, exc)
+                    return False
+                finally:
+                    db.close()
+
         # 广播状态更新
         await self.broadcast_state_update(room_id)
         self._schedule_runtime_persistence(room_id)
@@ -1503,6 +1717,9 @@ class DebateRoomManager:
             return False
 
         room_state = self.rooms[room_id]
+
+        if not self._acquire_transition_lease(room_state, db):
+            return False
 
         try:
             debate_uuid = uuid.UUID(str(room_state.debate_id))
@@ -1605,6 +1822,9 @@ class DebateRoomManager:
             return False
 
         room_state = self.rooms[room_id]
+
+        if not self._acquire_transition_lease(room_state, db):
+            return False
 
         # 更新辩论状态
         debate = None
@@ -1709,15 +1929,8 @@ class DebateRoomManager:
         )
 
         if debate_uuid:
-            queued = self.enqueue_report_job(db, debate_uuid, room_id)
-            if queued:
-                asyncio.create_task(
-                    self._auto_score_and_generate_report_background(room_id, debate_uuid)
-                )
-            else:
-                await self._broadcast_debate_ended(room_id)
-        else:
-            await self._broadcast_debate_ended(room_id)
+            self.enqueue_report_job(db, debate_uuid, room_id)
+        await self._broadcast_debate_ended(room_id)
 
         return True
 
@@ -1739,100 +1952,49 @@ class DebateRoomManager:
     def enqueue_report_job(
         self, db: Session, debate_id: uuid.UUID, room_id: str
     ) -> bool:
-        debate = db.execute(
-            select(Debate).where(Debate.id == debate_id).with_for_update()
-        ).scalar_one_or_none()
-        if debate is None:
-            return False
-        existing = self._report_job_payload(debate)
-        if existing.get("status") in {"queued", "running", "completed"}:
-            db.rollback()
-            return False
-        attempts = int(existing.get("attempts") or 0)
-        if attempts >= 3:
-            db.rollback()
-            return False
-        now = datetime.utcnow().isoformat()
-        self._write_report_job(
-            debate,
-            {
-                **existing,
-                "status": "queued",
-                "room_id": str(room_id),
-                "attempts": attempts,
-                "queued_at": now,
-                "updated_at": now,
-                "error": None,
-            },
-        )
-        db.commit()
-        return True
+        from services.background_job_runtime import DEBATE_REPORT_JOB_TYPE
+        from services.background_job_service import BackgroundJobService
 
-    def _claim_report_job(
-        self, db: Session, debate_id: uuid.UUID, room_id: str
-    ) -> bool:
-        debate = db.execute(
-            select(Debate).where(Debate.id == debate_id).with_for_update()
-        ).scalar_one_or_none()
+        debate = db.execute(select(Debate).where(Debate.id == debate_id)).scalar_one_or_none()
         if debate is None:
             return False
-        existing = self._report_job_payload(debate)
-        if existing.get("status") not in {"queued", "failed"}:
-            db.rollback()
-            return False
-        attempts = int(existing.get("attempts") or 0)
-        if attempts >= 3:
-            db.rollback()
-            return False
-        now = datetime.utcnow().isoformat()
-        self._write_report_job(
-            debate,
-            {
-                **existing,
-                "status": "running",
+        report = debate.report if isinstance(debate.report, dict) else {}
+        score_revision = int(report.get("score_revision") or 0)
+        report_job_revision = int(report.get("report_recalculation_count") or 0)
+        job, created = BackgroundJobService.enqueue(
+            db,
+            job_type=DEBATE_REPORT_JOB_TYPE,
+            dedupe_key=(
+                f"debate:{debate_id}:score-revision:{score_revision}:"
+                f"report-revision:{report_job_revision}"
+            ),
+            target_type="debate",
+            target_id=str(debate_id),
+            payload={
+                "debate_id": str(debate_id),
                 "room_id": str(room_id),
-                "attempts": attempts + 1,
-                "started_at": now,
-                "updated_at": now,
-                "error": None,
+                "score_revision": score_revision,
+                "report_job_revision": report_job_revision,
             },
+            priority=100,
+            max_attempts=3,
         )
-        db.commit()
-        return True
-
-    def _finish_report_job(
-        self,
-        db: Session,
-        debate_id: uuid.UUID,
-        *,
-        succeeded: bool,
-        error: Optional[str] = None,
-    ) -> None:
-        debate = db.execute(
-            select(Debate).where(Debate.id == debate_id).with_for_update()
-        ).scalar_one_or_none()
-        if debate is None:
-            db.rollback()
-            return
-        existing = self._report_job_payload(debate)
-        now = datetime.utcnow().isoformat()
-        self._write_report_job(
-            debate,
-            {
-                **existing,
-                "status": "completed" if succeeded else "failed",
-                "updated_at": now,
-                "completed_at": now if succeeded else existing.get("completed_at"),
-                "error": None if succeeded else str(error or "report generation failed")[:1000],
-            },
+        logger.info(
+            "Durable report job %s: debate_id=%s job_id=%s",
+            "created" if created else "reused",
+            debate_id,
+            job.id,
         )
-        db.commit()
+        return created
 
     async def recover_pending_report_jobs(self, db: Session) -> int:
+        """Migrate recoverable legacy report jobs into the durable queue."""
+        from services.background_job_service import BackgroundJobService
+
+        recovered = BackgroundJobService.recover_expired_leases(db)
         debates = db.execute(
             select(Debate).where(Debate.status == "completed")
         ).scalars().all()
-        recovered = 0
         for debate in debates:
             job = self._report_job_payload(debate)
             status_value = str(job.get("status") or "")
@@ -1849,15 +2011,9 @@ class DebateRoomManager:
                 should_recover = datetime.utcnow() - updated > timedelta(minutes=5)
             if not should_recover:
                 continue
-            job["status"] = "queued"
-            job["updated_at"] = datetime.utcnow().isoformat()
-            self._write_report_job(debate, job)
-            db.commit()
             room_id = str(job.get("room_id") or debate.id)
-            asyncio.create_task(
-                self._auto_score_and_generate_report_background(room_id, debate.id)
-            )
-            recovered += 1
+            if self.enqueue_report_job(db, debate.id, room_id):
+                recovered += 1
         return recovered
     async def _broadcast_debate_ended(self, room_id: str) -> None:
         await websocket_manager.broadcast_to_room(
@@ -1871,33 +2027,25 @@ class DebateRoomManager:
             },
         )
 
-    async def _auto_score_and_generate_report_background(
+    async def _broadcast_report_status(
         self,
         room_id: str,
-        debate_id: uuid.UUID,
+        *,
+        status: str,
+        job_id: str,
     ) -> None:
-        import database as db_module
-
-        db = None
-        try:
-            if db_module.SessionLocal is None:
-                db_module.init_engine()
-            db = db_module.SessionLocal()
-            if db is None or not self._claim_report_job(db, debate_id, room_id):
-                return
-            await self._auto_score_and_generate_report(db, debate_id)
-            self._finish_report_job(db, debate_id, succeeded=True)
-        except Exception as e:
-            if db is not None:
-                db.rollback()
-                self._finish_report_job(
-                    db, debate_id, succeeded=False, error=str(e)
-                )
-            logger.error(f"自动评分和报告生成失败: {e}", exc_info=True)
-        finally:
-            if db is not None:
-                db.close()
-            await self._broadcast_debate_ended(room_id)
+        await websocket_manager.broadcast_to_room(
+            room_id,
+            {
+                "type": f"report_{status}",
+                "data": {
+                    "room_id": room_id,
+                    "job_id": job_id,
+                    "report_status": status,
+                    "timestamp": (datetime.utcnow() + timedelta(hours=8)).isoformat(),
+                },
+            },
+        )
 
     async def _auto_score_and_generate_report(self, db: Session, debate_id: uuid.UUID) -> None:
         """
@@ -2021,7 +2169,12 @@ class DebateRoomManager:
         self._sync_waiting_checklists_with_participants(room_state)
 
         await websocket_manager.broadcast_to_room(
-            room_id, {"type": "state_update", "data": room_state.to_dict()}
+            room_id,
+            {
+                "type": "state_update",
+                "data": room_state.to_dict(),
+                "state_version": int(getattr(room_state, "_runtime_version", 0) or 0),
+            },
         )
 
     async def record_event(

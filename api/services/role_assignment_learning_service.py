@@ -22,6 +22,7 @@ from models.debate import (
 from models.score import Score
 from models.speech import Speech
 from services.assessment_service import AssessmentService
+from services.score_eligibility_service import ScoreEligibilityService
 
 
 class RoleAssignmentLearningService:
@@ -143,6 +144,7 @@ class RoleAssignmentLearningService:
             .filter(
                 DebateParticipation.user_id == uuid.UUID(str(user_id)),
                 Debate.status == "completed",
+                ScoreEligibilityService.sql_filter(),
             )
         )
         if role:
@@ -526,7 +528,10 @@ class RoleAssignmentLearningService:
             user_id = str(participation.user_id)
             score_rows = (
                 db.query(Score)
-                .filter(Score.participation_id == participation.id)
+                .filter(
+                    Score.participation_id == participation.id,
+                    ScoreEligibilityService.sql_filter(),
+                )
                 .all()
             )
             speeches = (

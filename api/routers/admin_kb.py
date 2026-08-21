@@ -2,14 +2,28 @@
 管理员知识库API路由
 提供知识库文档管理功能，包括文档上传、列表、删除等
 """
-from fastapi import APIRouter, Depends, HTTPException, Response, status, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, UploadFile, File, BackgroundTasks
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import logging
 
 from database import get_db
 from models.user import User
+from models.kb_document import KBDocument
 from services.document_service import DocumentService
+from services.audit_service import AuditService
+from services.background_job_service import BackgroundJobService
+from services.config_service import ConfigService
+from services.kb_vector_rebuild_service import KBVectorRebuildService
+from services.kb_vector_schema_service import (
+    KBVectorSchemaService,
+    VectorAlignmentUnavailable,
+)
+from services.file_access_service import FileAccessService, PrivateFileNotFound
+from schemas.operations import OperationalErrorCode
+from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_role
 from logging_config import get_logger
 from utils.error_contract import public_exception_detail
@@ -19,6 +33,10 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/admin/kb", tags=["管理员-知识库"])
 
 
+class PublicationRequest(BaseModel):
+    published: bool
+
+
 @router.post(
     "/documents",
     summary="上传知识库文档",
@@ -26,6 +44,7 @@ router = APIRouter(prefix="/api/admin/kb", tags=["管理员-知识库"])
 )
 async def upload_document(
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(require_role(["administrator"])),
     db: Session = Depends(get_db)
@@ -51,6 +70,17 @@ async def upload_document(
     返回:
     - 文档信息，包括ID、文件名、上传状态等
     """
+    try:
+        KBVectorSchemaService.require_rag_available(db)
+    except VectorAlignmentUnavailable:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.VECTOR_DIMENSION_MISMATCH,
+            message="知识库向量正在校验或重建，暂时不能上传文档",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details=KBVectorSchemaService.runtime_snapshot(),
+        )
     try:
         # 读取文件数据
         file_data = await file.read()
@@ -101,6 +131,7 @@ async def upload_document(
                 "file_type": document.file_type,
                 "file_size": document.file_size,
                 "upload_status": document.upload_status,
+                "is_published": bool(document.is_published),
                 "uploaded_by": str(document.uploaded_by),
                 "uploaded_at": document.uploaded_at.isoformat(),
                 "processed_at": document.processed_at.isoformat() if document.processed_at else None,
@@ -131,6 +162,119 @@ async def upload_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"文档上传失败: {str(e)}"
         )
+
+
+@router.get(
+    "/vector/alignment",
+    summary="检查知识库向量对齐状态",
+    dependencies=[Depends(require_role(["administrator"]))],
+)
+async def inspect_vector_alignment(
+    probe_model: bool = False,
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    snapshot = await KBVectorSchemaService.inspect_alignment_with_probe(
+        db,
+        probe_model=probe_model,
+    )
+    return {"code": 200, "message": "检查完成", "data": snapshot}
+
+
+@router.post(
+    "/vector/rebuild",
+    summary="创建知识库向量重建任务",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_role(["administrator"]))],
+)
+async def rebuild_vectors(
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    vector_config = await ConfigService(db).get_vector_config()
+    try:
+        job, created = KBVectorRebuildService.enqueue(
+            db,
+            target_model=str(vector_config.model_name),
+            target_dimension=int(vector_config.embedding_dimension or 0),
+            requested_by=str(current_user.id),
+            reason="administrator_request",
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    AuditService.record_event(
+        event_type="vector_rebuild",
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="background_job",
+        target_id=str(job.id),
+        result="success",
+        metadata={"action": "enqueue", "created": created},
+    )
+    return {
+        "code": 202,
+        "message": "向量重建任务已入队" if created else "复用正在执行的向量重建任务",
+        "data": KBVectorRebuildService.serialize_job(job),
+    }
+
+
+@router.get(
+    "/vector/rebuild/job",
+    summary="查询知识库向量重建任务",
+    dependencies=[Depends(require_role(["administrator"]))],
+)
+async def get_vector_rebuild_job(
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    job = KBVectorRebuildService.get_latest_job(db)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="向量重建任务不存在")
+    return {"code": 200, "message": "获取成功", "data": KBVectorRebuildService.serialize_job(job)}
+
+
+@router.post(
+    "/vector/rebuild/job/retry",
+    summary="重试知识库向量重建任务",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_role(["administrator"]))],
+)
+async def retry_vector_rebuild_job(
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    job = KBVectorRebuildService.get_latest_job(db)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="向量重建任务不存在")
+    previous_status = str(job.status)
+    if not BackgroundJobService.retry(
+        db,
+        job_id=job.id,
+        reset_attempts=job.status == "dead_letter",
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前任务状态不可重试")
+    db.refresh(job)
+    KBVectorSchemaService.set_runtime_snapshot(
+        {
+            "status": "rebuilding",
+            "error_code": None,
+            "job_id": str(job.id),
+            "phase": (job.result or {}).get("phase") or "queued",
+            "configured_dimension": (job.payload or {}).get("target_dimension"),
+            "target_model": (job.payload or {}).get("target_model"),
+        }
+    )
+    AuditService.record_event(
+        event_type="vector_rebuild",
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="background_job",
+        target_id=str(job.id),
+        result="success",
+        metadata={"action": "retry", "previous_status": previous_status},
+    )
+    return {"code": 202, "message": "向量重建任务已重新入队", "data": KBVectorRebuildService.serialize_job(job)}
 
 
 @router.get(
@@ -194,6 +338,7 @@ async def list_documents(
                 "file_type": doc.file_type,
                 "file_size": doc.file_size,
                 "upload_status": doc.upload_status,
+                "is_published": bool(doc.is_published),
                 "uploaded_by": str(doc.uploaded_by),
                 "uploaded_at": doc.uploaded_at.isoformat(),
                 "processed_at": doc.processed_at.isoformat() if doc.processed_at else None,
@@ -228,6 +373,63 @@ async def list_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取文档列表失败: {str(e)}"
         )
+
+
+@router.get("/documents/{document_id}/download", summary="下载知识库原始文档")
+async def download_document(
+    document_id: str,
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+):
+    try:
+        private_file = FileAccessService(db).knowledge_document(current_user, document_id)
+    except PrivateFileNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    return FileResponse(
+        path=private_file.path,
+        media_type=private_file.media_type,
+        filename=private_file.filename,
+        headers=FileAccessService.private_headers(),
+    )
+
+
+@router.put("/documents/{document_id}/publication", summary="发布或撤回知识库文档")
+async def update_document_publication(
+    document_id: str,
+    payload: PublicationRequest,
+    current_user: User = Depends(require_role(["administrator"])),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    try:
+        import uuid
+
+        document_key = uuid.UUID(str(document_id))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    document = db.query(KBDocument).filter(KBDocument.id == document_key).first()
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    if payload.published and document.upload_status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="文档处理完成后才能发布",
+        )
+    document.is_published = payload.published
+    db.commit()
+    AuditService.record_event(
+        event_type="knowledge_document_publication",
+        actor_id=str(current_user.id),
+        actor_role=str(current_user.user_type),
+        target_type="kb_document",
+        target_id=str(document.id),
+        result="success",
+        metadata={"published": bool(document.is_published)},
+    )
+    return {
+        "code": 200,
+        "message": "发布状态已更新",
+        "data": {"document_id": str(document.id), "is_published": bool(document.is_published)},
+    }
 
 
 @router.delete(

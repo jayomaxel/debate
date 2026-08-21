@@ -1,6 +1,6 @@
 import uuid
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -124,6 +124,55 @@ async def test_resume_flow_repairs_partial_opening_snapshot(db_session, monkeypa
     assert restored.speaker_mode == "fixed"
     assert restored.speaker_options == ["debater_1"]
     assert restored.flow_segments[0]["speaker_roles"] == ["debater_1"]
+    controller.start_timer.assert_awaited_once_with(room_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_flow_preserves_complete_free_debate_snapshot(db_session, monkeypatch):
+    debate = _debate()
+    db_session.add(debate)
+    db_session.commit()
+    room_id = str(debate.id)
+    segment_started_at = datetime.utcnow() + timedelta(hours=8)
+    free_debate_segment = {
+        "id": "free_debate",
+        "title": "Free debate",
+        "phase": DebatePhase.FREE_DEBATE,
+        "duration": 480,
+        "mode": "free",
+        "speaker_roles": ["debater_1", "debater_2"],
+    }
+
+    manager = DebateRoomManager()
+    room_state = await manager.create_room(room_id, room_id, db_session)
+    room_state.current_phase = DebatePhase.FREE_DEBATE
+    room_state.phase_start_time = segment_started_at
+    room_state.match_state = "FREE_DEBATE"
+    room_state.room_status = "ongoing"
+    room_state.segment_index = 0
+    room_state.segment_id = "free_debate"
+    room_state.segment_title = "Free debate"
+    room_state.segment_start_time = segment_started_at
+    room_state.segment_time_remaining = 480
+    room_state.speaker_mode = "free"
+    room_state.speaker_options = ["debater_1", "debater_2"]
+    room_state.flow_segments = [free_debate_segment]
+    assert manager._persist_runtime_state(room_state, db_session)
+
+    restarted_manager = DebateRoomManager()
+    restored = await restarted_manager.create_room(room_id, room_id, db_session)
+    controller = DebateFlowController()
+    monkeypatch.setattr(flow_controller_module, "room_manager", restarted_manager)
+    monkeypatch.setattr(controller, "start_timer", AsyncMock())
+    monkeypatch.setattr(controller, "_sync_upcoming_ai_prethinking", AsyncMock())
+
+    assert await controller.resume_flow(room_id) is True
+
+    assert restored.current_phase == DebatePhase.FREE_DEBATE
+    assert restored.segment_id == "free_debate"
+    assert restored.speaker_mode == "free"
+    assert restored.speaker_options == ["debater_1", "debater_2"]
+    assert controller.segment_index[room_id] == 0
     controller.start_timer.assert_awaited_once_with(room_id)
 
 

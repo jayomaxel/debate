@@ -10,6 +10,7 @@ from models.class_model import Class
 from models.debate import DebateParticipation, Debate
 from models.score import Score
 from services.avatar_service import AvatarService
+from services.score_eligibility_service import ScoreEligibilityService
 from utils.security import hash_password
 from utils.user_email import build_placeholder_email, to_public_email
 import uuid
@@ -206,7 +207,8 @@ class StudentService:
             avg_score = db.query(func.avg(Score.overall_score)).join(
                 DebateParticipation
             ).filter(
-                DebateParticipation.user_id == student.id
+                DebateParticipation.user_id == student.id,
+                ScoreEligibilityService.sql_filter(),
             ).scalar()
             
             result.append({

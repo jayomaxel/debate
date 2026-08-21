@@ -1226,7 +1226,9 @@ describe('Student Service - Unit Tests', () => {
       const result = await StudentService.getReport(debateId);
 
       // Assert
-      expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}`);
+      expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}`, {
+        timeout: 55000,
+      });
       expect(api.get).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({
         debate_id: mockReport.debate_id,
@@ -1255,7 +1257,9 @@ describe('Student Service - Unit Tests', () => {
 
       // Act & Assert
       await expect(StudentService.getReport(debateId)).rejects.toThrow('Report not found');
-      expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}`);
+      expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}`, {
+        timeout: 55000,
+      });
     });
 
     it('should handle report with multiple speeches', async () => {
@@ -1358,6 +1362,7 @@ describe('Student Service - Unit Tests', () => {
       // Assert
       expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}/export/pdf`, {
         responseType: 'blob',
+        timeout: 60000,
       });
       expect(createObjectURLMock).toHaveBeenCalledWith(mockBlob);
       expect(linkElement.download).toBe('debate-report.pdf');
@@ -1377,6 +1382,7 @@ describe('Student Service - Unit Tests', () => {
       await expect(StudentService.exportReportPDF(debateId)).rejects.toThrow('Failed to export PDF');
       expect(api.get).toHaveBeenCalledWith(`/api/student/reports/${debateId}/export/pdf`, {
         responseType: 'blob',
+        timeout: 60000,
       });
     });
 

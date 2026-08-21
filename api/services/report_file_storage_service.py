@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,16 +193,30 @@ class ReportFileStorageService:
         debate: Debate,
         pdf_bytes: bytes,
     ) -> Tuple[Dict[str, Any], Path]:
+        payload = bytes(pdf_bytes)
+        if not payload or not payload.startswith(b"%PDF"):
+            raise ValueError("invalid PDF payload")
         _, previous_path, _ = cls.locate_pdf_artifact(debate, str(debate.id))
         storage_meta = cls.create_pdf_storage_meta()
         target_path = cls.resolve_pdf_storage_path(storage_meta)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(bytes(pdf_bytes))
+        temporary_path = target_path.with_name(
+            f".{target_path.name}.{secrets.token_hex(8)}.tmp"
+        )
+        try:
+            with temporary_path.open("xb") as output:
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, target_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
         finalized_meta = {
             **storage_meta,
-            "byte_size": len(pdf_bytes),
-            "sha256": hashlib.sha256(bytes(pdf_bytes)).hexdigest(),
+            "byte_size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
             "generated_at": cls._utc_now_iso(),
         }
 
@@ -219,10 +234,24 @@ class ReportFileStorageService:
 
     @classmethod
     def persist_ephemeral_pdf_bytes(cls, pdf_bytes: bytes) -> Path:
+        payload = bytes(pdf_bytes)
+        if not payload or not payload.startswith(b"%PDF"):
+            raise ValueError("invalid PDF payload")
         storage_meta = cls.create_pdf_storage_meta()
         target_path = cls.resolve_pdf_storage_path(storage_meta)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(bytes(pdf_bytes))
+        temporary_path = target_path.with_name(
+            f".{target_path.name}.{secrets.token_hex(8)}.tmp"
+        )
+        try:
+            with temporary_path.open("xb") as output:
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, target_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
         return target_path
 
     @classmethod
@@ -237,10 +266,10 @@ class ReportFileStorageService:
         if not is_legacy:
             return storage_meta, path, False
 
-        migrated_meta, migrated_path = cls.persist_pdf_bytes_for_debate(
-            debate,
-            path.read_bytes(),
-        )
+        payload = path.read_bytes()
+        if not payload.startswith(b"%PDF"):
+            return storage_meta, None, False
+        migrated_meta, migrated_path = cls.persist_pdf_bytes_for_debate(debate, payload)
         if path.resolve() != migrated_path.resolve():
             cls._delete_managed_file(path)
         return migrated_meta, migrated_path, True

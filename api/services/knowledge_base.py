@@ -17,6 +17,7 @@ import httpx
 from models.document import Document
 from services.config_service import ConfigService
 from services.document_service import DocumentService
+from services.file_access_service import FileAccessService
 
 logger = get_logger(__name__)
 
@@ -111,8 +112,7 @@ class KnowledgeBase:
                 raise ValueError("文件大小超过限制（最大10MB）")
             
             # 生成文件路径
-            timestamp = datetime.utcnow().timestamp()
-            safe_filename = f"{debate_id}_{timestamp}_{filename}"
+            safe_filename = FileAccessService.random_object_name(filename)
             file_path = os.path.join(self.upload_dir, safe_filename)
             
             # 保存文件

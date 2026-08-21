@@ -251,6 +251,10 @@ def test_get_assessment_includes_history_scores_and_speech_stats(db_session):
         teamwork_score=75.0,
         overall_score=82.5,
         feedback="整体回应有效，无明显违规。",
+        status="validated",
+        scoring_source="test_fixture",
+        scoring_quality="validated",
+        eligible_for_analytics=True,
     )
     db_session.add(score)
     db_session.commit()

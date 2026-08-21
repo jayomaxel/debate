@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from typing import Sequence
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.schema import Table
 
@@ -67,6 +67,21 @@ def drop_test_schema(engine: Engine, *, tables: Sequence[Table] | None = None) -
     if engine.dialect.name == "sqlite":
         for table in reversed(resolved_tables):
             table.drop(bind=engine, checkfirst=True)
+        return
+
+    if engine.dialect.name == "postgresql":
+        # The application schema contains an intentional users/classes FK cycle
+        # with legacy unnamed constraints. Drop only the explicitly selected test
+        # tables with CASCADE so cleanup remains deterministic.
+        preparer = engine.dialect.identifier_preparer
+        with engine.begin() as connection:
+            for table in reversed(resolved_tables):
+                qualified_name = (
+                    f"{preparer.quote_schema(table.schema)}.{preparer.quote(table.name)}"
+                    if table.schema
+                    else preparer.quote(table.name)
+                )
+                connection.execute(text(f"DROP TABLE IF EXISTS {qualified_name} CASCADE"))
         return
 
     Base.metadata.drop_all(bind=engine, tables=resolved_tables)

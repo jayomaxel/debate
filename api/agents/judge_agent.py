@@ -95,6 +95,7 @@ class JudgeAgent:
         self.api_token = None
         self.base_url = None
         self._coze_context: Optional[List[Dict]] = None
+        self._last_model_name: Optional[str] = None
     
     async def _get_config(self):
         """获取Coze配置"""
@@ -106,6 +107,7 @@ class JudgeAgent:
                 raise ValueError("裁判AI Bot ID未配置")
             
             self.bot_id = coze_config.judge_bot_id
+            self._last_model_name = "coze-judge-bot"
             self.api_token = coze_config.api_token
             self.base_url = coze_config.parameters.get("base_url", settings.COZE_BASE_URL) if coze_config.parameters else settings.COZE_BASE_URL
     
@@ -178,6 +180,7 @@ class JudgeAgent:
                 endpoint = f"{api_endpoint.rstrip('/')}/chat/completions"
 
             model_name = (model_config.model_name or "").strip() or settings.OPENAI_MODEL_NAME
+            self._last_model_name = model_name
 
             messages = [
                 {
@@ -661,7 +664,10 @@ class JudgeAgent:
                 teamwork_score=float(data.get("teamwork_score", 70)),
                 overall_score=float(data.get("overall_score", 70)),
                 feedback=data.get("feedback", ""),
-                report_meta=validation.report_meta.to_dict(),
+                report_meta={
+                    **validation.report_meta.to_dict(),
+                    "model": self._last_model_name,
+                },
             )
         except Exception as e:
             logger.error(f"Failed to parse judge scoring result: {e}", exc_info=True)
@@ -681,7 +687,10 @@ class JudgeAgent:
                 teamwork_score=float(data.get("teamwork_score", 60)),
                 overall_score=float(data.get("overall_score", 60)),
                 feedback=data.get("feedback", ""),
-                report_meta=fallback.report_meta.to_dict(),
+                report_meta={
+                    **fallback.report_meta.to_dict(),
+                    "model": self._last_model_name,
+                },
             )
     
     async def check_violations(

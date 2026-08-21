@@ -13,7 +13,11 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from models.kb_document import KBDocument
+from models.background_job import BackgroundJob
+from models.config import VectorConfig
+from services.background_job_service import BackgroundJobService
 from services.document_service import DocumentService
+from services.kb_vector_schema_service import KBVectorSchemaService
 from testing_db import create_test_engine
 from utils.security import hash_password, create_token
 
@@ -127,6 +131,30 @@ def student_user(setup_database):
     student_token = create_token({"sub": str(student.id), "user_type": "student"})
     db.close()
     return {"user": student, "token": student_token}
+
+
+@pytest.fixture
+def vector_job_tables(setup_database):
+    BackgroundJob.__table__.create(bind=engine, checkfirst=True)
+    VectorConfig.__table__.create(bind=engine, checkfirst=True)
+    db = TestingSessionLocal()
+    db.add(
+        VectorConfig(
+            id=uuid.uuid4(),
+            model_name="test-vector-model",
+            api_endpoint="https://example.invalid/v1/embeddings",
+            api_key="test-key",
+            embedding_dimension=1536,
+            parameters={},
+        )
+    )
+    db.commit()
+    db.close()
+    original_snapshot = KBVectorSchemaService.runtime_snapshot()
+    yield
+    KBVectorSchemaService.set_runtime_snapshot(original_snapshot)
+    BackgroundJob.__table__.drop(bind=engine, checkfirst=True)
+    VectorConfig.__table__.drop(bind=engine, checkfirst=True)
 
 
 class TestDocumentUpload:
@@ -255,6 +283,72 @@ class TestDocumentUpload:
         
         assert response.status_code == 403
         assert "访问被拒绝" in response.json()["detail"]
+
+
+class TestVectorRebuild:
+    def test_admin_enqueue_is_idempotent_and_non_admin_is_denied(
+        self,
+        vector_job_tables,
+        admin_user,
+        teacher_user,
+    ):
+        first = client.post(
+            "/api/admin/kb/vector/rebuild",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+        )
+        second = client.post(
+            "/api/admin/kb/vector/rebuild",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+        )
+        denied = client.post(
+            "/api/admin/kb/vector/rebuild",
+            headers={"Authorization": f"Bearer {teacher_user['token']}"},
+        )
+
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert first.json()["data"]["job_id"] == second.json()["data"]["job_id"]
+        assert denied.status_code == 403
+
+    def test_failed_vector_job_can_be_retried(
+        self,
+        vector_job_tables,
+        admin_user,
+    ):
+        queued = client.post(
+            "/api/admin/kb/vector/rebuild",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+        )
+        job_id = queued.json()["data"]["job_id"]
+        db = TestingSessionLocal()
+        claimed = BackgroundJobService.claim_next(
+            db,
+            worker_id="failed-vector-worker",
+            job_types=["kb_vector_rebuild"],
+        )
+        assert str(claimed.id) == job_id
+        assert BackgroundJobService.fail(
+            db,
+            job_id=claimed.id,
+            worker_id="failed-vector-worker",
+            error_code="VECTOR_REBUILD_FAILED",
+            error_message="internal failure details",
+        )
+        db.close()
+
+        retried = client.post(
+            "/api/admin/kb/vector/rebuild/job/retry",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+        )
+        status_response = client.get(
+            "/api/admin/kb/vector/rebuild/job",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+        )
+
+        assert retried.status_code == 202
+        assert status_response.status_code == 200
+        assert status_response.json()["data"]["status"] == "queued"
+        assert "internal failure details" not in status_response.text
 
 
 class TestDocumentList:
@@ -587,6 +681,43 @@ class TestDocumentDeletion:
         
         # 无效UUID会被当作不存在的文档处理，返回404
         assert response.status_code == 404
+
+
+def test_admin_must_explicitly_publish_completed_document(admin_user, teacher_user):
+    db = TestingSessionLocal()
+    document = KBDocument(
+        id=uuid.uuid4(),
+        filename="publish.pdf",
+        file_path="uploads/kb_documents/publish.pdf",
+        file_type="application/pdf",
+        file_size=100,
+        upload_status="completed",
+        is_published=False,
+        uploaded_by=admin_user["user"].id,
+    )
+    db.add(document)
+    db.commit()
+    document_id = str(document.id)
+    db.close()
+
+    forbidden = client.put(
+        f"/api/admin/kb/documents/{document_id}/publication",
+        json={"published": True},
+        headers={"Authorization": f"Bearer {teacher_user['token']}"},
+    )
+    assert forbidden.status_code == 403
+
+    response = client.put(
+        f"/api/admin/kb/documents/{document_id}/publication",
+        json={"published": True},
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["is_published"] is True
+
+    db = TestingSessionLocal()
+    assert db.query(KBDocument).filter(KBDocument.id == uuid.UUID(document_id)).one().is_published is True
+    db.close()
 
 
 if __name__ == "__main__":

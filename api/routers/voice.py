@@ -2,7 +2,8 @@
 语音相关API路由
 提供ASR（语音识别）与TTS（语音合成）接口
 """
-from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException, status
+from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
@@ -17,6 +18,11 @@ from middleware.auth_middleware import verify_token_middleware
 from models.user import User
 from utils.voice_processor import voice_processor
 from services.config_service import ConfigService
+from services.file_access_service import (
+    FileAccessService,
+    InvalidMediaTicket,
+    PrivateFileNotFound,
+)
 
 logger = get_logger(__name__)
 
@@ -53,6 +59,62 @@ class TtsSynthesizeRequest(BaseModel):
     text: str = Field(min_length=1)
     voice_id: Optional[str] = None
     speed: Optional[float] = Field(None, ge=0.5, le=4.0)
+
+
+class MediaTicketRequest(BaseModel):
+    audio_url: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/media/ticket", summary="申请私有音频短时播放票据")
+async def issue_media_ticket(
+    request: MediaTicketRequest,
+    current_user: User = Depends(verify_token_middleware),
+    db: Session = Depends(get_db),
+):
+    try:
+        object_key, speech = FileAccessService(db).authorize_media_reference(
+            current_user,
+            request.audio_url,
+        )
+    except PrivateFileNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    ticket = FileAccessService.issue_media_ticket(
+        user_id=str(current_user.id),
+        object_key=object_key,
+        speech_id=str(speech.id),
+    )
+    return {
+        "code": 200,
+        "message": "播放票据已签发",
+        "data": {
+            "media_url": FileAccessService.ticketed_media_url(object_key, ticket),
+            "expires_in": FileAccessService.MEDIA_TICKET_TTL_SECONDS,
+        },
+    }
+
+
+@router.get("/media/{media_kind}/{object_name}", summary="使用短时票据读取私有音频")
+async def download_private_media(
+    media_kind: str,
+    object_name: str,
+    ticket: str = Query(..., min_length=20),
+    db: Session = Depends(get_db),
+):
+    try:
+        private_file = FileAccessService(db).resolve_ticketed_media(
+            ticket,
+            f"{media_kind}/{object_name}",
+        )
+    except (InvalidMediaTicket, PrivateFileNotFound):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid media ticket")
+    return FileResponse(
+        path=private_file.path,
+        media_type=private_file.media_type,
+        headers={
+            **FileAccessService.private_headers(),
+            "Content-Disposition": f'inline; filename="{private_file.filename}"',
+        },
+    )
 
 
 @router.post("/asr/transcribe", summary="ASR语音识别（上传音频文件）")
@@ -177,14 +239,16 @@ async def synthesize_speech_to_file(
         if not audio_path:
              raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="保存音频文件失败")
 
-        # 构造URL
-        normalized = audio_path.replace("\\", "/")
-        if normalized.startswith("uploads/"):
-             audio_url = f"/{normalized}"
-        elif "uploads/" in normalized:
-             audio_url = "/" + normalized[normalized.find("uploads/"):]
-        else:
-             audio_url = f"/uploads/audio/{filename}"
+        raw_audio_url = voice_processor.build_audio_url(audio_path)
+        if not raw_audio_url:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="保存音频文件失败")
+        object_key = FileAccessService.media_object_key(raw_audio_url)
+        ticket = FileAccessService.issue_media_ticket(
+            user_id=str(current_user.id),
+            object_key=object_key,
+            owner_only=True,
+        )
+        audio_url = FileAccessService.ticketed_media_url(object_key, ticket)
 
         data: Dict[str, Any] = {"audio_url": audio_url, "format": audio_format}
         return {"code": 200, "message": "合成成功", "data": data}

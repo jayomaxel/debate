@@ -3035,6 +3035,7 @@ class DebateFlowController:
 
         await room_manager.update_room_state(
             room_id,
+            flow_segments=self._serialize_segments(segments),
             current_phase=segment["phase"],
             match_state=match_state,
             phase_start_time=now if phase_changed else room_state.phase_start_time,

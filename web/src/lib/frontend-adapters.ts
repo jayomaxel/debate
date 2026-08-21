@@ -151,6 +151,7 @@ export const toReportViewModel = (
         : null,
     })),
     statistics: source.statistics ? { ...source.statistics } : {},
+    report_meta: source.report_meta ? { ...source.report_meta } : undefined,
     winner: source.winner || '',
     summary: source.summary || source.feedback || undefined,
     student_id: source.student_id || undefined,

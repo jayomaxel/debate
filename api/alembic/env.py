@@ -19,7 +19,7 @@ from models import (
     User, Class, Debate, DebateParticipation, DebateReservationInvitation,
     DebateRoleAssignmentRun, DebateRoleAssignmentItem, DebateRoleAssignmentAuditLog, DebateRolePerformanceSample,
     Speech, Score, Document, Achievement,
-    AbilityAssessment, ModelConfig, CozeConfig
+    AbilityAssessment, ModelConfig, CozeConfig, BackgroundJob, DebateRuntimeState
 )
 
 # this is the Alembic Config object, which provides

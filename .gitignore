@@ -67,6 +67,7 @@ web/dist/
 web/build/
 api/build/
 api/dist/
+test_output/
 
 .kiro/
 .pytest_cache/

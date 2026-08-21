@@ -12,6 +12,7 @@ from main import app
 from database import Base, get_db
 from models.user import User
 from testing_db import create_test_engine
+from services.kb_vector_schema_service import KBVectorSchemaService
 from utils.security import hash_password, create_token
 
 # 创建测试数据库
@@ -113,6 +114,35 @@ def admin_user(setup_database):
 
 class TestAskQuestionEndpoint:
     """测试提问端点"""
+
+    def test_vector_mismatch_returns_stable_503_without_calling_rag(self, student_user):
+        original = KBVectorSchemaService.runtime_snapshot()
+        try:
+            KBVectorSchemaService.set_runtime_snapshot(
+                {
+                    "status": "mismatch",
+                    "error_code": "VECTOR_DIMENSION_MISMATCH",
+                    "configured_dimension": 1024,
+                    "database_dimension": 1536,
+                }
+            )
+            with patch("routers.student_kb.RAGService.ask_question", new_callable=AsyncMock) as ask:
+                response = client.post(
+                    "/api/student/kb/ask",
+                    json={"question": "test", "session_id": "session-vector"},
+                    headers={
+                        "Authorization": f"Bearer {student_user['token']}",
+                        "X-Request-Id": "req-vector-mismatch",
+                    },
+                )
+
+            assert response.status_code == 503
+            assert response.json()["code"] == "VECTOR_DIMENSION_MISMATCH"
+            assert response.json()["request_id"] == "req-vector-mismatch"
+            assert response.json()["retryable"] is True
+            ask.assert_not_awaited()
+        finally:
+            KBVectorSchemaService.set_runtime_snapshot(original)
     
     def test_ask_question_success_with_kb(self, student_user):
         """测试成功提问（使用知识库）"""

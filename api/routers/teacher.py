@@ -1,14 +1,13 @@
 """
 教师端API路由
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Literal, Optional, List
 
-from config import settings
 from logging_config import get_logger
 from database import get_db
 from models.user import User
@@ -23,6 +22,12 @@ from services.knowledge_base import KnowledgeBase
 from services.teaching_design_service import TeachingDesignService
 from services.topic_recommendation_service import TopicRecommendationService
 from services.audit_service import AuditService
+from services.background_job_runtime import DEBATE_REPORT_JOB_TYPE
+from services.background_job_service import BackgroundJobService
+from services.report_state_service import ReportStateService
+from services.file_access_service import FileAccessService, PrivateFileNotFound
+from schemas.operations import OperationalErrorCode, ReportStatus
+from utils.operational_response import operational_error_response
 from middleware.auth_middleware import require_teacher, PermissionChecker
 from utils.error_contract import public_exception_detail
 
@@ -251,28 +256,6 @@ def _serialize_support_document(document: Document) -> dict:
         'summary': document.summary_payload,
         'summary_quality': document.summary_quality,
     }
-
-
-def _resolve_private_upload_path(file_path: str) -> Path:
-    upload_root = Path(settings.UPLOAD_DIR).resolve()
-    candidate = Path(file_path)
-    if not candidate.is_absolute():
-        candidate = (Path.cwd() / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    try:
-        candidate.relative_to(upload_root)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found.",
-        ) from exc
-    if not candidate.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found.",
-        )
-    return candidate
 
 
 def _ensure_teacher_can_modify_debate(
@@ -1050,11 +1033,31 @@ async def get_debate(
 @router.get("/debates/{debate_id}/report", summary="获取教师端辩论报告")
 async def get_teacher_report(
     debate_id: str,
+    request: Request,
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
     _ensure_teacher_can_modify_debate(db, current_user, debate_id)
-    _get_debate_or_404(db, debate_id)
+    debate = _get_debate_or_404(db, debate_id)
+    operation_state = ReportStateService.enqueue_if_pending(db, debate)
+    if operation_state.report_status in {ReportStatus.PENDING, ReportStatus.PROCESSING}:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "code": 202,
+                "message": "报告正在生成",
+                "data": operation_state.model_dump(mode="json"),
+            },
+        )
+    if operation_state.report_status == ReportStatus.FAILED:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_DATA_NOT_READY,
+            message="报告生成失败，请重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id, "job_id": operation_state.job_id},
+        )
     try:
         result = await ReportOrchestrationService.build_teacher_report_payload(
             db=db,
@@ -1070,18 +1073,38 @@ async def get_teacher_report(
     return {
         "code": 200,
         "message": "获取成功",
-        "data": result,
+        "data": {**result, "operation_state": operation_state.model_dump(mode="json")},
     }
 
 
 @router.get("/debates/{debate_id}/teaching-summary", summary="获取教师复盘摘要")
 async def get_teacher_teaching_summary(
     debate_id: str,
+    request: Request,
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
     _ensure_teacher_can_modify_debate(db, current_user, debate_id)
-    _get_debate_or_404(db, debate_id)
+    debate = _get_debate_or_404(db, debate_id)
+    operation_state = ReportStateService.enqueue_if_pending(db, debate)
+    if operation_state.report_status in {ReportStatus.PENDING, ReportStatus.PROCESSING}:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "code": 202,
+                "message": "报告正在生成",
+                "data": operation_state.model_dump(mode="json"),
+            },
+        )
+    if operation_state.report_status == ReportStatus.FAILED:
+        return operational_error_response(
+            request,
+            code=OperationalErrorCode.REPORT_DATA_NOT_READY,
+            message="报告生成失败，请重试",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            retryable=True,
+            details={"debate_id": debate_id, "job_id": operation_state.job_id},
+        )
 
     try:
         result = ReportOrchestrationService.build_teaching_summary(db=db, debate_id=debate_id)
@@ -1094,11 +1117,107 @@ async def get_teacher_teaching_summary(
     return {
         "code": 200,
         "message": "获取成功",
-        "data": result,
+        "data": {**result, "operation_state": operation_state.model_dump(mode="json")},
     }
 
 
-@router.post("/debates/{debate_id}/report/recalculate", summary="轻量重算教师端辩论报告")
+def _serialize_report_job(job):
+    public_error_message = None
+    if job.status in {"failed", "dead_letter"}:
+        public_error_message = "报告任务执行失败，请重试或联系管理员"
+    return {
+        "job_id": str(job.id),
+        "job_type": job.job_type,
+        "status": job.status,
+        "attempt_count": job.attempt_count,
+        "max_attempts": job.max_attempts,
+        "error_code": job.error_code,
+        "error_message": public_error_message,
+        "available_at": job.available_at.isoformat() if job.available_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
+
+
+@router.get("/debates/{debate_id}/report/job", summary="获取报告后台任务状态")
+async def get_teacher_report_job(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    _get_debate_or_404(db, debate_id)
+    job = BackgroundJobService.get_latest_for_target(
+        db,
+        job_type=DEBATE_REPORT_JOB_TYPE,
+        target_type="debate",
+        target_id=debate_id,
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="报告任务不存在",
+        )
+    return {"code": 200, "message": "获取成功", "data": _serialize_report_job(job)}
+
+
+@router.post(
+    "/debates/{debate_id}/report/job/retry",
+    summary="重试报告后台任务",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_teacher_report_job(
+    debate_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    _ensure_teacher_can_modify_debate(db, current_user, debate_id)
+    _get_debate_or_404(db, debate_id)
+    job = BackgroundJobService.get_latest_for_target(
+        db,
+        job_type=DEBATE_REPORT_JOB_TYPE,
+        target_type="debate",
+        target_id=debate_id,
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="报告任务不存在",
+        )
+
+    previous_status = job.status
+    retried = BackgroundJobService.retry(
+        db,
+        job_id=job.id,
+        reset_attempts=job.status == "dead_letter",
+    )
+    AuditService.record_event(
+        event_type="report_regeneration",
+        actor_id=str(current_user.id),
+        actor_role=getattr(current_user, "user_type", None) or "teacher",
+        target_type="report_job",
+        target_id=str(job.id),
+        result="success" if retried else "denied",
+        metadata={
+            "action": "retry_report_job",
+            "debate_id": debate_id,
+            "previous_status": previous_status,
+        },
+    )
+    if not retried:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前任务状态不可重试",
+        )
+    db.refresh(job)
+    return {"code": 202, "message": "任务已重新入队", "data": _serialize_report_job(job)}
+
+
+@router.post(
+    "/debates/{debate_id}/report/recalculate",
+    summary="轻量重算教师端辩论报告",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def recalculate_teacher_report(
     debate_id: str,
     current_user: User = Depends(require_teacher),
@@ -1139,11 +1258,13 @@ async def recalculate_teacher_report(
         result="success",
         metadata={
             "action": "teacher_report_recalculate",
+            "job_id": result.get("operation_state", {}).get("job_id"),
+            "reused_job": bool(result.get("reused_job")),
         },
     )
 
     return {
-        "code": 200,
+        "code": 202,
         "message": "重算已触发",
         "data": result,
     }
@@ -1422,21 +1543,22 @@ async def download_debate_support_document(
     db: Session = Depends(get_db),
 ):
     _ensure_teacher_can_modify_debate(db, current_user, debate_id)
-    document = db.query(Document).filter(Document.id == document_id).first()
-    if not document or str(document.debate_id) != str(debate_id):
+    try:
+        private_file = FileAccessService(db).support_document(
+            current_user,
+            debate_id,
+            document_id,
+        )
+    except PrivateFileNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found.",
         )
-    file_path = _resolve_private_upload_path(document.file_path)
     return FileResponse(
-        path=file_path,
-        media_type=document.file_type or "application/octet-stream",
-        filename=document.filename,
-        headers={
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
+        path=private_file.path,
+        media_type=private_file.media_type,
+        filename=private_file.filename,
+        headers=FileAccessService.private_headers(),
     )
 @router.delete(
     "/debates/{debate_id}/support-documents/{document_id}",

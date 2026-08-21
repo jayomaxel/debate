@@ -129,6 +129,11 @@ def test_raw_http_500_message_is_sanitized():
 
 def test_router_exception_detail_never_exposes_sensitive_runtime_text():
     assert public_exception_detail(ValueError("邮箱已存在")) == "邮箱已存在"
+    assert public_exception_detail(ValueError("assignment_run_id 不存在")) == "assignment_run_id 不存在"
+    assert (
+        public_exception_detail(ValueError("当前配置为 ai_auto_assign，不允许提交手动辩位结果"))
+        == "当前配置为 ai_auto_assign，不允许提交手动辩位结果"
+    )
     assert (
         public_exception_detail(RuntimeError("postgres://user:secret@db"))
         == "请求处理失败，请稍后重试"

@@ -228,8 +228,9 @@ def test_persist_audio_for_dashscope_falls_back_from_invalid_public_prefix(
 
     assert public_url is not None
     assert public_url.startswith(
-        "https://debate.example.com/uploads/asr/"
+        "https://debate.example.com/api/voice/media/asr/"
     )
+    assert "?ticket=" in public_url
 
 
 def test_fun_asr_realtime_falls_back_to_filetrans_when_ffmpeg_missing(

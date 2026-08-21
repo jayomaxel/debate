@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
+    REALTIME_MULTI_INSTANCE: bool = os.getenv("REALTIME_MULTI_INSTANCE", "false").lower() in {
+        "1", "true", "yes", "on"
+    }
+    INSTANCE_ID: str = os.getenv("INSTANCE_ID", "")
 
     # CORS 配置（生产环境禁止 allow_origins=["*"] 与 allow_credentials=True 同时出现）
     ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = DEFAULT_ALLOWED_ORIGINS.copy()

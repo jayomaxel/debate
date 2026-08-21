@@ -18,6 +18,9 @@ from models.score import Score
 from models.speech import Speech
 from models.user import User
 from routers import teacher
+from services.background_job_runtime import DEBATE_REPORT_JOB_TYPE
+from services.background_job_service import BackgroundJobService
+from services.room_manager import DebateRoomManager
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import create_token
 
@@ -153,6 +156,10 @@ def _seed_completed_debate_graph(suffix: str) -> dict:
             teamwork_score=80.0,
             overall_score=81.2,
             feedback="Clear structure with usable teaching signals.",
+            status="validated",
+            scoring_source="test_fixture",
+            scoring_quality="validated",
+            eligible_for_analytics=True,
         )
         db.add_all([cls, student, debate, participation, speech, score])
         db.commit()
@@ -211,7 +218,7 @@ async def test_teacher_can_get_teaching_summary():
 
 
 @pytest.mark.asyncio
-async def test_teacher_can_lightweight_recalculate_report_without_rescoring():
+async def test_teacher_recalculation_queues_new_revision_without_rescoring():
     seeded = _seed_completed_debate_graph(uuid.uuid4().hex[:8])
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
@@ -219,12 +226,21 @@ async def test_teacher_can_lightweight_recalculate_report_without_rescoring():
             f"/api/teacher/debates/{seeded['debate_id']}/report/recalculate",
             headers=seeded["headers"],
         )
+        duplicate_response = await client.post(
+            f"/api/teacher/debates/{seeded['debate_id']}/report/recalculate",
+            headers=seeded["headers"],
+        )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()["data"]
-    assert data["mode"] == "lightweight"
-    assert data["score_status"]["generated"] is False
+    assert data["mode"] == "queued"
+    assert data["operation_state"]["report_status"] == "processing"
+    assert data["operation_state"]["job_id"]
     assert data["report_meta"]["report_quality"] == "validated"
+    assert duplicate_response.status_code == 202
+    duplicate_data = duplicate_response.json()["data"]
+    assert duplicate_data["reused_job"] is True
+    assert duplicate_data["operation_state"]["job_id"] == data["operation_state"]["job_id"]
 
     db = TestingSessionLocal()
     try:
@@ -237,8 +253,109 @@ async def test_teacher_can_lightweight_recalculate_report_without_rescoring():
         assert debate.report["report_recalculation_count"] == 1
         assert debate.report_pdf is None
         assert db.query(Score).count() == 1
+        job = BackgroundJobService.get_latest_for_target(
+            db,
+            job_type=DEBATE_REPORT_JOB_TYPE,
+            target_type="debate",
+            target_id=seeded["debate_id"],
+        )
+        assert job is not None
+        assert job.status == "queued"
+        assert job.payload["report_job_revision"] == 1
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_teacher_report_read_queues_missing_scores_without_inline_scoring():
+    seeded = _seed_completed_debate_graph(uuid.uuid4().hex[:8])
+    db = TestingSessionLocal()
+    try:
+        db.query(Score).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/report",
+            headers=seeded["headers"],
+        )
+        summary_response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/teaching-summary",
+            headers=seeded["headers"],
+        )
+
+    assert response.status_code == 202
+    state = response.json()["data"]
+    assert state["scoring_status"] == "processing"
+    assert state["report_status"] == "processing"
+    assert summary_response.status_code == 202
+    assert summary_response.json()["data"]["job_id"] == state["job_id"]
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Score).count() == 0
+        job = BackgroundJobService.get_latest_for_target(
+            db,
+            job_type=DEBATE_REPORT_JOB_TYPE,
+            target_type="debate",
+            target_id=seeded["debate_id"],
+        )
+        assert job is not None and job.status == "queued"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_teacher_report_failure_uses_stable_public_error_contract():
+    seeded = _seed_completed_debate_graph(uuid.uuid4().hex[:8])
+    db = TestingSessionLocal()
+    try:
+        manager = DebateRoomManager()
+        manager.enqueue_report_job(
+            db,
+            uuid.UUID(seeded["debate_id"]),
+            seeded["debate_id"],
+        )
+        job = BackgroundJobService.claim_next(
+            db,
+            worker_id="report-contract-worker",
+            job_types=[DEBATE_REPORT_JOB_TYPE],
+        )
+        assert job is not None
+        job_id = str(job.id)
+        assert BackgroundJobService.fail(
+            db,
+            job_id=job.id,
+            worker_id="report-contract-worker",
+            error_code="PROVIDER_FAILURE",
+            error_message="sensitive provider stack and credentials",
+        )
+    finally:
+        db.close()
+
+    headers = {**seeded["headers"], "X-Request-Id": "req-report-contract"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/report",
+            headers=headers,
+        )
+
+    assert response.status_code == 503
+    assert response.headers["x-request-id"] == "req-report-contract"
+    assert response.json() == {
+        "code": "REPORT_DATA_NOT_READY",
+        "message": "报告生成失败，请重试",
+        "request_id": "req-report-contract",
+        "retryable": True,
+        "status": "failed",
+        "details": {
+            "debate_id": seeded["debate_id"],
+            "job_id": job_id,
+        },
+    }
+    assert "sensitive provider" not in response.text
 
 
 @pytest.mark.asyncio
@@ -263,3 +380,91 @@ async def test_teacher_cannot_access_other_teacher_report_contracts():
     assert report_response.status_code == 403
     assert summary_response.status_code == 403
     assert recalculate_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_query_and_retry_owned_report_job():
+    seeded = _seed_completed_debate_graph(uuid.uuid4().hex[:8])
+    db = TestingSessionLocal()
+    try:
+        manager = DebateRoomManager()
+        debate_uuid = uuid.UUID(seeded["debate_id"])
+        assert manager.enqueue_report_job(db, debate_uuid, seeded["debate_id"])
+        claimed = BackgroundJobService.claim_next(
+            db,
+            worker_id="failed-report-worker",
+            job_types=[DEBATE_REPORT_JOB_TYPE],
+        )
+        assert BackgroundJobService.fail(
+            db,
+            job_id=claimed.id,
+            worker_id="failed-report-worker",
+            error_code="REPORT_FAILED",
+            error_message="temporary failure",
+        )
+    finally:
+        db.close()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        status_response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/report/job",
+            headers=seeded["headers"],
+        )
+        retry_response = await client.post(
+            f"/api/teacher/debates/{seeded['debate_id']}/report/job/retry",
+            headers=seeded["headers"],
+        )
+
+    assert status_response.status_code == 200
+    assert status_response.json()["data"]["status"] == "failed"
+    assert retry_response.status_code == 202
+    assert retry_response.json()["data"]["status"] == "queued"
+
+    db = TestingSessionLocal()
+    try:
+        retried_job = BackgroundJobService.claim_next(
+            db,
+            worker_id="successful-report-worker",
+            job_types=[DEBATE_REPORT_JOB_TYPE],
+        )
+        assert retried_job is not None
+        assert BackgroundJobService.complete(
+            db,
+            job_id=retried_job.id,
+            worker_id="successful-report-worker",
+            result={"report_status": "ready"},
+        )
+    finally:
+        db.close()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        ready_response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/report",
+            headers=seeded["headers"],
+        )
+    assert ready_response.status_code == 200
+    assert ready_response.json()["data"]["operation_state"]["report_status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_query_other_teacher_report_job():
+    seeded = _seed_completed_debate_graph(uuid.uuid4().hex[:8])
+    _, other_headers = _seed_teacher(uuid.uuid4().hex[:8])
+    db = TestingSessionLocal()
+    try:
+        manager = DebateRoomManager()
+        manager.enqueue_report_job(
+            db,
+            uuid.UUID(seeded["debate_id"]),
+            seeded["debate_id"],
+        )
+    finally:
+        db.close()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=BASE_URL) as client:
+        response = await client.get(
+            f"/api/teacher/debates/{seeded['debate_id']}/report/job",
+            headers=other_headers,
+        )
+
+    assert response.status_code == 403

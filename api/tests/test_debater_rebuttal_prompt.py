@@ -62,4 +62,3 @@ def test_free_debate_prompt_extracts_latest_non_ai_speech_as_target(monkeypatch)
     assert '"opponent_argument": "人工智能一定能提高所有学生的学习效果。"' in prompt
     assert "open with a direct challenge" in prompt
     assert "do not repeat the opponent speech" in prompt
-

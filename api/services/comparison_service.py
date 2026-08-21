@@ -7,6 +7,7 @@ from models.user import User
 from models.class_model import Class
 from models.debate import Debate, DebateParticipation
 from models.score import Score
+from services.score_eligibility_service import ScoreEligibilityService
 
 logger = get_logger(__name__)
 
@@ -67,7 +68,8 @@ class ComparisonService:
                 and_(
                     User.user_type == "student",
                     User.class_id == student.class_id,
-                    Debate.status == "completed"
+                    Debate.status == "completed",
+                    ScoreEligibilityService.sql_filter(),
                 )
             ).group_by(User.id, User.name).all()
 

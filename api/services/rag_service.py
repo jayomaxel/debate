@@ -18,6 +18,7 @@ from openai import OpenAI
 from models.kb_document import KBDocument, KBDocumentChunk
 from models.kb_conversation import KBConversation
 from services.config_service import ConfigService
+from services.kb_vector_schema_service import KBVectorSchemaService
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +283,7 @@ class RAGService:
             RuntimeError: 数据库查询失败
         """
         try:
+            KBVectorSchemaService.require_rag_available(self.db)
             # 使用默认值如果未提供
             if top_k is None:
                 top_k = self.top_k
@@ -332,6 +334,7 @@ class RAGService:
                     FROM kb_document_chunks c
                     JOIN kb_documents d ON c.document_id = d.id
                     WHERE d.upload_status = 'completed'
+                        AND d.is_published = TRUE
                         AND c.embedding IS NOT NULL
                         AND 1 - (c.embedding <=> CAST(:query_vector AS vector)) >= :threshold
                     ORDER BY c.embedding <=> CAST(:query_vector AS vector)
@@ -350,6 +353,7 @@ class RAGService:
                     FROM kb_document_chunks c
                     JOIN kb_documents d ON c.document_id = d.id
                     WHERE d.upload_status = 'completed'
+                        AND d.is_published = TRUE
                         AND c.embedding IS NOT NULL
                         AND 1 - (CAST(c.embedding AS vector) <=> CAST(:query_vector AS vector)) >= :threshold
                     ORDER BY CAST(c.embedding AS vector) <=> CAST(:query_vector AS vector)
@@ -754,6 +758,7 @@ class RAGService:
             RuntimeError: RAG流程执行失败
         """
         try:
+            KBVectorSchemaService.require_rag_available(self.db)
             # 验证输入
             if not question or not question.strip():
                 raise ValueError("问题不能为空")
@@ -1121,6 +1126,7 @@ class RAGService:
         last_saved_length = 0
 
         try:
+            KBVectorSchemaService.require_rag_available(self.db)
             # 验证输入
             if not question or not question.strip():
                 yield json.dumps({"type": "error", "message": "问题不能为空"}, ensure_ascii=False)

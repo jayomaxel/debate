@@ -266,6 +266,7 @@ class DocumentService:
                 file_type=file_type,
                 file_size=file_size,
                 upload_status='pending',
+                is_published=False,
                 uploaded_by=uuid.UUID(user_id),
                 uploaded_at=datetime.utcnow()
             )
@@ -302,7 +303,9 @@ class DocumentService:
     def list_documents(
         self,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        *,
+        published_only: bool = False,
     ) -> Dict[str, Any]:
         """
         列出文档，支持分。
@@ -319,13 +322,16 @@ class DocumentService:
             offset = (page - 1) * page_size
             
             # 查询总数
-            total = self.db.execute(
-                select(func.count(KBDocument.id))
-            ).scalar()
+            count_query = select(func.count(KBDocument.id))
+            document_query = select(KBDocument)
+            if published_only:
+                count_query = count_query.where(KBDocument.is_published.is_(True))
+                document_query = document_query.where(KBDocument.is_published.is_(True))
+            total = self.db.execute(count_query).scalar()
             
             # 查询文档列表
             documents = self.db.execute(
-                select(KBDocument)
+                document_query
                 .order_by(KBDocument.uploaded_at.desc())
                 .offset(offset)
                 .limit(page_size)
@@ -787,10 +793,7 @@ class DocumentService:
             config_service = ConfigService(self.db)
             vector_config = await config_service.get_vector_config()
             expected_dim = vector_config.embedding_dimension or 1536
-            KBVectorSchemaService.ensure_schema_matches_dimension(
-                db=self.db,
-                target_dimension=int(expected_dim),
-            )
+            KBVectorSchemaService.require_rag_available(self.db)
             
             # 验证文档存在
             document = self.db.execute(
@@ -1267,10 +1270,7 @@ class DocumentService:
             config_service = ConfigService(self.db)
             vector_config = await config_service.get_vector_config()
             expected_dim = vector_config.embedding_dimension or 1536
-            KBVectorSchemaService.ensure_schema_matches_dimension(
-                db=self.db,
-                target_dimension=int(expected_dim),
-            )
+            KBVectorSchemaService.require_rag_available(self.db)
             
             if len(query_embedding) != expected_dim:
                 raise ValueError(
@@ -1306,6 +1306,7 @@ class DocumentService:
                 FROM kb_document_chunks c
                 JOIN kb_documents d ON c.document_id = d.id
                 WHERE d.upload_status = 'completed'
+                    AND d.is_published = TRUE
                     AND 1 - (c.embedding <=> :query_vector::vector) >= :threshold
                 ORDER BY c.embedding <=> :query_vector::vector
                 LIMIT :limit
