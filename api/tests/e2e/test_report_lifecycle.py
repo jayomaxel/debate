@@ -65,4 +65,8 @@ async def test_report_job_reaches_scoring_and_report_ready(e2e_db, e2e_session_f
     assert scores[0].scoring_source == "fallback"
     assert scores[0].scoring_quality == "fallback"
     assert scores[0].eligible_for_analytics is False
-    assert isinstance(stored_debate.report, dict) and stored_debate.report.get("winner")
+    assert isinstance(stored_debate.report, dict)
+    global_report = stored_debate.report.get("global_report")
+    assert isinstance(global_report, dict) and global_report.get("winner")
+    assert stored_debate.report["report_meta"]["scoring_source"] == "fallback"
+    assert stored_debate.report["score_fallback_generated"] is True
