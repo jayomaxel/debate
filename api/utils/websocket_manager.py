@@ -1,16 +1,15 @@
-"""
-WebSocket管理器
-负责管理WebSocket连接、消息广播、房间订阅
-"""
+"""Manage debate WebSocket connections and room-scoped broadcasts."""
 
 import asyncio
 import json
 import os
 import time
 import uuid
-from typing import Any, Dict, Set, Optional, List
-from fastapi import WebSocket
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Set
+
+from fastapi import WebSocket
+
 from logging_config import get_logger
 from config import settings
 from database import get_redis
@@ -19,15 +18,16 @@ logger = get_logger(__name__)
 
 
 class WebSocketManager:
-    """WebSocket连接管理器"""
+    """Track every browser connection without mixing messages across rooms."""
 
     def __init__(self):
-        # 存储活跃连接: {user_id: [WebSocket, ...]}
+        # A user can have multiple tabs and can be connected to multiple rooms.
         self.active_connections: Dict[str, List[WebSocket]] = {}
-        # 存储房间成员: {room_id: Set[user_id]}
         self.room_members: Dict[str, Set[str]] = {}
-        # 存储用户所在房间: {user_id: room_id}
+        # Legacy single-room lookup kept for compatibility with existing callers.
         self.user_rooms: Dict[str, str] = {}
+        # The authoritative room binding is per websocket connection.
+        self.connection_rooms: Dict[int, str] = {}
         self.instance_id = settings.INSTANCE_ID or f"api-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._redis = None
         self._subscriber_task: Optional[asyncio.Task] = None
@@ -224,77 +224,83 @@ class WebSocketManager:
                 except Exception:
                     pass
 
+    def _connections_in_room(self, user_id: str, room_id: str) -> List[WebSocket]:
+        """Return only this user's websocket connections belonging to room_id."""
+        connections = self.active_connections.get(user_id) or []
+        scoped = [
+            ws
+            for ws in connections
+            if self.connection_rooms.get(id(ws)) == room_id
+        ]
+        if scoped:
+            return scoped
+
+        # Compatibility for tests or connections created before room scoping was
+        # introduced. An untracked connection is safe only when the legacy room
+        # marker explicitly points to the requested room.
+        if self.user_rooms.get(user_id) == room_id:
+            return [ws for ws in connections if id(ws) not in self.connection_rooms]
+        return []
+
     async def connect(self, websocket: WebSocket, user_id: str, room_id: str) -> None:
-        """
-        建立WebSocket连接
-
-        Args:
-            websocket: WebSocket连接对象
-            user_id: 用户ID
-            room_id: 房间ID
-        """
+        """Accept and register one browser connection for a debate room."""
         await websocket.accept()
-
-        # 存储连接
-        if user_id not in self.active_connections:
-            self.active_connections[user_id] = []
-        self.active_connections[user_id].append(websocket)
-
-        # 添加到房间
-        if room_id not in self.room_members:
-            self.room_members[room_id] = set()
-        self.room_members[room_id].add(user_id)
-
-        # 记录用户所在房间
+        self.active_connections.setdefault(user_id, []).append(websocket)
+        self.connection_rooms[id(websocket)] = room_id
+        self.room_members.setdefault(room_id, set()).add(user_id)
         self.user_rooms[user_id] = room_id
         await self._set_presence(room_id, user_id)
-
         logger.info(f"User {user_id} connected to room {room_id}")
 
     async def disconnect(
         self, user_id: str, websocket: Optional[WebSocket] = None
     ) -> Optional[str]:
-        """
-        断开WebSocket连接
-
-        Args:
-            user_id: 用户ID
-            websocket: 具体断开的 WebSocket（可选）
-
-        Returns:
-            断开连接的房间ID，如果用户不在任何房间则返回None
-        """
-        # 获取用户所在房间（在移除连接前）
-        room_id = self.user_rooms.get(user_id)
-
-        # 检查是否还有其他连接
+        """Disconnect one tab or all tabs without corrupting other rooms."""
         connections = self.active_connections.get(user_id) or []
+        target_rooms: Set[str] = set()
+
         if websocket is not None:
-            connections = [ws for ws in connections if ws is not websocket]
+            room_id = self.connection_rooms.pop(id(websocket), None)
+            if room_id is None:
+                room_id = self.user_rooms.get(user_id)
+            if room_id:
+                target_rooms.add(room_id)
+            remaining = [ws for ws in connections if ws is not websocket]
         else:
-            connections = []
+            for ws in connections:
+                room_id = self.connection_rooms.pop(id(ws), None)
+                if room_id:
+                    target_rooms.add(room_id)
+            legacy_room = self.user_rooms.get(user_id)
+            if legacy_room:
+                target_rooms.add(legacy_room)
+            remaining = []
 
-        # 如果还有其他连接，只更新连接列表，不广播离开事件
-        if connections:
-            self.active_connections[user_id] = connections
-            return None
+        if remaining:
+            self.active_connections[user_id] = remaining
+        else:
+            self.active_connections.pop(user_id, None)
 
-        # 所有连接都断开了，先移除连接记录和房间成员，再广播
-        # 移除连接记录
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
+        remaining_rooms = {
+            self.connection_rooms[id(ws)]
+            for ws in remaining
+            if id(ws) in self.connection_rooms
+        }
+        if remaining_rooms:
+            self.user_rooms[user_id] = next(iter(remaining_rooms))
+        elif not remaining:
+            self.user_rooms.pop(user_id, None)
 
-        # 从房间移除
-        if room_id:
+        disconnected_rooms: List[str] = []
+        for room_id in target_rooms:
+            if self._connections_in_room(user_id, room_id):
+                continue
+
+            disconnected_rooms.append(room_id)
             if room_id in self.room_members:
                 self.room_members[room_id].discard(user_id)
 
-            # 移除用户房间记录
-            if user_id in self.user_rooms:
-                del self.user_rooms[user_id]
             await self._delete_presence(room_id, user_id)
-
-            # 现在广播user_left事件（此时用户已不在房间成员列表中）
             await self.broadcast_to_room(
                 room_id,
                 {
@@ -306,141 +312,104 @@ class WebSocketManager:
                 },
             )
 
-            # 如果房间为空，删除房间
             if room_id in self.room_members and not self.room_members[room_id]:
                 del self.room_members[room_id]
-
             logger.info(f"User {user_id} disconnected from room {room_id}")
 
-        return room_id
+        return disconnected_rooms[0] if disconnected_rooms else None
 
     async def broadcast_to_room(
         self, room_id: str, message: dict, exclude_user: Optional[str] = None
     ) -> None:
-        """
-        向房间内所有成员广播消息
-
-        Args:
-            room_id: 房间ID
-            message: 消息内容
-            exclude_user: 排除的用户ID（可选）
-        """
+        """Publish and send a message only to connections bound to room_id."""
         await self._publish_room_event(room_id, message, exclude_user)
         await self._broadcast_local(room_id, message, exclude_user=exclude_user)
 
     async def _broadcast_local(
         self, room_id: str, message: dict, exclude_user: Optional[str] = None
     ) -> None:
+        """Send a message only to websocket connections bound to room_id."""
         if room_id not in self.room_members:
             return
 
-        # 获取房间成员
-        members = self.room_members[room_id]
-
-        # 发送消息给所有成员
-        disconnected_users: List[str] = []
-        for user_id in list(members):
+        stale_members: List[str] = []
+        broken_connections: List[tuple[str, WebSocket]] = []
+        for user_id in list(self.room_members[room_id]):
             if exclude_user and user_id == exclude_user:
                 continue
 
-            connections = self.active_connections.get(user_id) or []
+            connections = self._connections_in_room(user_id, room_id)
             if not connections:
-                disconnected_users.append(user_id)
+                stale_members.append(user_id)
                 continue
-            broken: List[WebSocket] = []
+
             for ws in connections:
                 try:
-                    # 检查连接状态
                     if ws.client_state.name != "CONNECTED":
-                        broken.append(ws)
+                        broken_connections.append((user_id, ws))
                         continue
                     await ws.send_json(message)
-                except Exception as e:
-                    logger.debug(f"Failed to send message to user {user_id}: {e}")
-                    broken.append(ws)
-            if broken:
-                remaining = [ws for ws in connections if ws not in broken]
-                if remaining:
-                    self.active_connections[user_id] = remaining
-                else:
-                    disconnected_users.append(user_id)
+                except Exception as exc:
+                    logger.debug(f"Failed to send message to user {user_id}: {exc}")
+                    broken_connections.append((user_id, ws))
 
-        # 清理断开的连接
-        for user_id in disconnected_users:
-            await self.disconnect(user_id)
+        for user_id, ws in broken_connections:
+            await self.disconnect(user_id, ws)
 
-    async def send_to_user(self, user_id: str, message: dict) -> bool:
-        """
-        向指定用户发送消息
+        # A stale member can exist after an abrupt process/browser failure. Remove
+        # it from this room only; connections in the user's other rooms stay alive.
+        for user_id in stale_members:
+            if self._connections_in_room(user_id, room_id):
+                continue
+            self.room_members.get(room_id, set()).discard(user_id)
 
-        Args:
-            user_id: 用户ID
-            message: 消息内容
+        if room_id in self.room_members and not self.room_members[room_id]:
+            del self.room_members[room_id]
 
-        Returns:
-            是否发送成功
-        """
-        connections = self.active_connections.get(user_id) or []
+    async def send_to_user(
+        self, user_id: str, message: dict, room_id: Optional[str] = None
+    ) -> bool:
+        """Send to a user's tabs, optionally restricted to one debate room."""
+        connections = (
+            self._connections_in_room(user_id, room_id)
+            if room_id is not None
+            else (self.active_connections.get(user_id) or [])
+        )
         if not connections:
             return False
 
         broken: List[WebSocket] = []
-        ok = False
+        sent = False
         for ws in connections:
             try:
-                # 检查连接状态
                 if ws.client_state.name != "CONNECTED":
                     broken.append(ws)
                     continue
                 await ws.send_json(message)
-                ok = True
-            except Exception as e:
-                logger.debug(f"Failed to send message to user {user_id}: {e}")
+                sent = True
+            except Exception as exc:
+                logger.debug(f"Failed to send message to user {user_id}: {exc}")
                 broken.append(ws)
-        if broken:
-            remaining = [ws for ws in connections if ws not in broken]
-            if remaining:
-                self.active_connections[user_id] = remaining
-            else:
-                await self.disconnect(user_id)
-        return ok
+
+        for ws in broken:
+            await self.disconnect(user_id, ws)
+        return sent
 
     def get_room_connections(self, room_id: str) -> Set[str]:
-        """
-        获取房间内的所有连接用户ID
-
-        Args:
-            room_id: 房间ID
-
-        Returns:
-            用户ID集合
-        """
+        """Return the connected user ids recorded for a room."""
         return self.room_members.get(room_id, set()).copy()
 
     def get_user_room(self, user_id: str) -> Optional[str]:
-        """
-        获取用户所在的房间ID
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            房间ID，如果用户不在任何房间则返回None
-        """
+        """Return the legacy most-recent room for a user."""
         return self.user_rooms.get(user_id)
 
-    def is_user_connected(self, user_id: str) -> bool:
-        """
-        检查用户是否已连接
-
-        Args:
-            user_id: 用户ID
-
-        Returns:
-            是否已连接
-        """
-        return bool(self.active_connections.get(user_id))
+    def is_user_connected(
+        self, user_id: str, room_id: Optional[str] = None
+    ) -> bool:
+        """Check whether a user has any connection, optionally in one room."""
+        if room_id is None:
+            return bool(self.active_connections.get(user_id))
+        return bool(self._connections_in_room(user_id, room_id))
 
 
-# 创建全局WebSocket管理器实例
 websocket_manager = WebSocketManager()

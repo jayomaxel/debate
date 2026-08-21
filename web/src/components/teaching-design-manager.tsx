@@ -8,10 +8,14 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toTeachingDesignViewModel } from '@/lib/frontend-adapters';
-import type { TeachingDesignPayload, TeachingDesignViewModel } from '@/lib/frontend-contracts';
+import type {
+  TeachingDesignPayload,
+  TeachingDesignVersionContract,
+  TeachingDesignViewModel,
+} from '@/lib/frontend-contracts';
 import { mapUploadError } from '@/lib/upload-error-mapper';
 import TeacherService, { type Class } from '@/services/teacher.service';
-import { AlertCircle, FileUp, Loader2, Save } from 'lucide-react';
+import { AlertCircle, CheckCircle, FileUp, History, Loader2, Save, Wand2 } from 'lucide-react';
 
 interface TeachingDesignManagerProps {
   classes: Class[];
@@ -43,8 +47,14 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
   const [classId, setClassId] = useState(initialClassId || classes[0]?.id || '');
   const [design, setDesign] = useState<TeachingDesignViewModel | null>(null);
   const [payload, setPayload] = useState<TeachingDesignPayload>(emptyPayload);
+  const [versions, setVersions] = useState<TeachingDesignVersionContract[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [versionLoading, setVersionLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activatingVersionId, setActivatingVersionId] = useState<string | null>(null);
+  const [correctingVersionId, setCorrectingVersionId] = useState<string | null>(null);
+  const [correctionNotes, setCorrectionNotes] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,9 +64,12 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
     setError(null);
     try {
       const current = await TeacherService.getCurrentTeachingDesign(classId);
+      const versionList = await TeacherService.listTeachingDesignVersions(classId);
       const viewModel = current ? toTeachingDesignViewModel(current) : null;
       setDesign(viewModel);
       setPayload(viewModel?.payload || emptyPayload());
+      setVersions(versionList);
+      setSelectedVersionId(current?.id || versionList[0]?.id || '');
     } catch (err: any) {
       setError(err?.message || '教学设计加载失败');
     } finally {
@@ -90,6 +103,9 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
       const viewModel = toTeachingDesignViewModel(result);
       setDesign(viewModel);
       setPayload(viewModel.payload);
+      setSelectedVersionId(result.id);
+      const versionList = await TeacherService.listTeachingDesignVersions(classId);
+      setVersions(versionList);
       setMessage('教学设计已上传，请检查低置信度和缺失字段。');
     } catch (err) {
       setError(mapUploadError(err));
@@ -108,11 +124,79 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
       const viewModel = toTeachingDesignViewModel(result);
       setDesign(viewModel);
       setPayload(viewModel.payload);
+      setSelectedVersionId(result.id);
+      const versionList = await TeacherService.listTeachingDesignVersions(classId);
+      setVersions(versionList);
       setMessage('校正结果已保存为当前版本。');
     } catch (err: any) {
       setError(err?.message || '保存失败');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const viewVersion = async (versionId: string) => {
+    if (!classId || !versionId) return;
+    setVersionLoading(true);
+    setError(null);
+    try {
+      const result = await TeacherService.getTeachingDesignVersion(classId, versionId);
+      const viewModel = toTeachingDesignViewModel(result);
+      setDesign(viewModel);
+      setPayload(viewModel.payload);
+      setSelectedVersionId(result.id);
+      setCorrectionNotes(result.correction_notes || '');
+    } catch (err: any) {
+      setError(err?.message || '版本详情加载失败');
+    } finally {
+      setVersionLoading(false);
+    }
+  };
+
+  const activateVersion = async (versionId: string) => {
+    if (!classId || !versionId) return;
+    setActivatingVersionId(versionId);
+    setError(null);
+    try {
+      const result = await TeacherService.activateTeachingDesignVersion(classId, versionId);
+      const viewModel = toTeachingDesignViewModel(result);
+      setDesign(viewModel);
+      setPayload(viewModel.payload);
+      setSelectedVersionId(result.id);
+      const versionList = await TeacherService.listTeachingDesignVersions(classId);
+      setVersions(versionList);
+      setMessage('已激活选中的教学设计版本。');
+    } catch (err: any) {
+      setError(err?.message || '激活版本失败');
+    } finally {
+      setActivatingVersionId(null);
+    }
+  };
+
+  const correctVersion = async (versionId: string) => {
+    if (!classId || !versionId) return;
+    setCorrectingVersionId(versionId);
+    setError(null);
+    try {
+      const baseName = design?.name || '教学设计';
+      const result = await TeacherService.correctTeachingDesignVersion(
+        classId,
+        versionId,
+        payload,
+        `${baseName} 校正版`,
+        correctionNotes || undefined
+      );
+      const viewModel = toTeachingDesignViewModel(result);
+      setDesign(viewModel);
+      setPayload(viewModel.payload);
+      setSelectedVersionId(result.id);
+      const versionList = await TeacherService.listTeachingDesignVersions(classId);
+      setVersions(versionList);
+      setMessage('已基于当前编辑内容生成校正版。');
+    } catch (err: any) {
+      setError(err?.message || '生成校正版失败');
+    } finally {
+      setCorrectingVersionId(null);
     }
   };
 
@@ -141,6 +225,83 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
             </Label>
           </div>
         </div>
+        <div className='rounded-lg border border-slate-200 bg-slate-50 p-4'>
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <div>
+              <div className='flex items-center gap-2 text-sm font-medium text-slate-800'>
+                <History className='h-4 w-4 text-slate-600' />
+                版本治理
+              </div>
+              <p className='mt-1 text-xs text-slate-500'>
+                可查看历史版本、切换当前版本，并基于当前编辑内容生成校正版。
+              </p>
+            </div>
+            <Button type='button' variant='outline' size='sm' disabled={!classId || loading} onClick={() => void load()}>
+              {loading ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : <History className='mr-2 h-4 w-4' />}
+              刷新版本
+            </Button>
+          </div>
+          {versions.length === 0 ? (
+            <div className='mt-3 rounded-md border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500'>
+              暂无历史版本。
+            </div>
+          ) : (
+            <div className='mt-3 space-y-2'>
+              {versions.map((version) => (
+                <div
+                  key={version.id}
+                  className='flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-3 md:flex-row md:items-center md:justify-between'
+                >
+                  <div className='min-w-0'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <span className='truncate text-sm font-medium text-slate-900'>
+                        {version.version_name || version.title || '未命名版本'}
+                      </span>
+                      {version.is_active && <Badge className='bg-emerald-100 text-emerald-700'>当前</Badge>}
+                      <Badge variant='outline'>{version.extraction_status}</Badge>
+                    </div>
+                    <div className='mt-1 text-xs text-slate-500'>
+                      {version.source_filename || '在线录入'}
+                      {version.created_at ? ` · ${new Date(version.created_at).toLocaleString('zh-CN')}` : ''}
+                    </div>
+                  </div>
+                  <div className='flex shrink-0 flex-wrap gap-2'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={versionLoading && selectedVersionId === version.id}
+                      onClick={() => void viewVersion(version.id)}
+                    >
+                      {versionLoading && selectedVersionId === version.id ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : <History className='mr-2 h-4 w-4' />}
+                      查看
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={version.is_active || activatingVersionId === version.id}
+                      onClick={() => void activateVersion(version.id)}
+                    >
+                      {activatingVersionId === version.id ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : <CheckCircle className='mr-2 h-4 w-4' />}
+                      激活
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={correctingVersionId === version.id}
+                      onClick={() => void correctVersion(version.id)}
+                    >
+                      {correctingVersionId === version.id ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : <Wand2 className='mr-2 h-4 w-4' />}
+                      生成校正版
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {design ? (
           <>
             <div className='flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-3 text-sm'>
@@ -151,6 +312,10 @@ const TeachingDesignManager: React.FC<TeachingDesignManagerProps> = ({
             <div className='grid gap-4 md:grid-cols-2'>
               <div className='space-y-2'><Label>课程名称</Label><Input value={payload.course_title || ''} onChange={(event) => setPayload({ ...payload, course_title: event.target.value })} /></div>
               <div className='space-y-2'><Label>章节主题</Label><Input value={payload.chapter_theme || ''} onChange={(event) => setPayload({ ...payload, chapter_theme: event.target.value })} /></div>
+              <div className='space-y-2 md:col-span-2'>
+                <Label>校正说明</Label>
+                <Textarea value={correctionNotes} onChange={(event) => setCorrectionNotes(event.target.value)} placeholder='说明本次校正依据或版本变化' />
+              </div>
               {listFields.map((field) => (
                 <div key={field.key} className='space-y-2'>
                   <Label className='flex items-center gap-2'>{field.label}{reviewFields.has(field.key) && <Badge variant='outline'>需要确认</Badge>}</Label>

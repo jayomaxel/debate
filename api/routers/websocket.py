@@ -450,7 +450,7 @@ async def websocket_debate_endpoint(
         # 清理连接
         if user_id:
             await websocket_manager.disconnect(user_id, websocket)
-            if not websocket_manager.is_user_connected(user_id):
+            if not websocket_manager.is_user_connected(user_id, room_id):
                 await room_manager.leave_room(room_id, user_id, db)
 
             # 如果房间为空，清理流程控制器

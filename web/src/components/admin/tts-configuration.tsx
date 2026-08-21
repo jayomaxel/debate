@@ -8,6 +8,11 @@ import { useToast } from '@/hooks/use-toast';
 import { Edit, Eye, EyeOff, Loader2, Save, Volume2, X } from 'lucide-react';
 import AdminService, { type TtsConfig, type TtsConfigUpdate } from '@/services/admin.service';
 import { formatErrorMessage } from '@/lib/error-handler';
+import {
+  getMaskedSecretDisplay,
+  hasConfiguredSecret,
+  normalizeSecretUpdate,
+} from '@/lib/masked-config';
 
 type TtsFormData = TtsConfigUpdate & {
   voice: string;
@@ -42,7 +47,7 @@ const TtsConfiguration: React.FC = () => {
       setFormData({
         model_name: data.model_name,
         api_endpoint: data.api_endpoint,
-        api_key: data.api_key,
+        api_key: '',
         voice: data.parameters?.voice ?? 'Cherry',
         speed: typeof data.parameters?.speed === 'number' ? data.parameters.speed : 0,
       });
@@ -59,6 +64,8 @@ const TtsConfiguration: React.FC = () => {
   };
 
   const handleEdit = () => {
+    setFormData((current) => ({ ...current, api_key: '' }));
+    setShowApiKey(false);
     setIsEditing(true);
   };
 
@@ -67,7 +74,7 @@ const TtsConfiguration: React.FC = () => {
       setFormData({
         model_name: config.model_name,
         api_endpoint: config.api_endpoint,
-        api_key: config.api_key,
+        api_key: '',
         voice: config.parameters?.voice ?? 'Cherry',
         speed: typeof config.parameters?.speed === 'number' ? config.parameters.speed : 0,
       });
@@ -76,7 +83,12 @@ const TtsConfiguration: React.FC = () => {
   };
 
   const handleSave = async () => {
-    if (!formData.model_name || !formData.api_endpoint || !formData.api_key) {
+    const secretRequired = !hasConfiguredSecret(
+      config?.api_key_configured,
+      config?.api_key_masked
+    );
+    const apiKey = normalizeSecretUpdate(formData.api_key);
+    if (!formData.model_name || !formData.api_endpoint || (secretRequired && !apiKey)) {
       toast({
         variant: 'destructive',
         title: '验证失败',
@@ -108,7 +120,7 @@ const TtsConfiguration: React.FC = () => {
       const payload: TtsConfigUpdate = {
         model_name: formData.model_name,
         api_endpoint: formData.api_endpoint,
-        api_key: formData.api_key,
+        api_key: apiKey,
         parameters: {
           ...(config?.parameters ?? {}),
           voice: formData.voice.trim(),
@@ -118,6 +130,8 @@ const TtsConfiguration: React.FC = () => {
       };
       const updatedConfig = await AdminService.updateTtsConfig(payload);
       setConfig(updatedConfig);
+      setFormData((current) => ({ ...current, api_key: '' }));
+      setShowApiKey(false);
       setIsEditing(false);
       toast({
         variant: 'success',
@@ -200,26 +214,41 @@ const TtsConfiguration: React.FC = () => {
 
           <div className="space-y-2">
             <Label htmlFor="tts-api-key" className="text-slate-700 font-medium">
-              API 密钥 *
+              API 密钥 {hasConfiguredSecret(config?.api_key_configured, config?.api_key_masked) ? '' : '*'}
             </Label>
             <div className="relative">
               <Input
                 id="tts-api-key"
-                type={showApiKey ? 'text' : 'password'}
-                value={formData.api_key}
+                type={!isEditing || showApiKey ? 'text' : 'password'}
+                value={
+                  isEditing
+                    ? formData.api_key || ''
+                    : getMaskedSecretDisplay(config?.api_key_configured, config?.api_key_masked)
+                }
                 onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                placeholder="sk-..."
+                placeholder={
+                  hasConfiguredSecret(config?.api_key_configured, config?.api_key_masked)
+                    ? '留空表示保留当前密钥'
+                    : '请输入 API 密钥'
+                }
                 disabled={!isEditing || submitting}
                 className={!isEditing ? 'bg-slate-50 pr-10' : 'pr-10'}
               />
-              <button
+              {isEditing ? <button
                 type="button"
                 onClick={() => setShowApiKey(!showApiKey)}
+                aria-label={showApiKey ? '隐藏新 API 密钥' : '显示新 API 密钥'}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
                 {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+              </button> : null}
             </div>
+            <p className="text-xs text-slate-500">
+              当前状态：{getMaskedSecretDisplay(config?.api_key_configured, config?.api_key_masked)}
+              {isEditing && hasConfiguredSecret(config?.api_key_configured, config?.api_key_masked)
+                ? '；留空不会覆盖原密钥'
+                : ''}
+            </p>
           </div>
 
           <Separator />

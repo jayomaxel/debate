@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from services.rag_service import RAGService
 from models.kb_document import KBDocument, KBDocumentChunk
+from models.kb_conversation import KBConversation
 
 
 class TestRAGService:
@@ -1689,6 +1690,95 @@ class TestAskQuestionStreamPersistence:
         assert saved_conversation.answer == "segment-onesegment-two"
         assert saved_conversation.sources == events[0]["data"]
         assert events[-1]["id"] == str(saved_conversation.id)
+
+    @pytest.mark.asyncio
+    async def test_stream_dimension_mismatch_falls_back_and_keeps_history(
+        self,
+        rag_service_with_openai: RAGService,
+        db_session: Session,
+    ):
+        question = "人工智能的课堂边界是什么？"
+        user_id = str(uuid.uuid4())
+        session_id = "stream_dimension_fallback"
+
+        embedding_response = MagicMock()
+        embedding_response.data = [MagicMock()]
+        embedding_response.data[0].embedding = [0.5] * 1024
+        rag_service_with_openai.openai_client.embeddings.create.return_value = (
+            embedding_response
+        )
+
+        model_config = MagicMock()
+        model_config.model_name = "qwen3.5-flash"
+        model_config.api_endpoint = "https://example.com/v1/chat/completions"
+        model_config.api_key = "test-key"
+        model_config.temperature = 0.7
+        model_config.max_tokens = 2000
+
+        llm_client = MagicMock()
+        llm_client.chat.completions.create.return_value = [
+            self._make_stream_chunk("应明确教学目标、隐私与人工复核边界。"),
+        ]
+
+        with patch("services.rag_service.ConfigService") as MockConfigService:
+            MockConfigService.return_value.get_model_config = AsyncMock(
+                return_value=model_config
+            )
+            with patch.object(
+                rag_service_with_openai,
+                "search_similar_chunks",
+                side_effect=RuntimeError("expected 1536 dimensions, not 1024"),
+            ), patch.object(
+                rag_service_with_openai,
+                "search_text_chunks",
+                return_value=[],
+            ), patch(
+                "services.rag_service.OpenAI",
+                return_value=llm_client,
+            ):
+                events = [
+                    json.loads(raw)
+                    async for raw in rag_service_with_openai.ask_question_stream(
+                        question=question,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                ]
+
+        assert [event["type"] for event in events] == ["sources", "answer", "done"]
+        assert events[1]["content"].startswith("应明确教学目标")
+        saved = db_session.query(KBConversation).filter(
+            KBConversation.user_id == uuid.UUID(user_id),
+            KBConversation.session_id == session_id,
+        ).one()
+        assert saved.question == question
+        assert saved.answer.startswith("应明确教学目标")
+
+    def test_history_replaces_legacy_blank_answer(
+        self,
+        rag_service_with_openai: RAGService,
+        db_session: Session,
+    ):
+        user_id = uuid.uuid4()
+        session_id = "legacy_blank_answer"
+        db_session.add(
+            KBConversation(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                session_id=session_id,
+                question="为什么没有回答？",
+                answer="",
+                sources=[],
+            )
+        )
+        db_session.commit()
+
+        history = rag_service_with_openai.get_conversation_history(
+            str(user_id),
+            session_id,
+        )
+
+        assert history[0]["answer"] == RAGService._STREAM_FAILED_MESSAGE
 
     @pytest.mark.asyncio
     async def test_ask_question_stream_persists_partial_answer_when_cancelled(

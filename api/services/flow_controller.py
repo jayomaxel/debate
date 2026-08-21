@@ -33,7 +33,9 @@ class DebateFlowController:
     """辩论流程控制器"""
 
     FAST_TOPIC_ONLY_WAIT_SECONDS = 1.5
-    REACTIVE_FALLBACK_WAIT_SECONDS = 15.0
+    # Kept as a floor for legacy/custom strategies. The final orchestration
+    # timeout is also bounded below by the provider client's own deadline.
+    REACTIVE_FALLBACK_WAIT_SECONDS = 35.0
 
     CONTEXT_REACTIVE_SEGMENT_IDS = {
         "questioning_1_ai2_ask",
@@ -89,6 +91,90 @@ class DebateFlowController:
         self.initialize_flow(room_id, segments)
         await self._apply_current_segment(room_id)
         await self.start_timer(room_id)
+
+    async def resume_flow(self, room_id: str) -> bool:
+        """Rehydrate an in-progress flow after a reconnect or process restart.
+
+        Room runtime state is persisted independently from this controller's
+        in-memory segment index. Rebuilding the latter is therefore required
+        before timers, AI turns, or manual segment advancement can work again.
+        """
+        room_state = room_manager.get_room_state(room_id)
+        if room_state is None or room_state.current_phase in {
+            DebatePhase.WAITING,
+            DebatePhase.FINISHED,
+        }:
+            return False
+
+        timer_task = self.timer_tasks.get(room_id)
+        if (
+            room_id in self.segments
+            and room_id in self.segment_index
+            and timer_task is not None
+            and not timer_task.done()
+        ):
+            return True
+
+        segments = self._deserialize_segments(room_state.flow_segments)
+        if not segments:
+            segments = self._build_default_segments()
+
+        segment_id = str(room_state.segment_id or "")
+        index = next(
+            (
+                item_index
+                for item_index, segment in enumerate(segments)
+                if str(segment.get("id") or "") == segment_id
+            ),
+            None,
+        )
+        if index is None:
+            try:
+                index = max(0, min(int(room_state.segment_index or 0), len(segments) - 1))
+            except (TypeError, ValueError):
+                index = 0
+
+        self.segments[room_id] = segments
+        self.segment_index[room_id] = index
+        room_state.flow_segments = self._serialize_segments(segments)
+
+        snapshot_incomplete = (
+            not room_state.segment_id
+            or not room_state.segment_start_time
+            or not room_state.speaker_mode
+            or not room_state.speaker_options
+        )
+        if snapshot_incomplete:
+            if not await self._apply_current_segment(room_id):
+                return False
+        else:
+            segment = segments[index]
+            remaining = self._resolve_segment_remaining(room_state, segment)
+            await room_manager.update_room_state(
+                room_id,
+                segment_index=index,
+                time_remaining=remaining,
+                segment_time_remaining=remaining,
+            )
+            current_speaker = str(room_state.current_speaker or "")
+            if (
+                current_speaker.startswith("ai_")
+                and segment.get("mode") in {"fixed", "choice"}
+                and remaining > 0
+                and room_id not in self.ai_tasks
+            ):
+                self.ai_tasks[room_id] = asyncio.create_task(
+                    self._run_ai_turn(room_id, segment)
+                )
+            await self._sync_upcoming_ai_prethinking(room_id)
+
+        await self.start_timer(room_id)
+        logger.info(
+            "Resumed flow for room %s at segment %s",
+            room_id,
+            self.segment_index.get(room_id),
+        )
+        return True
 
     def _build_default_segments(self) -> List[Dict[str, Any]]:
         return [
@@ -253,9 +339,47 @@ class DebateFlowController:
                     "phase": str(getattr(phase, "value", phase) or ""),
                     "duration": int(segment.get("duration") or 0),
                     "mode": str(segment.get("mode") or ""),
+                    "speaker_roles": [
+                        str(role) for role in (segment.get("speaker_roles") or []) if role
+                    ],
+                    "match_state": str(segment.get("match_state") or ""),
                 }
             )
         return serialized
+
+    def _deserialize_segments(self, raw_segments: Any) -> List[Dict[str, Any]]:
+        """Restore persisted segments, rejecting legacy/incomplete snapshots."""
+        if not isinstance(raw_segments, list) or not raw_segments:
+            return []
+        restored: List[Dict[str, Any]] = []
+        for raw in raw_segments:
+            if not isinstance(raw, dict):
+                return []
+            roles = raw.get("speaker_roles")
+            if not isinstance(roles, list) or not roles:
+                # Older snapshots omitted roles and cannot safely drive turns.
+                return []
+            try:
+                phase = DebatePhase(str(raw.get("phase") or ""))
+                duration = max(0, int(raw.get("duration") or 0))
+            except (TypeError, ValueError):
+                return []
+            segment_id = str(raw.get("id") or "")
+            mode = str(raw.get("mode") or "")
+            if not segment_id or not mode or duration <= 0:
+                return []
+            restored.append(
+                {
+                    "id": segment_id,
+                    "title": str(raw.get("title") or ""),
+                    "phase": phase,
+                    "duration": duration,
+                    "mode": mode,
+                    "speaker_roles": [str(role) for role in roles if role],
+                    "match_state": str(raw.get("match_state") or ""),
+                }
+            )
+        return restored
 
     def _now(self) -> datetime:
         return datetime.utcnow() + timedelta(hours=8)
@@ -526,15 +650,23 @@ class DebateFlowController:
         return str(turn_plan.get("speech_type") or "") in {"response", "free_debate"}
 
     def _resolve_ai_generation_timeout(self, turn_plan: Dict[str, Any]) -> float:
+        provider_deadline = AIDebaterAgent.LLM_HTTP_TIMEOUT_SECONDS + 5.0
         if self._is_topic_only_eager_turn(turn_plan):
-            return self.FAST_TOPIC_ONLY_WAIT_SECONDS
+            return max(self.FAST_TOPIC_ONLY_WAIT_SECONDS, provider_deadline)
         configured = self._coerce_nonnegative_float(
             turn_plan.get("thinking_timeout_sec"),
             20.0,
         )
+        # The debater client owns the provider timeout. This outer guard must
+        # always be longer, otherwise asyncio.wait_for cancels an in-flight LLM
+        # call before the provider reaches its own timeout.
         if self._is_reactive_fallback_turn(turn_plan):
-            return min(self.REACTIVE_FALLBACK_WAIT_SECONDS, configured or self.REACTIVE_FALLBACK_WAIT_SECONDS)
-        return configured
+            return max(
+                self.REACTIVE_FALLBACK_WAIT_SECONDS,
+                provider_deadline,
+                configured or self.REACTIVE_FALLBACK_WAIT_SECONDS,
+            )
+        return max(provider_deadline, configured)
 
     def _build_topic_only_fallback_text(
         self,
@@ -2036,6 +2168,20 @@ class DebateFlowController:
                 and current_turn_committed
             ):
                 continue
+            # A future choice segment has no selected speaker yet. Preparing it
+            # with the first role can call the wrong debater, then call the
+            # randomly selected debater again when the segment starts.
+            ai_options = [
+                str(role)
+                for role in (segment.get("speaker_roles") or [])
+                if str(role).startswith("ai_")
+            ]
+            if (
+                index > current_index
+                and str(segment.get("mode") or "") == "choice"
+                and len(ai_options) > 1
+            ):
+                continue
             speaker_role = self._resolve_segment_speaker_role(segment, room_state)
             if not speaker_role or not speaker_role.startswith("ai_"):
                 continue
@@ -2889,6 +3035,7 @@ class DebateFlowController:
 
         await room_manager.update_room_state(
             room_id,
+            flow_segments=self._serialize_segments(segments),
             current_phase=segment["phase"],
             match_state=match_state,
             phase_start_time=now if phase_changed else room_state.phase_start_time,

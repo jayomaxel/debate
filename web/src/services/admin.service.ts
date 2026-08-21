@@ -31,7 +31,6 @@ export interface ModelConfig {
   id: string;
   model_name: string;
   api_endpoint: string;
-  api_key: string;
   api_key_configured?: boolean;
   api_key_masked?: string | null;
   temperature: number;
@@ -54,7 +53,6 @@ export interface AsrConfig {
   id: string;
   model_name: string;
   api_endpoint: string;
-  api_key: string;
   api_key_configured?: boolean;
   api_key_masked?: string | null;
   parameters: Record<string, any>;
@@ -73,7 +71,6 @@ export interface TtsConfig {
   id: string;
   model_name: string;
   api_endpoint: string;
-  api_key: string;
   api_key_configured?: boolean;
   api_key_masked?: string | null;
   parameters: Record<string, any>;
@@ -92,7 +89,6 @@ export interface VectorConfig {
   id: string;
   model_name: string;
   api_endpoint: string;
-  api_key: string;
   api_key_configured?: boolean;
   api_key_masked?: string | null;
   embedding_dimension: number;
@@ -117,7 +113,6 @@ export interface CozeConfig {
   debater_4_bot_id: string;
   judge_bot_id: string;
   mentor_bot_id: string;
-  api_token: string;
   api_token_configured?: boolean;
   api_token_masked?: string | null;
   parameters: Record<string, any>;

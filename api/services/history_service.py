@@ -115,7 +115,7 @@ class HistoryService:
                         "status": d.status,
                         "score": human_score,
                         "outcome":status,
-                        "duration_seconds": int(d.duration),
+                        "duration_seconds": max(0, int(d.duration or 0)) * 60,
                         "created_at": d.start_time.isoformat() if d.start_time else None
                     }
                 debate_results.append(debate_result)
@@ -211,8 +211,46 @@ class HistoryService:
                     )
                 return debate_stats_cache[debate_id]
             
+            debate_results = [
+                {
+                    "debate_id": str(d.id),
+                    "topic": d.topic,
+                    "start_time": d.start_time.isoformat() if d.start_time else None,
+                    "end_time": d.end_time.isoformat() if d.end_time else None,
+                    "status": d.status,
+                    "role": d.role,
+                    "stance": d.stance,
+                    "outcome": (
+                        "draw"
+                        if _get_stats(str(d.id)).get("winner") == "tie"
+                        else (
+                            "win"
+                            if _get_stats(str(d.id)).get("winner") == str(d.stance)
+                            else "lose"
+                        )
+                        if _get_stats(str(d.id)).get("winner") in ("positive", "negative")
+                        else "draw"
+                    ),
+                    "duration_seconds": int(
+                        _get_stats(str(d.id)).get("total_duration") or 0
+                    ),
+                    "overall_score": round(
+                        float(
+                            ScoringService.calculate_final_score(
+                                self.db, str(d.participation_id)
+                            ).get("overall_score", 0.0)
+                        ),
+                        2,
+                    ),
+                }
+                for d in debates
+            ]
+
             return {
+                "list": debate_results,
                 "total": total,
+                "page": offset // limit + 1 if limit > 0 else 1,
+                "page_size": limit,
                 "limit": limit,
                 "offset": offset,
                 "filters": {
@@ -222,38 +260,7 @@ class HistoryService:
                     "start_date": start_date.isoformat() if start_date else None,
                     "end_date": end_date.isoformat() if end_date else None
                 },
-                "debates": [
-                    {
-                        "debate_id": str(d.id),
-                        "topic": d.topic,
-                        "start_time": d.start_time.isoformat() if d.start_time else None,
-                        "end_time": d.end_time.isoformat() if d.end_time else None,
-                        "status": d.status,
-                        "role": d.role,
-                        "stance": d.stance,
-                        "outcome": (
-                            "draw"
-                            if _get_stats(str(d.id)).get("winner") == "tie"
-                            else (
-                                "win"
-                                if _get_stats(str(d.id)).get("winner") == str(d.stance)
-                                else "lose"
-                            )
-                            if _get_stats(str(d.id)).get("winner") in ("positive", "negative")
-                            else "draw"
-                        ),
-                        "duration_seconds": int(_get_stats(str(d.id)).get("total_duration") or 0),
-                        "overall_score": round(
-                            float(
-                                ScoringService.calculate_final_score(
-                                    self.db, str(d.participation_id)
-                                ).get("overall_score", 0.0)
-                            ),
-                            2,
-                        ),
-                    }
-                    for d in debates
-                ]
+                "debates": debate_results,
             }
             
         except Exception as e:

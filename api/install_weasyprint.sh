@@ -26,12 +26,13 @@ if [ "${MACHINE}" = "Linux" ]; then
         echo "检测到Debian/Ubuntu系统"
         sudo apt-get update
         sudo apt-get install -y \
+            fontconfig \
+            fonts-noto-cjk \
             libpango-1.0-0 \
             libpangocairo-1.0-0 \
             libgdk-pixbuf2.0-0 \
             libffi-dev \
             shared-mime-info \
-            fonts-noto-cjk \
             fonts-wqy-microhei
         echo "✓ 系统依赖安装完成"
     elif [ -f /etc/redhat-release ]; then

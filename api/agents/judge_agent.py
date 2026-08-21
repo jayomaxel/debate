@@ -4,6 +4,7 @@
 """
 from logging_config import get_logger
 from typing import Any, List, Dict, Optional
+import os
 import httpx
 import json
 from sqlalchemy.orm import Session
@@ -78,6 +79,8 @@ class Violation:
 
 class JudgeAgent:
     """裁判AI Agent"""
+
+    LLM_HTTP_TIMEOUT_SECONDS = float(os.getenv("JUDGE_LLM_TIMEOUT_SECONDS", "45"))
     
     def __init__(self, db: Session):
         """
@@ -192,7 +195,10 @@ class JudgeAgent:
                 "temperature": 0.0,
                 "max_tokens": int(getattr(model_config, "max_tokens", 2000) or 2000),
             }
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            # A report previously allowed two sequential 120-second calls
+            # (initial generation + JSON repair). Bound each provider request
+            # so report generation cannot hold the UI for several minutes.
+            async with httpx.AsyncClient(timeout=self.LLM_HTTP_TIMEOUT_SECONDS) as client:
                 response = await client.post(
                     endpoint,
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -346,6 +352,14 @@ class JudgeAgent:
             )
         except Exception as exc:
             first_error = exc
+            if not (reply or "").strip():
+                return self._build_batch_fallback_report(
+                    context,
+                    reason="Judge model unavailable or timed out.",
+                    mode=mode,
+                    provider=provider,
+                    retry_count=0,
+                )
             repair_prompt = ScoreValidationService.build_repair_prompt(
                 reply,
                 expected_contract=output_contract,
@@ -627,7 +641,11 @@ class JudgeAgent:
                     mode=mode,
                     provider=provider,
                 )
-                if validation.scoring_quality == "fallback" and validation.repair_prompt:
+                if (
+                    (reply or "").strip()
+                    and validation.scoring_quality == "fallback"
+                    and validation.repair_prompt
+                ):
                     repaired_reply = await self._call_agent(validation.repair_prompt)
                     validation = ScoreValidationService.validate_or_fallback(
                         reply,

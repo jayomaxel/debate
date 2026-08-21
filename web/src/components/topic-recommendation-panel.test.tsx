@@ -7,12 +7,50 @@ vi.mock('@/services/teacher.service', () => ({
   default: {
     getCurrentTeachingDesign: vi.fn(),
     generateTopicRecommendations: vi.fn(),
+    getTopicRecommendationDashboard: vi.fn(),
+    listTopicRecommendationRuns: vi.fn(),
+    getTopicRecommendationRun: vi.fn(),
   },
 }));
 
 describe('TopicRecommendationPanel', () => {
   beforeEach(() => {
     vi.mocked(TeacherService.getCurrentTeachingDesign).mockResolvedValue(null);
+    vi.mocked(TeacherService.getTopicRecommendationDashboard).mockResolvedValue({
+      class_id: 'class-1',
+      summary: {
+        total_runs: 0,
+        total_candidates: 0,
+        adopted_run_count: 0,
+        adopted_candidate_count: 0,
+        total_adoptions: 0,
+        run_adoption_rate: 0,
+        candidate_adoption_rate: 0,
+        average_candidates_per_run: 0,
+        direct_adoptions: 0,
+        edited_adoptions: 0,
+        debate_adoptions: 0,
+        reservation_adoptions: 0,
+      },
+      quality: {
+        quality_counts: {},
+        quality_rates: {},
+        provider_counts: {},
+        status_counts: {},
+        version_breakdown: [],
+      },
+      timeline: {},
+      leaderboards: {
+        top_adopted_candidates: [],
+        top_edited_candidates: [],
+      },
+      observations: {
+        high_quality_low_adoption_candidates: [],
+        high_quality_edited_only_candidates: [],
+      },
+      recent_runs: [],
+    });
+    vi.mocked(TeacherService.listTopicRecommendationRuns).mockResolvedValue([]);
   });
 
   it('keeps manual topic entry available when no design exists', async () => {

@@ -19,6 +19,11 @@ import {
 } from 'lucide-react';
 import AdminService, { type CozeConfig, type CozeConfigUpdate } from '@/services/admin.service';
 import { formatErrorMessage } from '@/lib/error-handler';
+import {
+  getMaskedSecretDisplay,
+  hasConfiguredSecret,
+  normalizeSecretUpdate,
+} from '@/lib/masked-config';
 
 const CozeConfiguration: React.FC = () => {
   const { toast } = useToast();
@@ -61,7 +66,7 @@ const CozeConfiguration: React.FC = () => {
         debater_4_bot_id: data.debater_4_bot_id,
         judge_bot_id: data.judge_bot_id,
         mentor_bot_id: data.mentor_bot_id,
-        api_token: data.api_token,
+        api_token: '',
         parameters: data.parameters
       });
       setParametersJson(JSON.stringify(data.parameters || {}, null, 2));
@@ -78,6 +83,8 @@ const CozeConfiguration: React.FC = () => {
   };
 
   const handleEdit = () => {
+    setFormData((current) => ({ ...current, api_token: '' }));
+    setShowApiToken(false);
     setIsEditing(true);
     setJsonError('');
   };
@@ -91,7 +98,7 @@ const CozeConfiguration: React.FC = () => {
         debater_4_bot_id: config.debater_4_bot_id,
         judge_bot_id: config.judge_bot_id,
         mentor_bot_id: config.mentor_bot_id,
-        api_token: config.api_token,
+        api_token: '',
         parameters: config.parameters
       });
       setParametersJson(JSON.stringify(config.parameters || {}, null, 2));
@@ -114,8 +121,12 @@ const CozeConfiguration: React.FC = () => {
   };
 
   const handleSave = async () => {
-    // 验证 - 至少需要填写 API Token
-    if (!formData.api_token) {
+    const secretRequired = !hasConfiguredSecret(
+      config?.api_token_configured,
+      config?.api_token_masked
+    );
+    const apiToken = normalizeSecretUpdate(formData.api_token);
+    if (secretRequired && !apiToken) {
       toast({
         variant: 'destructive',
         title: '验证失败',
@@ -150,8 +161,13 @@ const CozeConfiguration: React.FC = () => {
     try {
       setSubmitting(true);
       
-      const updatedConfig = await AdminService.updateCozeConfig(formData);
+      const updatedConfig = await AdminService.updateCozeConfig({
+        ...formData,
+        api_token: apiToken,
+      });
       setConfig(updatedConfig);
+      setFormData((current) => ({ ...current, api_token: '' }));
+      setShowApiToken(false);
       setIsEditing(false);
       toast({
         variant: 'success',
@@ -341,28 +357,41 @@ const CozeConfiguration: React.FC = () => {
           {/* API 令牌 */}
           <div className="space-y-2">
             <Label htmlFor="api-token" className="text-slate-700 font-medium">
-              API 令牌 (API Token) *
+              API 令牌 (API Token){' '}
+              {hasConfiguredSecret(config?.api_token_configured, config?.api_token_masked) ? '' : '*'}
             </Label>
             <div className="relative">
               <Input
                 id="api-token"
-                type={showApiToken ? 'text' : 'password'}
-                value={formData.api_token}
+                type={!isEditing || showApiToken ? 'text' : 'password'}
+                value={
+                  isEditing
+                    ? formData.api_token || ''
+                    : getMaskedSecretDisplay(config?.api_token_configured, config?.api_token_masked)
+                }
                 onChange={(e) => setFormData({ ...formData, api_token: e.target.value })}
-                placeholder="pat_..."
+                placeholder={
+                  hasConfiguredSecret(config?.api_token_configured, config?.api_token_masked)
+                    ? '留空表示保留当前令牌'
+                    : '请输入 API 令牌'
+                }
                 disabled={!isEditing || submitting}
                 className={!isEditing ? 'bg-slate-50 pr-10' : 'pr-10'}
               />
-              <button
+              {isEditing ? <button
                 type="button"
                 onClick={() => setShowApiToken(!showApiToken)}
+                aria-label={showApiToken ? '隐藏新 API 令牌' : '显示新 API 令牌'}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
                 {showApiToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+              </button> : null}
             </div>
             <p className="text-xs text-slate-500">
-              用于访问 Coze API 的个人访问令牌
+              当前状态：{getMaskedSecretDisplay(config?.api_token_configured, config?.api_token_masked)}
+              {isEditing && hasConfiguredSecret(config?.api_token_configured, config?.api_token_masked)
+                ? '；留空不会覆盖原令牌'
+                : ''}
             </p>
           </div>
 

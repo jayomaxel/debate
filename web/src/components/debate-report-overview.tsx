@@ -52,6 +52,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('summary');
   const isTeacherView = !studentMode && user?.user_type !== 'student';
+  const humanAbility = report.statistics?.human_ability;
   const effectiveSelectedParticipantId =
     selectedParticipantId ||
     (studentMode
@@ -68,7 +69,10 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
     0,
   );
   const scoredParticipants = report.participants.filter(
-    (participant) => Number(participant.final_score?.speech_count || 0) > 0,
+    (participant) =>
+      !participant.is_ai &&
+      participant.score_status === 'ready' &&
+      Number(participant.final_score?.speech_count || 0) > 0,
   );
   const averageScore = (key: keyof DebateReport['participants'][number]['final_score']) =>
     scoredParticipants.length > 0
@@ -77,24 +81,30 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
           0,
         ) / scoredParticipants.length
       : 0;
-  const classAverageScore = averageScore('overall_score');
+  const hasHumanAggregateData = humanAbility
+    ? humanAbility.has_human_ability_data
+    : scoredParticipants.length > 0;
+  const humanScores = humanAbility?.ability_scores;
+  const classAverageScore = humanAbility
+    ? humanAbility.overall_score
+    : averageScore('overall_score');
   const aggregateParticipant = {
     user_id: 'all',
     name: '全场/班级视角',
     role: 'all',
     stance: 'positive',
     is_ai: false,
-    has_speech: totalSpeechCount > 0,
-    score_status: totalSpeechCount > 0 ? 'ready' : 'no_speech',
-    speech_count: totalSpeechCount,
+    has_speech: hasHumanAggregateData,
+    score_status: hasHumanAggregateData ? 'ready' : 'no_speech',
+    speech_count: humanAbility?.valid_human_speech_count ?? scoredParticipants.reduce((sum, item) => sum + Number(item.final_score?.speech_count || 0), 0),
     final_score: {
-      logic_score: averageScore('logic_score'),
-      argument_score: averageScore('argument_score'),
-      response_score: averageScore('response_score'),
-      persuasion_score: averageScore('persuasion_score'),
-      teamwork_score: averageScore('teamwork_score'),
-      overall_score: classAverageScore,
-      speech_count: totalSpeechCount,
+      logic_score: humanScores?.logical_construction ?? averageScore('logic_score'),
+      argument_score: humanScores?.ai_knowledge_application ?? averageScore('argument_score'),
+      response_score: humanScores?.critical_thinking ?? averageScore('response_score'),
+      persuasion_score: humanScores?.language_expression ?? averageScore('persuasion_score'),
+      teamwork_score: humanScores?.ai_ethics_literacy ?? averageScore('teamwork_score'),
+      overall_score: classAverageScore ?? 0,
+      speech_count: humanAbility?.valid_human_speech_count ?? scoredParticipants.reduce((sum, item) => sum + Number(item.final_score?.speech_count || 0), 0),
       total_duration: report.participants.reduce(
         (sum, participant) => sum + Number(participant.final_score?.total_duration || 0),
         0,
@@ -164,7 +174,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
 
   const abilityScores = useMemo(() => {
     const scores = displayParticipant?.final_score;
-    if (!scores) return [];
+    if (!scores || selectedParticipant?.is_ai || (!selectedParticipant && isTeacherView && !hasHumanAggregateData)) return [];
 
     return [
       {
@@ -203,7 +213,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         color: '#10b981',
       },
     ];
-  }, [displayParticipant]);
+  }, [displayParticipant, hasHumanAggregateData, isTeacherView, selectedParticipant]);
 
   const speakingData = useMemo(() => {
     const humanColors = ['#171717', '#3a3a3a', '#5a5a5a', '#7c7c7c'];
@@ -280,10 +290,13 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
 
   const userParticipant = report.participants.find((p) => p.user_id === user?.id);
   const summaryParticipant = selectedParticipant || (studentMode ? userParticipant : null);
-  const userSpeechCount = summaryParticipant?.final_score?.speech_count || totalSpeechCount;
-  const userScore = summaryParticipant?.final_score?.overall_score || classAverageScore;
-  const grade =
-    userScore >= 90 ? 'S' : userScore >= 85 ? 'A+' : userScore >= 80 ? 'A' : userScore >= 75 ? 'B+' : 'B';
+  const userSpeechCount = summaryParticipant?.final_score?.speech_count ?? (humanAbility?.valid_human_speech_count ?? totalSpeechCount);
+  const userScore = summaryParticipant?.is_ai || (!summaryParticipant && isTeacherView && !hasHumanAggregateData)
+    ? null
+    : (summaryParticipant?.final_score?.overall_score ?? classAverageScore);
+  const grade = userScore === null
+    ? '--'
+    : userScore >= 90 ? 'S' : userScore >= 85 ? 'A+' : userScore >= 80 ? 'A' : userScore >= 75 ? 'B+' : 'B';
 
   const tabListClassName = studentMode
     ? 'grid h-auto w-full grid-cols-4 rounded-[12px] border border-[#d7ccbf] bg-white/76 p-1.5'
@@ -354,7 +367,7 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <SummaryStat
               icon={<Award className="h-6 w-6 text-slate-700" />}
-              value={userScore.toFixed(1)}
+              value={userScore === null ? '--' : userScore.toFixed(1)}
               label={summaryParticipant ? '综合得分' : '全场均分'}
               badge={
                 debateResult.winner === 'human'
@@ -388,7 +401,10 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
           <div className="grid gap-5 lg:grid-cols-2">
             <AbilityRadarChart
               scores={abilityScores}
-              title="核心能力评估"
+              title={isTeacherView && !selectedParticipant ? '人类辩手核心能力评估' : '核心能力评估'}
+              scopeDescription={isTeacherView && !selectedParticipant ? '仅根据本场人类学生的有效发言与评分计算，不包含 AI 辩手数据。' : undefined}
+              dataSummary={isTeacherView && !selectedParticipant && hasHumanAggregateData ? `参与评估：${humanAbility?.evaluated_student_count ?? scoredParticipants.length}名学生 · 有效发言：${humanAbility?.valid_human_speech_count ?? userSpeechCount}条` : undefined}
+              emptyDescription={selectedParticipant?.is_ai ? 'AI 辩手评分不参与人类能力评估。' : '本场没有可用于能力评估的人类有效发言。'}
               showComparison
               studentMode={studentMode}
             />
@@ -403,7 +419,10 @@ const DebateReportOverview: React.FC<DebateReportOverviewProps> = ({
         <TabsContent value="ability" className="space-y-5">
           <AbilityRadarChart
             scores={abilityScores}
-            title="五维能力详细分析"
+            title={isTeacherView && !selectedParticipant ? '人类辩手五维能力详细分析' : '五维能力详细分析'}
+            scopeDescription={isTeacherView && !selectedParticipant ? '仅统计真实学生的有效发言与成功评分。' : undefined}
+            dataSummary={isTeacherView && !selectedParticipant && hasHumanAggregateData ? `参与评估：${humanAbility?.evaluated_student_count ?? scoredParticipants.length}名学生 · 有效发言：${humanAbility?.valid_human_speech_count ?? userSpeechCount}条` : undefined}
+            emptyDescription={selectedParticipant?.is_ai ? 'AI 辩手评分不参与人类能力评估。' : '本场没有可用于能力评估的人类有效发言。'}
             showComparison
             studentMode={studentMode}
           />

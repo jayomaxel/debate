@@ -413,6 +413,79 @@ class ReportGenerator:
                 str(speech.id): score for (score, speech) in score_rows if speech and score
             }
 
+            # Teacher radar: average each real student first, then weight students equally.
+            student_participation_by_user_id = {
+                str(participation.user_id): participation
+                for participation in all_participations
+                if participation.user_id
+                and user_by_id.get(str(participation.user_id))
+                and user_by_id[str(participation.user_id)].user_type == "student"
+            }
+            valid_human_speeches = []
+            scores_by_student: Dict[str, List[Score]] = {}
+            for speech in speeches:
+                scored_student_id = str(speech.speaker_id) if speech.speaker_id else ""
+                participation = student_participation_by_user_id.get(scored_student_id)
+                if (
+                    str(speech.speaker_type) != "human"
+                    or not participation
+                    or str(getattr(speech, "transcription_status", "") or "").lower() == "failed"
+                ):
+                    continue
+                score = score_by_speech_id.get(str(speech.id))
+                if (
+                    not score
+                    or not score.speech_id
+                    or str(score.participation_id) != str(participation.id)
+                ):
+                    continue
+                valid_human_speeches.append(speech)
+                scores_by_student.setdefault(scored_student_id, []).append(score)
+
+            human_score_fields = {
+                "logical_construction": "logic_score",
+                "ai_knowledge_application": "argument_score",
+                "critical_thinking": "response_score",
+                "language_expression": "persuasion_score",
+                "ai_ethics_literacy": "teamwork_score",
+            }
+            per_student_averages: Dict[str, Dict[str, float]] = {}
+            for scored_student_id, student_scores in scores_by_student.items():
+                per_student_averages[scored_student_id] = {
+                    output_key: sum(float(getattr(score, model_key)) for score in student_scores)
+                    / len(student_scores)
+                    for output_key, model_key in human_score_fields.items()
+                }
+
+            if per_student_averages:
+                human_ability_scores = {
+                    output_key: round(
+                        sum(values[output_key] for values in per_student_averages.values())
+                        / len(per_student_averages),
+                        2,
+                    )
+                    for output_key in human_score_fields
+                }
+                human_overall_score = round(
+                    sum(human_ability_scores.values()) / len(human_ability_scores), 2
+                )
+            else:
+                human_ability_scores = None
+                human_overall_score = None
+
+            human_ability_statistics = {
+                "ability_scope": "human_only",
+                "evaluated_student_count": len(per_student_averages),
+                "valid_human_speech_count": len(valid_human_speeches),
+                "excluded_ai_speech_count": sum(
+                    1 for speech in speeches if str(speech.speaker_type) == "ai"
+                ),
+                "excluded_demo_record_count": 0,
+                "has_human_ability_data": bool(per_student_averages),
+                "ability_scores": human_ability_scores,
+                "overall_score": human_overall_score,
+            }
+
             def _ai_role_to_name(speaker_role: str) -> str:
                 role = str(speaker_role)
                 if role.startswith("ai_"):
@@ -664,6 +737,7 @@ class ReportGenerator:
             statistics = ScoringService.get_debate_statistics(db, debate_uuid)
             
             # 如果有全局评分报告，覆盖统计数据
+            statistics["human_ability"] = human_ability_statistics
             if debate.report:
                 report_data = debate.report
                 statistics["winner"] = report_data.get("winner", statistics.get("winner"))
@@ -818,7 +892,7 @@ class ReportGenerator:
         )
 
     @staticmethod
-    def _build_fallback_markdown(report: Report) -> str:
+    def build_structured_markdown(report: Report) -> str:
         participants_md = "\n".join(
             [
                 f"- {p.get('name')}（{p.get('role')}）得分：{(p.get('final_score') or {}).get('overall_score', 0)}"
@@ -833,6 +907,19 @@ class ReportGenerator:
             phase = s.get("phase") or ""
             speeches_md_lines.append(f"{i+1}. **[{phase}] {speaker_name}**（得分：{score_txt}）\n\n{s.get('content') or ''}\n")
         speeches_md = "\n".join(speeches_md_lines)
+        statistics = report.statistics if isinstance(report.statistics, dict) else {}
+        overall_comment = str(
+            statistics.get("overall_comment")
+            or statistics.get("overall_evaluation")
+            or statistics.get("winning_reason")
+            or "已依据本场有效发言和评分结果生成结构化复盘。"
+        )
+        suggestions = statistics.get("suggestions") or statistics.get("global_suggestions") or []
+        if isinstance(suggestions, str):
+            suggestions = [suggestions]
+        suggestions_md = "\n".join(
+            f"- {item}" for item in suggestions if str(item or "").strip()
+        ) or "- 结合逐条评分反馈复盘论证、回应与表达。"
 
         return (
             f"# 辩论报告\n\n"
@@ -842,6 +929,10 @@ class ReportGenerator:
             f"- 结束时间：{report.end_time}\n"
             f"- 持续时间：{report.duration}分钟\n"
             f"- 获胜方：{report.winner}\n\n"
+            f"## 总体评价\n\n"
+            f"{overall_comment}\n\n"
+            f"## 改进建议\n\n"
+            f"{suggestions_md}\n\n"
             f"## 参与者\n\n"
             f"{participants_md}\n\n"
             f"## 发言记录\n\n"
@@ -1082,7 +1173,7 @@ class ReportGenerator:
                 report = debate_id
                 markdown_text = await ReportGenerator._generate_markdown_via_coze(db, report)
                 if not markdown_text:
-                    markdown_text = ReportGenerator._build_fallback_markdown(report)
+                    markdown_text = ReportGenerator.build_structured_markdown(report)
 
                 report_start_time = (
                     report.start_time.isoformat()

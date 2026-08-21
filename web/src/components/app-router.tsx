@@ -433,6 +433,10 @@ const AppRouter: React.FC = () => {
     return <LegalPage kind='contact' />;
   }
 
+  if (matchPath('/404', pathname)) {
+    return <NotFoundPage onHome={() => navigate('/')} />;
+  }
+
   return <NotFoundPage onHome={() => navigate('/')} />;
 };
 

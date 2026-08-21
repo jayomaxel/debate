@@ -53,6 +53,7 @@ import type { DebateConfigMeta, RoleAssignmentInput } from '@/lib/frontend-contr
 import {
   Plus,
   Upload,
+  Download,
   Trash2,
   Users,
   CheckCircle,
@@ -126,6 +127,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [supportUploading, setSupportUploading] = useState(false);
   const [supportPurposeTag, setSupportPurposeTag] = useState<'background' | 'evidence' | 'case' | 'optional'>('optional');
   const [deletingSupportDocumentId, setDeletingSupportDocumentId] = useState<
+    string | null
+  >(null);
+  const [downloadingSupportDocumentId, setDownloadingSupportDocumentId] = useState<
     string | null
   >(null);
   const [submitMode, setSubmitMode] = useState<'draft' | 'published' | null>(
@@ -409,6 +413,37 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  const handleDownloadSupportDocument = async (
+    document: TeacherDebateSupportDocument
+  ) => {
+    if (!editingDebateId) return;
+    try {
+      setDownloadingSupportDocumentId(document.id);
+      const blob = await TeacherService.downloadDebateSupportDocument(
+        editingDebateId,
+        document.id
+      );
+      const url = window.URL.createObjectURL(blob);
+      const link = window.document.createElement('a');
+      link.href = url;
+      link.download = document.filename || 'support-document';
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Failed to download support document:', err);
+      toast({
+        variant: 'destructive',
+        title: '支撑材料下载失败',
+        description: err?.message || '请稍后重试',
+        duration: 3000,
+      });
+    } finally {
+      setDownloadingSupportDocumentId(null);
+    }
+  };
+
   const handleEditDebate = async (debate: TeacherDebate) => {
     debateDebug('TeacherDashboard', 'Editing debate initial', {
       debateId: debate.id,
@@ -434,6 +469,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
       const descriptionMeta = parseDebateDescription(debateDetails.description);
       const rounds = descriptionMeta.rounds || '3';
+      setStructuredConfig(previous => ({
+        ...previous,
+        ...(debateDetails.config_meta || {}),
+        rounds: Number(debateDetails.config_meta?.rounds || rounds || 3),
+      }));
 
       setDebateConfig({
         topic: debateDetails.topic,
@@ -455,6 +495,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       // Fallback to existing data
       const descriptionMeta = parseDebateDescription(debate.description);
       const rounds = descriptionMeta.rounds || '3';
+      setStructuredConfig(previous => ({
+        ...previous,
+        ...(debate.config_meta || {}),
+        rounds: Number(debate.config_meta?.rounds || rounds || 3),
+      }));
       setDebateConfig({
         topic: debate.topic,
         duration: debate.duration.toString(),
@@ -1363,24 +1408,46 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                   </div>
                                   {document.summary?.summary && <p className='mt-2 line-clamp-2 text-xs text-slate-600'>{document.summary.summary}</p>}
                                 </div>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  className='shrink-0 text-red-600 hover:bg-red-50 hover:text-red-700'
-                                  disabled={
-                                    deletingSupportDocumentId === document.id
-                                  }
-                                  onClick={() =>
-                                    handleDeleteSupportDocument(document.id)
-                                  }
-                                >
-                                  {deletingSupportDocumentId === document.id ? (
-                                    <Loader2 className='h-4 w-4 animate-spin' />
-                                  ) : (
-                                    <Trash2 className='h-4 w-4' />
-                                  )}
-                                </Button>
+                                <div className='flex shrink-0 gap-1'>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    className='text-slate-600 hover:bg-blue-50 hover:text-blue-700'
+                                    disabled={
+                                      downloadingSupportDocumentId === document.id
+                                    }
+                                    onClick={() =>
+                                      void handleDownloadSupportDocument(document)
+                                    }
+                                    title='下载支撑材料'
+                                  >
+                                    {downloadingSupportDocumentId === document.id ? (
+                                      <Loader2 className='h-4 w-4 animate-spin' />
+                                    ) : (
+                                      <Download className='h-4 w-4' />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    className='text-red-600 hover:bg-red-50 hover:text-red-700'
+                                    disabled={
+                                      deletingSupportDocumentId === document.id
+                                    }
+                                    onClick={() =>
+                                      handleDeleteSupportDocument(document.id)
+                                    }
+                                    title='删除支撑材料'
+                                  >
+                                    {deletingSupportDocumentId === document.id ? (
+                                      <Loader2 className='h-4 w-4 animate-spin' />
+                                    ) : (
+                                      <Trash2 className='h-4 w-4' />
+                                    )}
+                                  </Button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1756,6 +1823,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                   </div>
                                 </div>
                               </div>
+                              {debate.config_meta?.teaching_design_version_id ? (
+                                <div className='mt-2 text-xs text-slate-500'>
+                                  教学设计版本：{debate.config_meta.teaching_design_version_id}
+                                </div>
+                              ) : null}
                               {debate.invitation_code && (
                                 <div className='mt-2 text-sm text-slate-600'>
                                   邀请码:{' '}

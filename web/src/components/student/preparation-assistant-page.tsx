@@ -222,7 +222,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
       }
 
       if (!response.body) {
-        return;
+        throw new Error('服务端未返回流式响应');
       }
 
       const reader = response.body.getReader();
@@ -231,6 +231,7 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
       let answerAccumulator = '';
       let sourcesAccumulator: KBSource[] = [];
       let reading = true;
+      let streamError: string | null = null;
 
       while (reading) {
         const { done, value } = await reader.read();
@@ -290,16 +291,23 @@ const PreparationAssistantPage: React.FC<PreparationAssistantPageProps> = ({
             }
 
             if (event.type === 'error') {
-              toast({
-                variant: 'destructive',
-                title: '生成出错',
-                description: event.message,
-              });
+              streamError = event.message || '回答生成失败，请稍后重试';
+              reading = false;
+              await reader.cancel();
+              break;
             }
           } catch (parseError) {
             console.error('[PreparationAssistantPage] Error parsing SSE:', parseError);
           }
         }
+      }
+
+      if (streamError) {
+        throw new Error(streamError);
+      }
+
+      if (!answerAccumulator.trim()) {
+        throw new Error('模型未返回有效回答，请稍后重试');
       }
 
       setConversations((previous) => {

@@ -528,6 +528,7 @@ async def download_debate_support_document(
     )
 
 from services.report_service import ReportGenerator
+from utils.markdown_to_pdf import MarkdownToPdfConverter
 from fastapi.responses import Response
 from utils.email_service import EmailService
 
@@ -606,14 +607,17 @@ def _get_report_pdf_cache_response(
     report_meta = debate.report if isinstance(debate.report, dict) else {}
     markdown_hash = report_meta.get("report_markdown_hash")
     pdf_cache_key = report_meta.get("report_pdf_cache_key")
+    renderer_is_current = (
+        report_meta.get("report_pdf_renderer_version")
+        == MarkdownToPdfConverter.RENDERER_VERSION
+    )
     if pdf_cache_key and markdown_hash:
-        cache_is_valid = pdf_cache_key == _expected_pdf_cache_key(
-            debate,
-            debate_id,
-            str(markdown_hash),
+        cache_is_valid = renderer_is_current and (
+            pdf_cache_key
+            == _expected_pdf_cache_key(debate, debate_id, str(markdown_hash))
         )
     else:
-        cache_is_valid = (
+        cache_is_valid = renderer_is_current and (
             (
                 markdown_hash
                 and report_meta.get("report_pdf_markdown_hash") == markdown_hash
@@ -695,6 +699,7 @@ async def _get_or_generate_report_markdown(
     db: Session,
     debate: Debate,
     content_str: str,
+    viewer_id: str,
 ) -> str:
     cached = _get_cached_report_markdown(debate)
     if cached:
@@ -905,6 +910,7 @@ async def export_report_pdf(
             db=db,
             debate=debate,
             content_str=content,
+            viewer_id=actor_id,
         )
     except ReportMarkdownGenerationError:
         return operational_error_response(
@@ -1020,6 +1026,7 @@ async def export_report_pdf(
     updated_report = {
         **updated_report,
         "report_pdf_status": "ready",
+        "report_pdf_renderer_version": MarkdownToPdfConverter.RENDERER_VERSION,
         "report_pdf_error": None,
         "report_pdf_generated_at": datetime.utcnow().isoformat(),
     }
@@ -1163,7 +1170,12 @@ async def send_report_email(
             content += f"{sepeaker_type}【角色】{s.speaker_role}，发言内容：{s.content}"
             content += "\n"
 
-    markdown_text = await _get_or_generate_report_markdown(db=db, debate=debate, content_str=content)
+    markdown_text = await _get_or_generate_report_markdown(
+        db=db,
+        debate=debate,
+        content_str=content,
+        viewer_id=actor_id,
+    )
     
     success = await EmailService.send_report_email(
         db=db,

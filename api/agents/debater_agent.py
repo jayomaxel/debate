@@ -2,9 +2,12 @@
 AI辩手Agent
 负责生成AI辩手的发言内容
 """
+import asyncio
 import json
+import os
 import time
 
+import httpx
 from logging_config import get_logger
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -27,7 +30,14 @@ class AIDebaterAgent:
     # 尽量在这些中文标点附近截断，减少生硬断句。
     _TRUNCATE_PUNCTUATION = "。！？；;.!?\n"
     # LLM HTTP 客户端超时时间，配合连接池按 timeout 分桶复用。
-    LLM_HTTP_TIMEOUT_SECONDS = 30.0
+    # A single provider request has a bounded, deploy-time configurable timeout.
+    # The flow controller deliberately waits a little longer than this value so
+    # it never cancels a healthy request first and starts a competing fallback.
+    LLM_HTTP_TIMEOUT_SECONDS = float(
+        os.getenv("DEBATER_LLM_TIMEOUT_SECONDS", "45")
+    )
+    LLM_CONNECT_RETRY_COUNT = 2
+    LLM_CONNECT_RETRY_BACKOFF_SECONDS = 0.4
 
     def __init__(self, position: int, db: Session):
         """
@@ -153,7 +163,7 @@ class AIDebaterAgent:
             role=role,
             speaker_role=f"debater_{self.position}",
             stance=normalized_stance,
-            history=list(context or []),
+            history=list(context or [])[-8:],
             knowledge_snippets=list(knowledge_snippets or []),
         )
         if task_type:
@@ -174,11 +184,31 @@ class AIDebaterAgent:
     ) -> str:
         prompt_phase = self._extract_prompt_pack_field(rendered_prompt, "phase", phase)
         prompt_stance = self._extract_prompt_pack_field(rendered_prompt, "stance", "")
+        prompt_task_type = self._extract_prompt_pack_field(
+            rendered_prompt, "task_type", ""
+        )
         if prompt_stance == "pro":
             stance = "positive"
         elif prompt_stance == "con":
             stance = "negative"
         phase = prompt_phase
+        task_action_contract = {
+            "question_response": (
+                "This is a debate answer, not a summary. Answer the opponent's question first, "
+                "then explain the decisive reason, then return to the assigned stance. "
+                "Repeating the question without challenging or resolving it is invalid."
+            ),
+            "rebuttal": (
+                "This is a rebuttal task. The opponent argument is the target. "
+                "You must identify its claim, directly challenge a concrete defect, explain the reason, "
+                "rebuild the assigned side, and compare the impact. A paraphrase plus a summary is invalid."
+            ),
+            "free_debate_speech": (
+                "This is an active debate turn. When an opponent argument is supplied, attack that argument "
+                "first and make the attack visible in the speech. Do not repeat the opponent speech as a recap. "
+                "A valid response must contain a direct challenge and a reasoned comparison."
+            ),
+        }.get(prompt_task_type, "")
         role_focus = {
             1: "定义、判断标准、证明责任与核心框架",
             2: "盘问设计、证据检验与关键承诺锁定",
@@ -189,6 +219,7 @@ class AIDebaterAgent:
         return "\n".join(
             [
                 PromptPackService.render_agent_system_prompt("debater"),
+                task_action_contract,
                 f"当前身份：{stance_text}{self.position}辩。",
                 f"当前阶段：{phase}；辩位重点：{role_focus}。",
                 f"最终回复不得超过 {self.MAX_REPLY_CHARS} 个中文字符。",
@@ -249,17 +280,24 @@ class AIDebaterAgent:
             history = list(context or [])
             history = history[-10:]
             raw_messages: List[Dict] = []
-            for msg in history:
-                role = (msg.get("role") or "user").strip().lower()
-                if role not in ("user", "assistant"):
-                    role = "user"
-                raw_messages.append(
-                    {
-                        "role": role,
-                        "content": (msg.get("content") or ""),
-                        "conversation_id": msg.get("conversation_id", None),
-                    }
-                )
+            task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
+            history_is_embedded_in_task = task_type in {
+                "question_response",
+                "rebuttal",
+                "free_debate_speech",
+            }
+            if not history_is_embedded_in_task:
+                for msg in history:
+                    role = (msg.get("role") or "user").strip().lower()
+                    if role not in ("user", "assistant"):
+                        role = "user"
+                    raw_messages.append(
+                        {
+                            "role": role,
+                            "content": (msg.get("content") or ""),
+                            "conversation_id": msg.get("conversation_id", None),
+                        }
+                    )
             raw_messages.append({"role": "user", "content": prompt, "conversation_id": None})
 
             params = coze.build_chat_coze_params(
@@ -285,6 +323,37 @@ class AIDebaterAgent:
             logger.error(f"调用Coze Bot失败: {e}", exc_info=True)
             return f"[AI辩手{self.position}暂时无法回应]"
 
+    async def _call_llm_once_with_connect_retry(
+        self,
+        endpoint: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+    ) -> str:
+        """Retry only transient connection setup failures with a small bound."""
+        max_attempts = self.LLM_CONNECT_RETRY_COUNT + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await self._call_llm_once(
+                    endpoint=endpoint,
+                    headers=headers,
+                    payload=payload,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt >= max_attempts:
+                    raise
+                delay_seconds = self.LLM_CONNECT_RETRY_BACKOFF_SECONDS * attempt
+                logger.warning(
+                    "LLM connection failed; retrying position=%s attempt=%s/%s delay=%.1fs error=%s",
+                    self.position,
+                    attempt + 1,
+                    max_attempts,
+                    delay_seconds,
+                    exc,
+                )
+                await asyncio.sleep(delay_seconds)
+
+        raise RuntimeError("LLM connection retry loop exited unexpectedly")
+
     async def _call_llm(
         self,
         prompt: str,
@@ -308,11 +377,13 @@ class AIDebaterAgent:
                     stream_callback=stream_callback,
                 )
 
-            return await self._call_llm_once(
+            return await self._call_llm_once_with_connect_retry(
                 endpoint=endpoint,
                 headers=headers,
                 payload=payload,
             )
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            raise
         except Exception as e:
             logger.error(f"调用LLM失败: {e}", exc_info=True)
             return f"[AI辩手{self.position}暂时无法回应]"
@@ -467,8 +538,12 @@ class AIDebaterAgent:
                 "question": question,
                 "requirements": [
                     "answer the core question directly",
+                    "do not repeat the question or provide a question summary as the answer",
+                    "state whether the opponent's premise or conclusion is valid, invalid, or conditional",
+                    "identify one concrete flaw or limiting condition in the opponent reasoning",
                     "defend the assigned stance",
                     "provide sufficient reasoning",
+                    "end by comparing the result with the assigned stance",
                     "keep language concise and forceful",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
@@ -496,10 +571,14 @@ class AIDebaterAgent:
             task_data={
                 "opponent_argument": opponent_argument,
                 "requirements": [
-                    "identify the issue in the opponent argument",
-                    "provide rebuttal reasoning",
-                    "strengthen the assigned stance",
-                    "avoid copying the opponent wording wholesale",
+                    "treat opponent_argument as the target that must be rebutted",
+                    "identify the opponent's central claim briefly, without quoting the whole argument",
+                    "directly state one concrete defect in the claim, premise, mechanism, evidence, or impact",
+                    "explain why that defect breaks or limits the opponent conclusion",
+                    "rebuild the assigned stance with a mechanism, evidence, or alternative explanation",
+                    "compare the consequences and explain why the assigned stance is stronger",
+                    "never produce only a paraphrase, recap, or one-line summary of the opponent argument",
+                    "never attack a claim that does not appear in opponent_argument",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
             },
@@ -535,6 +614,24 @@ class AIDebaterAgent:
             },
         )
         return await self._call_agent(prompt, context, stream_callback=stream_callback)
+
+    @staticmethod
+    def _latest_opponent_argument(recent_speeches: Optional[List[Dict]]) -> str:
+        """Pick the latest non-AI speech as the explicit free-debate target."""
+        items = list(recent_speeches or [])
+        for item in reversed(items):
+            if not isinstance(item, dict):
+                continue
+            speaker = str(
+                item.get("speaker") or item.get("speaker_role") or ""
+            ).strip().lower()
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            if speaker.startswith("ai_") or speaker in {"assistant", "ai"}:
+                continue
+            return content
+        return ""
     
     async def generate_free_debate_speech(
         self,
@@ -555,10 +652,15 @@ class AIDebaterAgent:
             task_type="free_debate_speech",
             task_data={
                 "recent_speeches": list(recent_speeches or [])[-5:],
+                "opponent_argument": self._latest_opponent_argument(recent_speeches),
                 "requirements": [
-                    "rebut recent opponent points when useful",
+                    "when opponent_argument is available, rebut it before adding any new point",
+                    "do not repeat the opponent speech or summarize it as the main response",
+                    "open with a direct challenge or answer to the opponent's claim",
+                    "complete one rebuttal using a concrete reason, mechanism, evidence, boundary, or proof burden",
                     "add supporting reasoning for the assigned side",
-                    "introduce a new angle only when it helps the current clash",
+                    "introduce a new angle only when it directly helps the current clash",
+                    "close with a comparison of impact or proof burden",
                     "keep language concise and forceful",
                 ],
                 "max_chars": self.MAX_REPLY_CHARS,
@@ -721,6 +823,11 @@ class AIDebaterAgent:
                 "voice_id": voice_id
             }
             
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            # Preserve the timeout signal so the flow controller can stop the
+            # turn once and publish its deterministic fallback. Swallowing the
+            # exception here produced an empty draft and triggered retries.
+            raise
         except Exception as e:
             logger.error(f"AI辩手{self.position}生成语音失败: {e}", exc_info=True)
             return {
@@ -763,7 +870,13 @@ class AIDebaterAgent:
         )
 
         messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        if context:
+        task_type = self._extract_prompt_pack_field(prompt, "task_type", "")
+        history_is_embedded_in_task = task_type in {
+            "question_response",
+            "rebuttal",
+            "free_debate_speech",
+        }
+        if context and not history_is_embedded_in_task:
             for msg in context[-20:]:
                 role = msg.get("role") or "user"
                 content = msg.get("content") or ""
@@ -1030,8 +1143,12 @@ class AIDebaterAgent:
                     },
                 )
                 return fallback_text
+            if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+                # A second synchronous request would double the blocked turn.
+                # Let the flow controller produce its context-aware fallback.
+                raise
 
-        return await self._call_llm_once(
+        return await self._call_llm_once_with_connect_retry(
             endpoint=endpoint,
             headers=headers,
             payload=payload,

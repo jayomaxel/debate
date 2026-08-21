@@ -68,7 +68,28 @@ const EnhancedDebateAnalytics: React.FC<EnhancedDebateAnalyticsProps> = ({
 
       try {
         setLoading(true);
-        const data = await StudentService.getReport(debateId);
+        let data: DebateReport | null = null;
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          try {
+            data = await StudentService.getReport(debateId);
+            const status = data.report_meta?.report_status;
+            if (status !== 'processing') {
+              break;
+            }
+            if (attempt < 3) {
+              await new Promise((resolve) => window.setTimeout(resolve, 2500));
+            }
+          } catch (error) {
+            lastError = error;
+            if (attempt < 3) {
+              await new Promise((resolve) => window.setTimeout(resolve, 2500));
+            }
+          }
+        }
+        if (!data) {
+          throw lastError || new Error('报告暂不可用');
+        }
         setReport(data);
         const currentUserParticipant = data.participants.find((p) => p.user_id === user?.id);
         setSelectedParticipantId(

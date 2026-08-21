@@ -23,6 +23,7 @@ from services.report_file_storage_service import ReportFileStorageService
 from services.report_service import ReportGenerator
 from testing_db import create_test_engine, create_test_schema, drop_test_schema
 from utils.security import create_token, hash_password
+from utils.markdown_to_pdf import MarkdownToPdfConverter
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_student_report_pdf_cache.db"
@@ -154,6 +155,7 @@ def test_export_pdf_returns_existing_report_pdf(tmp_path, teacher_token, debate_
     debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
     debate.report = {
         ReportFileStorageService.PDF_STORAGE_META_KEY: storage_meta,
+        "report_pdf_renderer_version": MarkdownToPdfConverter.RENDERER_VERSION,
     }
     debate.report_pdf = None
     db.commit()
@@ -184,6 +186,14 @@ def test_export_pdf_uses_default_path_and_writes_report_pdf(tmp_path, teacher_to
     default_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_bytes = b"%PDF-1.4\n%cached\n%%EOF"
     default_path.write_bytes(pdf_bytes)
+
+    db = TestingSessionLocal()
+    debate = db.query(Debate).filter(Debate.id == debate_for_teacher.id).first()
+    debate.report = {
+        "report_pdf_renderer_version": MarkdownToPdfConverter.RENDERER_VERSION,
+    }
+    db.commit()
+    db.close()
 
     async def should_not_call(*args, **kwargs):
         raise AssertionError("should not generate when default pdf exists")
